@@ -18,6 +18,7 @@
 #define FUNCTION_AGENT_AGENT_SERVICE_ACTOR_H
 
 #include <actor/actor.hpp>
+#include <cstddef>
 #include <memory>
 #include <queue>
 
@@ -36,10 +37,8 @@
 #include "function_agent/common/types.h"
 #include "function_agent/network/network_tool.h"
 #include "function_agent/plugin/multi_plugin_client.h"
-
-namespace functionsystem::runtime_manager {
-class PauseArtifactPathManager;
-}
+#include "function_agent/snapshot/local_snapshot_store.h"
+#include "function_agent/snapshot/snapshot_storage_config.h"
 
 namespace functionsystem::snapshot_storage {
 struct ArtifactPublishResult;
@@ -63,7 +62,6 @@ struct DeployInstanceRequestWrapper {
     litebus::AID from;
     DeployInstanceRequest request;
     bool trustedResume{ false };
-    bool restoreAttemptCleanupInProgress{ false };
     messages::DeployInstanceRequest originalRequest;
 };
 
@@ -73,17 +71,10 @@ struct KillInstanceRequestWrapper {
     KillInstanceRequest request;
 };
 
-struct ResumeAbortFinalizeContext {
+struct SnapshotRuntimeFinalizeContext {
     litebus::AID caller;
     ::messages::SnapshotAttemptFinalizeRequest request;
-    std::shared_ptr<runtime_manager::PauseArtifactPathManager> manager;
     std::string runtimeID;
-};
-
-struct ReusableSnapshotFinalizeContext {
-    litebus::AID caller;
-    litebus::AID runtimeManagerAID;
-    ::messages::SnapshotAttemptFinalizeRequest request;
 };
 
 class AgentServiceActor : public litebus::ActorBase {
@@ -248,12 +239,14 @@ public:
      * @param msg: response data, type is messages::SnapshotRuntimeResponse
      */
     virtual void SnapshotRuntimeResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+    virtual void PublishSnapshotArtifact(const litebus::AID &from, std::string &&name, std::string &&msg);
 
     /** Handle immediate exact cleanup for a completed Pause/Resume attempt. */
     virtual void SnapshotAttemptFinalize(const litebus::AID &from, std::string &&name, std::string &&msg);
-    virtual void SnapshotAttemptFinalizeResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
     virtual void DeleteReusableSnapshotArtifact(
         const litebus::AID &from, std::string &&name, std::string &&msg);
+    virtual void ListLocalSnapshots(const litebus::AID &from, std::string &&name, std::string &&msg);
+    virtual void DeleteLocalSnapshot(const litebus::AID &from, std::string &&name, std::string &&msg);
 
     litebus::Future<bool> GracefulShutdown();
 
@@ -266,11 +259,22 @@ public:
 
     void BindSnapshotDataPlane(
         const std::shared_ptr<snapshot_storage::SnapshotStorage> &snapshotStorage,
-        const std::string &checkpointRoot, const std::string &storageBackend = "")
+        const std::string &checkpointRoot, const std::string &storageBackend = "",
+        SnapshotStorageMode storageMode = SnapshotStorageMode::LOCAL_ONLY,
+        uint64_t localCacheMaxBytes = 0)
     {
         snapshotStorage_ = snapshotStorage;
         checkpointRoot_ = checkpointRoot;
         snapshotStorageBackend_ = storageBackend;
+        snapshotStorageMode_ = storageMode;
+        snapshotLocalCacheMaxBytes_ = localCacheMaxBytes;
+        const bool validCheckpointRoot = !checkpointRoot_.empty()
+            && std::filesystem::path(checkpointRoot_).is_absolute();
+        const auto cacheBudget = storageMode == SnapshotStorageMode::DISTRIBUTED_CACHE
+            ? localCacheMaxBytes : 0;
+        localSnapshotStore_ = validCheckpointRoot
+                                  ? std::make_shared<LocalSnapshotStore>(checkpointRoot_, cacheBudget)
+                                  : nullptr;
         if (snapshotStorage_ != nullptr && !checkpointRoot_.empty() && snapshotWorker_ == nullptr) {
             snapshotWorker_ = std::make_shared<ActorWorker>();
         }
@@ -527,14 +531,18 @@ private:
         const DeployInstanceRequest &request,
         const std::shared_ptr<messages::StartInstanceRequest> &startInstanceRequest,
         const litebus::Future<Status> &materialized);
+    litebus::Future<Status> MaterializeRemoteSnapshot(
+        const DeployInstanceRequest &request,
+        const std::shared_ptr<messages::StartInstanceRequest> &startInstanceRequest,
+        bool reusable);
+    Status CommitMaterializedSnapshot(
+        const DeployInstanceRequest &request,
+        const std::shared_ptr<messages::StartInstanceRequest> &startInstanceRequest,
+        const Status &materialized);
+    void ForgetSnapshotMaterialization(
+        const std::string &snapshotID, const litebus::Future<Status> &materialized);
     void CompleteStartInstanceResponse(
-        const litebus::AID &from, messages::StartInstanceResponse startInstanceResponse,
-        bool reusableRestoreAttemptCleaned = false);
-    void OnReusableRestoreAttemptDeleted(
-        const litebus::AID &from, messages::StartInstanceResponse startInstanceResponse,
-        const std::string &requestID,
-        const std::shared_ptr<runtime_manager::PauseArtifactPathManager> &manager,
-        const litebus::Future<Status> &cleanupFuture);
+        const litebus::AID &from, messages::StartInstanceResponse startInstanceResponse);
     litebus::Future<messages::Registered> RegisterAgent();
     void RetryRegisterAgent(const std::string &msg);
     void ReceiveRegister(const std::string &message);
@@ -596,6 +604,7 @@ private:
     std::unordered_map<std::string, KillInstanceRequestWrapper> killingRequest_;
     struct PendingSnapshotRequest {
         litebus::AID caller;
+        litebus::AID publishCaller;
         ::messages::SnapshotRuntimeRequest request;
         litebus::AID runtimeManagerAID;
         std::string runtimeManagerID;
@@ -603,12 +612,16 @@ private:
         std::string artifactObjectKey;
         std::string storageBackend;
         int64_t createdAtUnixSeconds{ 0 };
+        LocalSnapshotCommitRequest localCommitRequest;
+        ::messages::LocalSnapshotMetadata localSnapshot;
         bool completed{ false };
+        bool localReady{ false };
+        bool publicationStarted{ false };
+        ::messages::SnapshotRuntimeResponse localReadyResponse;
         ::messages::SnapshotRuntimeResponse completedResponse;
     };
     /** <requestID : pending SnapshotRuntime request> for response forwarding */
     std::unordered_map<std::string, PendingSnapshotRequest> snapshotRequests_;
-    uint64_t nextSnapshotRequestGeneration_{ 1 };
     std::string agentID_;
     std::string alias_;
     std::unordered_map<std::string, litebus::Promise<DeployResult>> deployingObjects_;
@@ -674,14 +687,33 @@ private:
     std::string nodeID_;
     std::shared_ptr<snapshot_storage::SnapshotStorage> snapshotStorage_;
     std::string snapshotStorageBackend_;
+    SnapshotStorageMode snapshotStorageMode_{ SnapshotStorageMode::LOCAL_ONLY };
+    uint64_t snapshotLocalCacheMaxBytes_{ 0 };
     std::string checkpointRoot_;
     std::shared_ptr<ActorWorker> snapshotWorker_;
-    std::unordered_map<std::string, ResumeAbortFinalizeContext> resumeAbortFinalizations_;
-    std::unordered_map<std::string, ReusableSnapshotFinalizeContext> reusableSnapshotFinalizations_;
+    std::shared_ptr<LocalSnapshotStore> localSnapshotStore_;
+    std::unordered_map<std::string, litebus::Future<Status>> snapshotMaterializations_;
+    std::unordered_map<std::string, std::string> restoreSnapshotPins_;
+    std::unordered_map<std::string, std::string> runtimeRestoreSnapshotPins_;
+    std::unordered_map<std::string, SnapshotRuntimeFinalizeContext> snapshotRuntimeFinalizations_;
 
-    bool HandleResumeAbortStopInstanceResponse(
+    bool HandleSnapshotFinalizeStopInstanceResponse(
         const litebus::AID &from, const ::messages::StopInstanceResponse &response);
+    void ContinuePhysicalSnapshotFinalize(
+        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
+        size_t remoteKeyIndex);
+    void OnPhysicalSnapshotObjectDeleted(
+        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
+        size_t remoteKeyIndex, const litebus::Future<Status> &future);
     void ForwardSnapshotRuntimeRequest(const std::string &requestID);
+    void ReleaseRestoreSnapshotPin(const std::string &requestID);
+    void PromoteRestoreSnapshotPin(const std::string &requestID, const std::string &runtimeID);
+    void ReleaseRuntimeRestoreSnapshotPin(const std::string &runtimeID);
+    void ContinueSnapshotAfterLocalCommit(
+        const std::string &requestID, ::messages::SnapshotRuntimeResponse response,
+        bool publishRequested = false);
+    void SendSnapshotPhaseResponse(PendingSnapshotRequest &pending,
+                                   const ::messages::SnapshotRuntimeResponse &response);
     void OnPauseArtifactPublished(
         const std::string &requestID,
         const litebus::Future<snapshot_storage::ArtifactPublishResult> &publishFuture);
@@ -694,55 +726,6 @@ private:
                                   const snapshot_storage::SnapshotObjectMetadata &metadata);
     void CompletePauseSnapshotError(const std::string &requestID, int32_t code,
                                     const std::string &message, bool resultUnknown);
-    void ForgetCompletedPauseResult(const ::messages::SnapshotAttemptFinalizeRequest &request);
-    void OnPauseAttemptTemporaryDeleted(
-        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
-        const litebus::Future<Status> &future);
-    void OnPauseAttemptFinalProbed(
-        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
-        const litebus::Future<snapshot_storage::SnapshotStat> &future);
-    void OnPauseAttemptFinalDeleted(
-        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
-        const litebus::Future<Status> &future);
-    void RetryPauseAttemptFinalDelete(
-        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request);
-    void OnResumeAttemptLocalFinalized(
-        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
-        const std::shared_ptr<runtime_manager::PauseArtifactPathManager> &manager,
-        const litebus::Future<Status> &future);
-    void OnResumeSnapshotDeleted(
-        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
-        const litebus::Future<Status> &future);
-    void OnResumeSnapshotDeleteProbed(
-        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
-        const std::string &finalKey,
-        const litebus::Future<snapshot_storage::SnapshotStat> &future);
-    void OnPausedSnapshotDeleteProbed(
-        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
-        const std::string &finalKey,
-        const litebus::Future<snapshot_storage::SnapshotStat> &future);
-    void OnPausedSnapshotDeleted(
-        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
-        const litebus::Future<Status> &future);
-    void OnReusableAttemptTemporaryDeleted(
-        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
-        const litebus::Future<Status> &future);
-    void OnReusableSnapshotDeleteProbed(
-        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
-        const std::string &finalKey,
-        const litebus::Future<snapshot_storage::SnapshotStat> &future);
-    void OnReusableSnapshotDeleted(
-        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
-        const litebus::Future<Status> &future);
-    void CompleteReusableSnapshotFinalize(
-        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
-        int32_t code, const std::string &message, bool resultUnknown,
-        bool localComplete, bool remoteComplete, bool forgetSnapshot);
-    void OnReusableSnapshotArtifactDeleteProbed(
-        const litebus::AID &caller,
-        const ::messages::DeleteReusableSnapshotArtifactRequest &request,
-        const std::string &canonicalKey,
-        const litebus::Future<snapshot_storage::SnapshotStat> &future);
     void OnReusableSnapshotArtifactDeleted(
         const litebus::AID &caller,
         const ::messages::DeleteReusableSnapshotArtifactRequest &request,

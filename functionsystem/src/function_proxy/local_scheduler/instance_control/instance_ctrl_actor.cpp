@@ -213,7 +213,7 @@ void InstanceCtrlActor::Init()
             .Then(litebus::Defer(aid, &InstanceCtrlActor::ShutDownInstance, instanceInfo,
                                  static_cast<uint32_t>(instanceInfo.gracefulshutdowntime())))
             .Then([instanceInfo, aid](const Status &) {
-                return litebus::Async(aid, &InstanceCtrlActor::KillRuntime, instanceInfo, false);
+                return litebus::Async(aid, &InstanceCtrlActor::KillRuntimeForInstanceDelete, instanceInfo);
             })
             .Then(litebus::Defer(aid, &InstanceCtrlActor::DeleteInstanceInControlView, std::placeholders::_1,
                                  instanceInfo))
@@ -316,6 +316,7 @@ litebus::Future<Status> InstanceCtrlActor::ReleasePausedInstanceResources(
 litebus::Future<Status> InstanceCtrlActor::DeleteInstanceInControlView(const Status &status,
                                                                        const InstanceInfo &instanceInfo)
 {
+    CleanupAnonymousSnapshotForDeletedInstance(instanceInfo);
     if (traefikRegistry_) {
         (void)litebus::Async(GetAID(), &InstanceCtrlActor::UnregisterTraefikRoute, instanceInfo.instanceid());
     }
@@ -338,6 +339,40 @@ litebus::Future<Status> InstanceCtrlActor::DeleteInstanceInControlView(const Sta
                 function_proxy::StateHandler::DeleteState(instanceID);
             }
             return Status::OK();
+        });
+}
+
+void InstanceCtrlActor::CleanupAnonymousSnapshotForDeletedInstance(const InstanceInfo &instanceInfo)
+{
+    if (functionAgentMgr_ == nullptr || instanceInfo.instanceid().empty()
+        || instanceInfo.functionagentid().empty()) {
+        return;
+    }
+    auto functionAgentMgr = functionAgentMgr_;
+    functionAgentMgr->LatestAnonymousSnapshot(instanceInfo.instanceid()).OnComplete(
+        [functionAgentMgr, instanceInfo](
+            const litebus::Future<std::optional<messages::LocalSnapshotMetadata>> &future) {
+            if (future.IsError() || !future.Get().has_value()) {
+                return;
+            }
+            const auto &snapshot = *future.Get();
+            messages::DeleteLocalSnapshotRequest request;
+            request.set_requestid(
+                "delete-instance-snapshot/"
+                + litebus::uuid_generator::UUID::GetRandomUUID().ToString());
+            request.set_snapshotid(snapshot.snapshotid());
+            functionAgentMgr->DeleteLocalSnapshot(instanceInfo.functionagentid(), request)
+                .OnComplete([instanceID = instanceInfo.instanceid(), snapshotID = snapshot.snapshotid()](
+                    const litebus::Future<messages::DeleteLocalSnapshotResponse> &deleted) {
+                    if (deleted.IsError()
+                        || deleted.Get().code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
+                        YRLOG_WARN("instance({}) anonymous snapshot({}) best-effort cleanup failed",
+                                   instanceID, snapshotID);
+                        return;
+                    }
+                    YRLOG_INFO("instance({}) anonymous snapshot({}) cleaned after instance deletion",
+                               instanceID, snapshotID);
+                });
         });
 }
 
@@ -431,9 +466,158 @@ litebus::Future<KillResponse> InstanceCtrlActor::HandleSnapshotSignal(
     return snapCtrl_->HandleSnapshot(killReq->requestid(), killReq->instanceid(), killReq->payload());
 }
 
-litebus::Future<KillResponse> InstanceCtrlActor::HandleKill(const std::string &srcInstanceID,
-                                                            const std::shared_ptr<KillRequest> &killReq,
-                                                            bool isSkipAuth)
+litebus::Future<KillResponse> InstanceCtrlActor::HandleAnonymousCheckpointSignal(
+    const std::shared_ptr<KillContext> &killCtx, const std::string &srcInstanceID,
+    const std::shared_ptr<KillRequest> &killReq)
+{
+    if (killCtx->killRsp.code() != common::ERR_NONE) {
+        return killCtx->killRsp;
+    }
+    if (!killCtx->isLocal) {
+        return GetLocalSchedulerAID(killCtx->instanceContext->GetInstanceInfo().instanceid())
+            .Then(litebus::Defer(
+                GetAID(), &InstanceCtrlActor::SendForwardCustomSignalRequest, _1,
+                srcInstanceID, killReq,
+                killCtx->instanceContext->GetInstanceInfo().requestid(), false));
+    }
+    auto identity = killCtx->instanceContext->GetInstanceInfo();
+    if (srcInstanceID != identity.instanceid()) {
+        return GenKillResponse(common::ERR_PARAM_INVALID,
+                               "anonymous checkpoint may only target the calling instance");
+    }
+    ASSERT_IF_NULL(snapCtrl_);
+    SnapOptions checkpointOptions;
+    if (!killReq->payload().empty() && checkpointOptions.ParseFromString(killReq->payload())
+        && checkpointOptions.checkpointtimeoutms() > 0) {
+        (*identity.mutable_createoptions())["YR_CHECKPOINT_TIMEOUT_MS"] =
+            std::to_string(checkpointOptions.checkpointtimeoutms());
+    }
+    StopHeartbeat(identity.instanceid());
+    auto checkpoint = snapCtrl_->HandleAnonymousCheckpoint(
+        killReq->requestid(), identity.instanceid(), checkpointOptions.checkpointtimeoutms());
+    checkpoint.OnComplete(litebus::Defer(
+        GetAID(), &InstanceCtrlActor::OnAnonymousCheckpointComplete,
+        identity, std::placeholders::_1));
+    return checkpoint;
+}
+
+void InstanceCtrlActor::OnAnonymousCheckpointComplete(
+    const resources::InstanceInfo &identity,
+    const litebus::Future<KillResponse> &future)
+{
+    const auto current = instanceControlView_ == nullptr
+        ? nullptr : instanceControlView_->GetInstance(identity.instanceid());
+    if (current != nullptr) {
+        const auto info = current->GetInstanceInfo();
+        if (current->GetInstanceState() == InstanceState::RUNNING
+            && info.runtimeid() == identity.runtimeid()) {
+            StartHeartbeat(info.instanceid(), 0, info.runtimeid(), StatusCode::SUCCESS);
+        }
+    }
+    if (future.IsError()) {
+        YRLOG_ERROR("instance({}) anonymous checkpoint control future failed", identity.instanceid());
+        return;
+    }
+    if (future.Get().code() != common::ERR_NONE) {
+        YRLOG_ERROR("instance({}) anonymous checkpoint failed: {}", identity.instanceid(), future.Get().message());
+    }
+}
+
+litebus::Future<KillResponse> InstanceCtrlActor::HandleReloadSignal(
+    const std::shared_ptr<KillContext> &killCtx, const std::string &srcInstanceID,
+    const std::shared_ptr<KillRequest> &killReq)
+{
+    if (killCtx->killRsp.code() != common::ERR_NONE) {
+        return killCtx->killRsp;
+    }
+    if (!killCtx->isLocal) {
+        return GetLocalSchedulerAID(killCtx->instanceContext->GetInstanceInfo().instanceid())
+            .Then(litebus::Defer(
+                GetAID(), &InstanceCtrlActor::SendForwardCustomSignalRequest, _1,
+                srcInstanceID, killReq,
+                killCtx->instanceContext->GetInstanceInfo().requestid(), false));
+    }
+    const auto identity = killCtx->instanceContext->GetInstanceInfo();
+    return TryLocalSnapshotRecovery(identity.instanceid(), identity.runtimeid(), false)
+        .Then([](const Status &status) {
+            KillResponse response;
+            response.set_code(status.IsOk()
+                ? common::ERR_NONE : Status::GetPosixErrorCode(status.StatusCode()));
+            response.set_message(status.IsOk() ? "success" : status.RawMessage());
+            return response;
+        });
+}
+
+namespace {
+
+bool IsSerializedSnapshotSignal(int signal)
+{
+    return signal == INSTANCE_ANONYMOUS_CHECKPOINT_SIGNAL
+        || signal == INSTANCE_RELOAD_SIGNAL
+        || signal == INSTANCE_CHECKPOINT_SIGNAL
+        || signal == INSTANCE_TRANS_SUSPEND_SIGNAL
+        || signal == INSTANCE_RESUME_SIGNAL
+        || signal == INSTANCE_SNAPSHOT_SIGNAL
+        || signal == INSTANCE_SNAPSTART_SIGNAL;
+}
+
+}  // namespace
+
+litebus::Future<KillResponse> InstanceCtrlActor::HandleKill(
+    const std::string &srcInstanceID, const std::shared_ptr<KillRequest> &killReq,
+    bool isSkipAuth)
+{
+    if (killReq == nullptr) {
+        return GenKillResponse(common::ERR_PARAM_INVALID, "kill request is null");
+    }
+    if (!IsSerializedSnapshotSignal(killReq->signal())) {
+        return HandleKillImpl(srcInstanceID, killReq, isSkipAuth);
+    }
+    const auto &instanceID = killReq->instanceid();
+    const auto &requestID = killReq->requestid();
+    if (instanceID.empty() || requestID.empty()) {
+        return GenKillResponse(common::ERR_PARAM_INVALID,
+                               "checkpoint/restore operation identity is incomplete");
+    }
+    auto active = serializedInstanceOperations_.find(instanceID);
+    if (active != serializedInstanceOperations_.end()) {
+        if (active->second.requestID == requestID) {
+            return active->second.completion->GetFuture();
+        }
+        return GenKillResponse(common::ERR_INSTANCE_BUSY,
+                               "another checkpoint/restore operation is running");
+    }
+    auto completion = std::make_shared<litebus::Promise<KillResponse>>();
+    serializedInstanceOperations_[instanceID] = {requestID, completion};
+    HandleKillImpl(srcInstanceID, killReq, isSkipAuth).OnComplete(litebus::Defer(
+        GetAID(), &InstanceCtrlActor::CompleteSerializedInstanceOperation,
+        instanceID, requestID, std::placeholders::_1));
+    return completion->GetFuture();
+}
+
+void InstanceCtrlActor::CompleteSerializedInstanceOperation(
+    const std::string &instanceID, const std::string &requestID,
+    const litebus::Future<KillResponse> &future)
+{
+    auto active = serializedInstanceOperations_.find(instanceID);
+    if (active == serializedInstanceOperations_.end()
+        || active->second.requestID != requestID) {
+        return;
+    }
+    auto completion = active->second.completion;
+    serializedInstanceOperations_.erase(active);
+    if (future.IsError()) {
+        completion->SetValue(GenKillResponse(
+            common::ERR_INNER_COMMUNICATION,
+            "checkpoint/restore operation future failed"));
+        return;
+    }
+    completion->SetValue(future.Get());
+}
+
+litebus::Future<KillResponse> InstanceCtrlActor::HandleKillImpl(const std::string &srcInstanceID,
+                                                                const std::shared_ptr<KillRequest> &killReq,
+                                                                bool isSkipAuth)
 {
     const int &signal = killReq->signal();
     switch (signal) {
@@ -450,6 +634,24 @@ litebus::Future<KillResponse> InstanceCtrlActor::HandleKill(const std::string &s
             KillResponse activityRsp;
             activityRsp.set_code(common::ErrorCode::ERR_NONE);
             return activityRsp;
+        }
+        case INSTANCE_ANONYMOUS_CHECKPOINT_SIGNAL: {
+            return CheckInstanceExist(srcInstanceID, killReq)
+                .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::CheckKillParam,
+                                     _1, srcInstanceID, killReq))
+                .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::SignalRoute, _1))
+                .Then(litebus::Defer(
+                    GetAID(), &InstanceCtrlActor::HandleAnonymousCheckpointSignal,
+                    _1, srcInstanceID, killReq));
+        }
+        case INSTANCE_RELOAD_SIGNAL: {
+            return CheckInstanceExist(srcInstanceID, killReq)
+                .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::CheckKillParam,
+                                     _1, srcInstanceID, killReq))
+                .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::SignalRoute, _1))
+                .Then(litebus::Defer(
+                    GetAID(), &InstanceCtrlActor::HandleReloadSignal,
+                    _1, srcInstanceID, killReq));
         }
         case SHUT_DOWN_SIGNAL:
             [[fallthrough]];
@@ -1394,7 +1596,8 @@ litebus::Future<KillResponse> InstanceCtrlActor::ForwardSubscriptionEvent(const 
 }
 
 litebus::Future<messages::KillInstanceResponse> InstanceCtrlActor::SendKillRequestToAgent(
-    const InstanceInfo &instanceInfo, bool isRecovering, bool forRedeploy, const std::string &requestIDOverride)
+    const InstanceInfo &instanceInfo, bool isRecovering, bool forRedeploy, bool deleteInstanceSnapshots,
+    const std::string &requestIDOverride)
 {
     RemoveInternalTokenReference(instanceInfo.instanceid());
     if (config_.enableServerMode) {
@@ -1416,6 +1619,7 @@ litebus::Future<messages::KillInstanceResponse> InstanceCtrlActor::SendKillReque
         GenKillInstanceRequest(requestID, instanceInfo.instanceid(), traceID, instanceInfo.storagetype(), isMonopoly);
     killInstanceReq->set_runtimeid(instanceInfo.runtimeid());
     killInstanceReq->set_executortype(instanceInfo.executortype());
+    killInstanceReq->set_deleteinstancesnapshots(deleteInstanceSnapshots);
 
     ASSERT_IF_NULL(clientManager_);
     ASSERT_IF_NULL(functionAgentMgr_);
@@ -1449,10 +1653,12 @@ litebus::Future<Status> InstanceCtrlActor::ReleaseRuntimeForPause(
         ASSERT_IF_NULL(functionAgentMgr_);
         releaseFuture = functionAgentMgr_->KillInstance(request, instanceInfo.functionagentid(), false);
     } else {
+        const bool localCheckpoint = instanceInfo.has_snapshotinfo()
+            && instanceInfo.snapshotinfo().storage() == "local";
         const bool validCleanupIdentity = instanceInfo.has_snapshotinfo()
             && instanceInfo.snapshotinfo().checkpointid() == snapshotID
             && instanceInfo.snapshotinfo().size() > 0
-            && !instanceInfo.snapshotinfo().sha256().empty()
+            && (localCheckpoint || !instanceInfo.snapshotinfo().sha256().empty())
             && !instanceInfo.containerid().empty()
             && !instanceInfo.tenantid().empty();
         if (!validCleanupIdentity) {
@@ -1471,6 +1677,7 @@ litebus::Future<Status> InstanceCtrlActor::ReleaseRuntimeForPause(
         request->set_checkpointsize(static_cast<uint64_t>(instanceInfo.snapshotinfo().size()));
         request->set_checkpointsha256(instanceInfo.snapshotinfo().sha256());
         request->set_tenantid(instanceInfo.tenantid());
+        request->set_checkpointstorage(instanceInfo.snapshotinfo().storage());
         ASSERT_IF_NULL(clientManager_);
         ASSERT_IF_NULL(functionAgentMgr_);
         releaseFuture = clientManager_->DeleteClient(instanceInfo.instanceid())
@@ -1548,6 +1755,17 @@ litebus::Future<Status> InstanceCtrlActor::ShutDownInstance(const InstanceInfo &
 
 litebus::Future<Status> InstanceCtrlActor::KillRuntime(const InstanceInfo &instanceInfo, bool isRecovering)
 {
+    return KillRuntimeWithSnapshotCleanup(instanceInfo, isRecovering, false);
+}
+
+litebus::Future<Status> InstanceCtrlActor::KillRuntimeForInstanceDelete(const InstanceInfo &instanceInfo)
+{
+    return KillRuntimeWithSnapshotCleanup(instanceInfo, false, true);
+}
+
+litebus::Future<Status> InstanceCtrlActor::KillRuntimeWithSnapshotCleanup(
+    const InstanceInfo &instanceInfo, bool isRecovering, bool deleteInstanceSnapshots)
+{
     // stop wait for update status when kill runtime
     auto iter = instanceStatusPromises_.find(instanceInfo.instanceid());
     if (iter != instanceStatusPromises_.end()) {
@@ -1559,7 +1777,7 @@ litebus::Future<Status> InstanceCtrlActor::KillRuntime(const InstanceInfo &insta
     if (evidence != frontendKillRuntimeEvidence_.end() && evidence->second.first == instanceInfo.requestid()) {
         evidence->second.second = "terminating";
     }
-    return SendKillRequestToAgent(instanceInfo, isRecovering)
+    return SendKillRequestToAgent(instanceInfo, isRecovering, false, deleteInstanceSnapshots)
         .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::RecordFrontendKillRuntimeResult, instanceInfo, _1));
 }
 
@@ -1932,10 +2150,11 @@ litebus::Future<ScheduleResponse> InstanceCtrlActor::DoCreateInstance(
     const std::string traceID = scheduleReq->traceid();
     const std::string requestID = scheduleReq->requestid();
     if (authorizeStatus.IsError()) {
-        YRLOG_ERROR("{}|{}|authorize failed.", traceID, requestID);
-        runtimePromise->SetValue(
-            GenScheduleResponse(StatusCode::ERR_AUTHORIZE_FAILED, "authorize failed", *scheduleReq));
-        return GenScheduleResponse(StatusCode::ERR_AUTHORIZE_FAILED, "authorize failed", *scheduleReq);
+        YRLOG_ERROR("{}|{}|pre-create validation failed, code({}), message({}).", traceID, requestID,
+                    fmt::underlying(authorizeStatus.StatusCode()), authorizeStatus.RawMessage());
+        auto response = GenScheduleResponse(authorizeStatus.StatusCode(), authorizeStatus.RawMessage(), *scheduleReq);
+        runtimePromise->SetValue(response);
+        return response;
     }
     if (auto schedResultOpt(instanceControlView_->IsDuplicateRequest(scheduleReq, runtimePromise));
         schedResultOpt.IsSome()) {
@@ -4041,7 +4260,406 @@ litebus::Future<Status> InstanceCtrlActor::HandleFailedInstance(const std::strin
         YRLOG_WARN("instance({}) runtimeID({}) changed", instanceID, instanceInfo.runtimeid());
         return Status::OK();
     }
+    if (const auto recovery = localSnapshotRecoveries_.find(instanceID);
+        recovery != localSnapshotRecoveries_.end()
+        && recovery->second->source.runtimeid() == runtimeID) {
+        return recovery->second->completion->GetFuture();
+    }
+    if (instanceInfo.failover()) {
+        return TryLocalSnapshotFailover(instanceID, runtimeID)
+            .Then(litebus::Defer(
+                GetAID(), &InstanceCtrlActor::OnHeartbeatLocalSnapshotFailoverDone,
+                std::placeholders::_1, instanceID, runtimeID, errMsg));
+    }
     return TryRecover(instanceID, runtimeID, errMsg, stateMachine, instanceInfo);
+}
+
+litebus::Future<Status> InstanceCtrlActor::OnHeartbeatLocalSnapshotFailoverDone(
+    const Status &status, const std::string &instanceID,
+    const std::string &sourceRuntimeID, const std::string &errMsg)
+{
+    if (status.IsOk()) {
+        return Status::OK();
+    }
+    auto stateMachine = instanceControlView_ == nullptr
+        ? nullptr : instanceControlView_->GetInstance(instanceID);
+    if (stateMachine == nullptr || stateMachine->GetOwner() != nodeID_
+        || stateMachine->GetInstanceState() != InstanceState::RUNNING
+        || stateMachine->GetInstanceInfo().runtimeid() != sourceRuntimeID) {
+        return Status::OK();
+    }
+    const auto current = stateMachine->GetInstanceInfo();
+    return TransInstanceState(
+        stateMachine,
+        TransContext{ InstanceState::FATAL, stateMachine->GetVersion(),
+                      errMsg + "; local snapshot failover failed: " + status.RawMessage(),
+                      true, common::ERR_INSTANCE_EXITED })
+        .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::KillRuntime, current, false))
+        .Then(litebus::Defer(
+            GetAID(), &InstanceCtrlActor::DeleteInstanceInResourceView,
+            std::placeholders::_1, current));
+}
+
+litebus::Future<Status> InstanceCtrlActor::TryLocalSnapshotFailover(
+    const std::string &instanceID, const std::string &sourceRuntimeID)
+{
+    return TryLocalSnapshotRecovery(instanceID, sourceRuntimeID, true);
+}
+
+litebus::Future<Status> InstanceCtrlActor::TryLocalSnapshotRecovery(
+    const std::string &instanceID, const std::string &sourceRuntimeID,
+    bool requireFailoverPolicy)
+{
+    const auto active = localSnapshotRecoveries_.find(instanceID);
+    if (active != localSnapshotRecoveries_.end()) {
+        if (active->second->source.runtimeid() == sourceRuntimeID) {
+            return active->second->completion->GetFuture();
+        }
+        return Status(StatusCode::SCHEDULE_CONFLICTED,
+                      "a different local snapshot recovery is already running");
+    }
+    if (instanceControlView_ == nullptr || functionAgentMgr_ == nullptr
+        || instanceID.empty() || sourceRuntimeID.empty()) {
+        return Status(StatusCode::ERR_PARAM_INVALID,
+                      "local snapshot recovery identity or dependency is unavailable");
+    }
+    auto stateMachine = instanceControlView_->GetInstance(instanceID);
+    if (stateMachine == nullptr) {
+        return Status(StatusCode::ERR_INSTANCE_NOT_FOUND, "instance not found");
+    }
+    const auto current = stateMachine->GetInstanceInfo();
+    const auto currentState = stateMachine->GetInstanceState();
+    const bool sameNodeRestartRecovery = requireFailoverPolicy && current.failover()
+        && currentState == InstanceState::EVICTED;
+    if (stateMachine->GetOwner() != nodeID_
+        || (currentState != InstanceState::RUNNING && !sameNodeRestartRecovery)
+        || current.runtimeid() != sourceRuntimeID) {
+        return Status(StatusCode::SCHEDULE_CONFLICTED,
+                      "local snapshot recovery source is stale");
+    }
+    if (requireFailoverPolicy && !current.failover()) {
+        return Status(StatusCode::FAILED, "local snapshot failover is disabled");
+    }
+    if (current.functionagentid().empty()) {
+        return Status(StatusCode::ERR_INSTANCE_INFO_INVALID,
+                      "local snapshot recovery function agent is empty");
+    }
+
+    auto context = std::make_shared<LocalSnapshotRecoveryContext>();
+    context->source = current;
+    context->completion = std::make_shared<litebus::Promise<Status>>();
+    localSnapshotRecoveries_[instanceID] = context;
+    YRLOG_INFO("instance({}) begin local snapshot failover from runtime({}) on agent({})",
+               instanceID, sourceRuntimeID, current.functionagentid());
+    functionAgentMgr_->LatestAnonymousSnapshot(instanceID).OnComplete(litebus::Defer(
+        GetAID(), &InstanceCtrlActor::OnLocalSnapshotSelected,
+        context, std::placeholders::_1));
+    return context->completion->GetFuture();
+}
+
+bool InstanceCtrlActor::IsCurrentLocalSnapshotRecovery(
+    const std::shared_ptr<LocalSnapshotRecoveryContext> &context) const
+{
+    if (context == nullptr || instanceControlView_ == nullptr) {
+        return false;
+    }
+    const auto active = localSnapshotRecoveries_.find(context->source.instanceid());
+    if (active == localSnapshotRecoveries_.end() || active->second != context) {
+        return false;
+    }
+    auto stateMachine = instanceControlView_->GetInstance(context->source.instanceid());
+    const auto state = stateMachine == nullptr ? InstanceState::NEW : stateMachine->GetInstanceState();
+    const bool sameNodeRestartRecovery = context->source.failover()
+        && state == InstanceState::EVICTED;
+    if (stateMachine == nullptr || stateMachine->GetOwner() != nodeID_
+        || (state != InstanceState::RUNNING && !sameNodeRestartRecovery)) {
+        return false;
+    }
+    const auto current = stateMachine->GetInstanceInfo();
+    return current.runtimeid() == context->source.runtimeid()
+        && current.version() == context->source.version();
+}
+
+void InstanceCtrlActor::OnLocalSnapshotSelected(
+    const std::shared_ptr<LocalSnapshotRecoveryContext> &context,
+    const litebus::Future<std::optional<messages::LocalSnapshotMetadata>> &future)
+{
+    if (!IsCurrentLocalSnapshotRecovery(context)) {
+        CompleteLocalSnapshotRecovery(
+            context, Status(StatusCode::SCHEDULE_CONFLICTED,
+                            "local snapshot recovery source changed before selection"));
+        return;
+    }
+    if (future.IsError() || !future.Get().has_value()) {
+        CompleteLocalSnapshotRecovery(
+            context, Status(StatusCode::FILE_NOT_FOUND,
+                            "latest local anonymous snapshot is unavailable"));
+        return;
+    }
+    const auto &snapshot = *future.Get();
+    if (!snapshot.localrecoverycandidate() || snapshot.snapshotid().empty()
+        || snapshot.instanceid() != context->source.instanceid()) {
+        CompleteLocalSnapshotRecovery(
+            context, Status(StatusCode::ERR_INSTANCE_INFO_INVALID,
+                            "latest local anonymous snapshot metadata is invalid"));
+        return;
+    }
+    auto stateMachine = instanceControlView_->GetInstance(context->source.instanceid());
+    auto sourceRequest = stateMachine == nullptr ? nullptr : stateMachine->GetScheduleRequest();
+    if (sourceRequest == nullptr) {
+        CompleteLocalSnapshotRecovery(
+            context, Status(StatusCode::ERR_INSTANCE_INFO_INVALID,
+                            "local snapshot recovery schedule request is unavailable"));
+        return;
+    }
+    context->snapshotID = snapshot.snapshotid();
+    context->snapshot = snapshot;
+    context->request = std::make_shared<messages::ScheduleRequest>(*sourceRequest);
+    context->request->set_requestid(
+        "local-failover/" + litebus::uuid_generator::UUID::GetRandomUUID().ToString());
+    context->request->set_traceid(
+        "local-failover-trace/" + litebus::uuid_generator::UUID::GetRandomUUID().ToString());
+    *context->request->mutable_instance() = context->source;
+    YRLOG_INFO("{}|instance({}) selected local snapshot({}) from runtime({})",
+               context->request->requestid(), context->source.instanceid(), context->snapshotID,
+               context->source.runtimeid());
+    StopHeartbeat(context->source.instanceid());
+    KillRuntime(context->source, true).OnComplete(litebus::Defer(
+        GetAID(), &InstanceCtrlActor::OnLocalSnapshotSourceStopped,
+        context, std::placeholders::_1));
+}
+
+void InstanceCtrlActor::OnLocalSnapshotSourceStopped(
+    const std::shared_ptr<LocalSnapshotRecoveryContext> &context,
+    const litebus::Future<Status> &future)
+{
+    if (future.IsError() || future.Get().IsError()) {
+        CompleteLocalSnapshotRecovery(
+            context, Status(StatusCode::ERR_INNER_COMMUNICATION,
+                            "failed to stop source runtime for local snapshot recovery"));
+        return;
+    }
+    if (!IsCurrentLocalSnapshotRecovery(context)) {
+        CompleteLocalSnapshotRecovery(
+            context, Status(StatusCode::SCHEDULE_CONFLICTED,
+                            "local snapshot recovery source changed before deploy"));
+        return;
+    }
+    DeployLocalSnapshot(context).OnComplete(litebus::Defer(
+        GetAID(), &InstanceCtrlActor::OnLocalSnapshotDeployed,
+        context, std::placeholders::_1));
+}
+
+litebus::Future<messages::DeployInstanceResponse> InstanceCtrlActor::DeployLocalSnapshot(
+    const std::shared_ptr<LocalSnapshotRecoveryContext> &context)
+{
+    const auto &instance = context->request->instance();
+    const auto meta = funcMetaMap_.find(instance.function());
+    if (meta == funcMetaMap_.end()) {
+        return GenDeployInstanceResponse(
+            StatusCode::ERR_FUNCTION_META_NOT_FOUND, "function meta not found",
+            context->request->requestid());
+    }
+    auto request = GetDeployInstanceReq(meta->second, context->request);
+    if (!context->snapshot.storagebackend().empty()
+        && context->snapshot.storagebackend() != "local") {
+        auto *snapshot = request->mutable_snapshotinfo();
+        snapshot->set_checkpointid(context->snapshotID);
+        snapshot->set_storage(context->snapshot.storagebackend());
+        snapshot->set_size(static_cast<int64_t>(context->snapshot.size()));
+        snapshot->set_status(resources::SNAPSHOT_READY);
+        snapshot->set_sourcenodeid(nodeID_);
+    } else {
+        request->set_restoresnapshotid(context->snapshotID);
+    }
+    AddDsAuthToDeployInstanceReq(context->request, request);
+    return AddCredToDeployInstanceReq(instance.tenantid(), request)
+        .Then([functionAgentMgr(functionAgentMgr_), request,
+               functionAgentID(instance.functionagentid())](const Status &status)
+                  -> litebus::Future<messages::DeployInstanceResponse> {
+            if (status.IsError()) {
+                return GenDeployInstanceResponse(
+                    status.StatusCode(), "require token failed", request->requestid());
+            }
+            return functionAgentMgr->DeployInstance(request, functionAgentID);
+        });
+}
+
+void InstanceCtrlActor::OnLocalSnapshotDeployed(
+    const std::shared_ptr<LocalSnapshotRecoveryContext> &context,
+    const litebus::Future<messages::DeployInstanceResponse> &future)
+{
+    if (future.IsError()) {
+        FailLocalSnapshotRecovery(
+            context, Status(StatusCode::ERR_INNER_COMMUNICATION,
+                            "local snapshot deploy result is unknown"), false);
+        return;
+    }
+    const auto &response = future.Get();
+    if (response.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
+        FailLocalSnapshotRecovery(
+            context, Status(static_cast<StatusCode>(response.code()), response.message()), false);
+        return;
+    }
+    if (response.runtimeid().empty() || response.containerid().empty()
+        || !IsCurrentLocalSnapshotRecovery(context)) {
+        FailLocalSnapshotRecovery(
+            context, Status(StatusCode::SCHEDULE_CONFLICTED,
+                            "local snapshot deploy identity is incomplete or stale"),
+            !response.runtimeid().empty());
+        return;
+    }
+    auto *candidate = context->request->mutable_instance();
+    candidate->set_runtimeid(response.runtimeid());
+    candidate->set_runtimeaddress(response.address());
+    candidate->set_containerid(response.containerid());
+    candidate->set_containerip(response.containerip());
+    candidate->set_executortype(response.executortype());
+    candidate->set_starttime(response.timeinfo());
+    candidate->set_proxygrpcaddress(config_.proxyGrpcAddress);
+    candidate->mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::RUNNING));
+    candidate->mutable_instancestatus()->set_msg("running");
+    (*candidate->mutable_extensions())[PID] = std::to_string(response.pid());
+    candidate->mutable_extensions()->erase(PORT_FORWARD_KEY);
+    if (!response.portmappings().empty()) {
+        (*candidate->mutable_extensions())[PORT_FORWARD_KEY] = response.portmappings();
+    }
+    CreateInstanceClient(candidate->instanceid(), candidate->runtimeid(), candidate->runtimeaddress())
+        .OnComplete(litebus::Defer(
+            GetAID(), &InstanceCtrlActor::OnLocalSnapshotClientCreated,
+            context, std::placeholders::_1));
+}
+
+void InstanceCtrlActor::OnLocalSnapshotClientCreated(
+    const std::shared_ptr<LocalSnapshotRecoveryContext> &context,
+    const litebus::Future<std::shared_ptr<ControlInterfacePosixClient>> &future)
+{
+    if (future.IsError() || future.Get() == nullptr) {
+        FailLocalSnapshotRecovery(
+            context, Status(StatusCode::ERR_INNER_COMMUNICATION,
+                            "failed to create restored runtime client"), true);
+        return;
+    }
+    context->candidateClient = future.Get();
+    runtime::SnapStartedRequest request;
+    context->candidateClient->SnapStarted(std::move(request)).OnComplete(litebus::Defer(
+        GetAID(), &InstanceCtrlActor::OnLocalSnapshotStarted,
+        context, std::placeholders::_1));
+}
+
+void InstanceCtrlActor::OnLocalSnapshotStarted(
+    const std::shared_ptr<LocalSnapshotRecoveryContext> &context,
+    const litebus::Future<runtime::SnapStartedResponse> &future)
+{
+    if (future.IsError() || future.Get().code() != common::ERR_NONE) {
+        FailLocalSnapshotRecovery(
+            context, Status(StatusCode::FAILED,
+                            future.IsError() ? "restored runtime SnapStarted future failed"
+                                             : future.Get().message()), true);
+        return;
+    }
+    if (!IsCurrentLocalSnapshotRecovery(context)) {
+        FailLocalSnapshotRecovery(
+            context, Status(StatusCode::SCHEDULE_CONFLICTED,
+                            "local snapshot recovery source changed before commit"), true);
+        return;
+    }
+    // A restored gVisor transport can retain checkpoint-era TCP state even
+    // after the target identity is rebound. Retire that first control stream
+    // only after SnapStarted is acknowledged; RRT will reconnect with the
+    // target runtime identity before the next heartbeat interval.
+    context->candidateClient->Close();
+    auto stateMachine = instanceControlView_->GetInstance(context->source.instanceid());
+    TransContext transition{
+        InstanceState::RUNNING, context->source.version(), "running", true };
+    transition.scheduleReq = context->request;
+    transition.allowRunningRuntimeRefresh = true;
+    TransInstanceState(stateMachine, transition).OnComplete(litebus::Defer(
+        GetAID(), &InstanceCtrlActor::OnLocalSnapshotCommitted,
+        context, std::placeholders::_1));
+}
+
+void InstanceCtrlActor::OnLocalSnapshotCommitted(
+    const std::shared_ptr<LocalSnapshotRecoveryContext> &context,
+    const litebus::Future<TransitionResult> &future)
+{
+    auto stateMachine = instanceControlView_ == nullptr
+        ? nullptr : instanceControlView_->GetInstance(context->source.instanceid());
+    const auto current = stateMachine == nullptr
+        ? resources::InstanceInfo{} : stateMachine->GetInstanceInfo();
+    const bool committed = stateMachine != nullptr
+        && stateMachine->GetInstanceState() == InstanceState::RUNNING
+        && current.runtimeid() == context->request->instance().runtimeid();
+    if (committed) {
+        concernedInstance_.insert(current.instanceid());
+        (void)AddTokenReference({current.tenantid(), current.instanceid()});
+        StartHeartbeat(current.instanceid(), 0, current.runtimeid(), StatusCode::SUCCESS);
+        CompleteLocalSnapshotRecovery(context, Status::OK());
+        return;
+    }
+    if (future.IsError()) {
+        FailLocalSnapshotRecovery(
+            context, Status(StatusCode::ERR_INNER_COMMUNICATION,
+                            "local snapshot commit result is unknown"), false);
+        return;
+    }
+    if (future.Get().status.IsError()) {
+        FailLocalSnapshotRecovery(
+            context, future.Get().status, true);
+        return;
+    }
+    FailLocalSnapshotRecovery(
+        context, Status(StatusCode::SCHEDULE_CONFLICTED,
+                        "local snapshot commit did not install the restored runtime"), true);
+}
+
+void InstanceCtrlActor::FailLocalSnapshotRecovery(
+    const std::shared_ptr<LocalSnapshotRecoveryContext> &context,
+    const Status &status, bool cleanupCandidate)
+{
+    if (cleanupCandidate && context->request != nullptr
+        && !context->request->instance().runtimeid().empty()
+        && context->request->instance().runtimeid() != context->source.runtimeid()) {
+        KillRuntime(context->request->instance(), true).OnComplete(litebus::Defer(
+            GetAID(), &InstanceCtrlActor::OnLocalSnapshotCandidateCleaned,
+            context, status, std::placeholders::_1));
+        return;
+    }
+    CompleteLocalSnapshotRecovery(context, status);
+}
+
+void InstanceCtrlActor::OnLocalSnapshotCandidateCleaned(
+    const std::shared_ptr<LocalSnapshotRecoveryContext> &context,
+    const Status &status, const litebus::Future<Status> &future)
+{
+    if (future.IsError() || future.Get().IsError()) {
+        YRLOG_WARN("{}|failed to clean local snapshot recovery candidate",
+                   context->source.instanceid());
+    }
+    CompleteLocalSnapshotRecovery(context, status);
+}
+
+void InstanceCtrlActor::CompleteLocalSnapshotRecovery(
+    const std::shared_ptr<LocalSnapshotRecoveryContext> &context,
+    const Status &status)
+{
+    const auto active = localSnapshotRecoveries_.find(context->source.instanceid());
+    if (active == localSnapshotRecoveries_.end() || active->second != context) {
+        return;
+    }
+    localSnapshotRecoveries_.erase(active);
+    if (status.IsOk()) {
+        YRLOG_INFO("{}|instance({}) local snapshot({}) failover completed from runtime({}) to runtime({})",
+                   context->request == nullptr ? "local-failover" : context->request->requestid(),
+                   context->source.instanceid(), context->snapshotID, context->source.runtimeid(),
+                   context->request == nullptr ? "" : context->request->instance().runtimeid());
+    } else {
+        YRLOG_WARN("{}|instance({}) local snapshot({}) failover failed from runtime({}): {}",
+                   context->request == nullptr ? "local-failover" : context->request->requestid(),
+                   context->source.instanceid(), context->snapshotID, context->source.runtimeid(),
+                   status.RawMessage());
+    }
+    context->completion->SetValue(status);
 }
 
 litebus::Future<Status> InstanceCtrlActor::TryRecover(const std::string &instanceID, const std::string &runtimeID,
@@ -4143,6 +4761,38 @@ litebus::Future<Status> InstanceCtrlActor::UpdateInstanceStatus(const std::share
                    nodeID_);
         return UpdateInstanceStatusPromise(info->instanceID, "instance isn't own by this node");
     }
+    const auto sourceRuntimeID = info->runtimeID.empty()
+        ? instanceInfo.runtimeid() : info->runtimeID;
+    if (sourceRuntimeID != instanceInfo.runtimeid()) {
+        YRLOG_WARN("ignore stale exit status for instance({}) runtime({}); current runtime is ({})",
+                   info->instanceID, sourceRuntimeID, instanceInfo.runtimeid());
+        return Status::OK();
+    }
+    // A PAUSE_RESUME checkpoint is intentionally created with leave_running=false.
+    // sandboxd therefore reports a clean sandbox exit as soon as the local
+    // checkpoint is complete.  The pause gate owns that exit: the snapshot
+    // controller still has to publish the artifact and commit RUNNING->PAUSED,
+    // so treating it as an ordinary runtime failure races the pause flow and
+    // deletes the authoritative instance before the commit can finish.
+    if (const auto pauseGate = pauseGateContexts_.find(info->instanceID);
+        pauseGate != pauseGateContexts_.end()
+        && pauseGate->second.phase == PauseGatePhase::GATED
+        && pauseGate->second.identity.runtimeid() == sourceRuntimeID) {
+        YRLOG_INFO("ignore expected sandbox exit for pause-gated instance({}) runtime({})",
+                   info->instanceID, sourceRuntimeID);
+        return Status::OK();
+    }
+    if (const auto recovery = localSnapshotRecoveries_.find(info->instanceID);
+        recovery != localSnapshotRecoveries_.end()
+        && recovery->second->source.runtimeid() == sourceRuntimeID) {
+        return recovery->second->completion->GetFuture();
+    }
+    if (instanceInfo.failover()) {
+        return TryLocalSnapshotFailover(info->instanceID, sourceRuntimeID)
+            .Then(litebus::Defer(
+                GetAID(), &InstanceCtrlActor::OnExitLocalSnapshotFailoverDone,
+                std::placeholders::_1, info, sourceRuntimeID));
+    }
     if (!IsRuntimeRecoverEnable(instanceInfo, stateMachine->GetCancelFuture())) {
         YRLOG_WARN("instance({}) exit, transition it to fatal", info->instanceID);
         return TransInstanceState(stateMachine, TransContext{ InstanceState::FATAL, stateMachine->GetVersion(),
@@ -4165,6 +4815,36 @@ litebus::Future<Status> InstanceCtrlActor::UpdateInstanceStatus(const std::share
         YRLOG_WARN("the reschedule instance({}) was discarded because it already exists", info->instanceID);
         return Status::OK();
     }
+}
+
+litebus::Future<Status> InstanceCtrlActor::OnExitLocalSnapshotFailoverDone(
+    const Status &status, const std::shared_ptr<InstanceExitStatus> &info,
+    const std::string &sourceRuntimeID)
+{
+    if (status.IsOk()) {
+        return Status::OK();
+    }
+    auto stateMachine = instanceControlView_ == nullptr
+        ? nullptr : instanceControlView_->GetInstance(info->instanceID);
+    if (stateMachine == nullptr || stateMachine->GetOwner() != nodeID_
+        || stateMachine->GetInstanceState() != InstanceState::RUNNING
+        || stateMachine->GetInstanceInfo().runtimeid() != sourceRuntimeID) {
+        return Status::OK();
+    }
+    const auto current = stateMachine->GetInstanceInfo();
+    return TransInstanceState(
+        stateMachine,
+        TransContext{ InstanceState::FATAL, stateMachine->GetVersion(),
+                      stateMachine->Information() + info->statusMsg
+                          + "; local snapshot failover failed: " + status.RawMessage(),
+                      true, info->errCode, info->exitCode, info->exitType })
+        .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::KillRuntime, current, false))
+        .Then(litebus::Defer(
+            GetAID(), &InstanceCtrlActor::DeleteInstanceInResourceView,
+            std::placeholders::_1, current))
+        .Then(litebus::Defer(
+            GetAID(), &InstanceCtrlActor::UpdateInstanceStatusPromise,
+            info->instanceID, info->statusMsg));
 }
 
 void InstanceCtrlActor::CollectInstanceResources(const InstanceInfo &instance)
@@ -4333,6 +5013,16 @@ void InstanceCtrlActor::SendHeartbeat(const std::string &instanceID, uint32_t ti
         (pos == std::string::npos && config_.runtimeConfig.runtimeHeartbeatEnable == "false")) {
         return;
     }
+    if (serializedInstanceOperations_.find(instanceID) != serializedInstanceOperations_.end()) {
+        if (CheckHeartbeatExist(instanceID)) {
+            litebus::TimerTools::Cancel(runtimeHeartbeatTimers_[instanceID]);
+            runtimeHeartbeatTimers_[instanceID] = litebus::AsyncAfter(
+                HEARTBEAT_INTERVAL_MS, GetAID(), &InstanceCtrlActor::SendHeartbeat,
+                instanceID, 0, runtimeID, prevStatus);
+        }
+        YRLOG_DEBUG("instance({}) heartbeat is fenced by checkpoint/restore operation", instanceID);
+        return;
+    }
 
     ASSERT_IF_NULL(clientManager_);
     (void)clientManager_->GetControlInterfacePosixClient(instanceID)
@@ -4356,6 +5046,15 @@ void InstanceCtrlActor::SendHeartbeatCallback(const std::string &instanceID, uin
                                               const litebus::Future<Status> &status)
 {
     if (!CheckHeartbeatExist(instanceID)) {
+        return;
+    }
+    if (serializedInstanceOperations_.find(instanceID) != serializedInstanceOperations_.end()) {
+        litebus::TimerTools::Cancel(runtimeHeartbeatTimers_[instanceID]);
+        runtimeHeartbeatTimers_[instanceID] = litebus::AsyncAfter(
+            HEARTBEAT_INTERVAL_MS, GetAID(), &InstanceCtrlActor::SendHeartbeat,
+            instanceID, 0, runtimeID, prevStatus);
+        YRLOG_DEBUG("instance({}) ignores in-flight heartbeat result while checkpoint/restore is active",
+                    instanceID);
         return;
     }
 
@@ -5322,7 +6021,7 @@ litebus::Future<Status> InstanceCtrlActor::RescheduleAfterJudgeRecoverable(const
         })
         .Then([aid(GetAID()), instanceInfo](const TransitionResult &result) {
             (void)litebus::Async(aid, &InstanceCtrlActor::SendKillRequestToAgent, instanceInfo, false, false,
-                                 std::string{});
+                                 false, std::string{});
             return result;
         });
     return Status::OK();

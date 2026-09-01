@@ -319,6 +319,20 @@ TEST_F(FunctionAgentUtilsTest, SetStartRuntimeInstanceRequestConfigSuccess)
     EXPECT_EQ(startInstanceRequest->runtimeinstanceinfo().requestid(), requestId);
 }
 
+TEST_F(FunctionAgentUtilsTest, RestoreSnapshotIDReachesRuntimeManagerWithoutPath)
+{
+    auto deploy = std::make_shared<messages::DeployInstanceRequest>();
+    deploy->set_instanceid("sandbox-a");
+    deploy->set_requestid("restore-attempt");
+    deploy->set_restoresnapshotid("anon-1");
+
+    auto start = std::make_unique<messages::StartInstanceRequest>();
+    const auto trust = function_agent::SetStartRuntimeInstanceRequestConfig(start, deploy, "agent-a");
+
+    EXPECT_EQ(trust, function_agent::ResumeIdentityTrust::LOCAL);
+    EXPECT_EQ(start->runtimeinstanceinfo().restoresnapshotid(), "anon-1");
+}
+
 TEST_F(FunctionAgentUtilsTest, NetworkPolicyFlowsFromCreateOptionsToSandboxdStartRequest)
 {
     auto deployInstanceRequest = std::make_shared<messages::DeployInstanceRequest>();

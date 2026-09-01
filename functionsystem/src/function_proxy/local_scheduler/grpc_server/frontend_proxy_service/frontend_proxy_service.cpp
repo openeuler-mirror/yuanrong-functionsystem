@@ -50,6 +50,7 @@ constexpr const char *FRONTEND_CREATE_SOURCE_VALUE = "frontend";
 constexpr const char *FRONTEND_KILL_ROUTE_STALE_MESSAGE =
     "frontend proxy is not the owning proxy for this instance";
 constexpr uint64_t FRONTEND_WAIT_POLL_MS = 20;
+constexpr int64_t MAX_SANDBOX_LIFECYCLE_TIMEOUT_MS = 60LL * 60 * 1000;
 // Keep this aligned with meta_service's maximum function timeout (100 days).
 constexpr int64_t MAX_FUNCTION_INVOKE_TIMEOUT_MS = 100LL * 24 * 60 * 60 * 1000;
 constexpr const char *FUNCTION_PROXY_STREAM_CALLER_ID = "function-proxy";
@@ -732,6 +733,14 @@ std::chrono::milliseconds FrontendProxyService::ResolveInvokeResultTimeout(
     return std::chrono::milliseconds(static_cast<int64_t>(functionTimeoutMs + bufferMs));
 }
 
+std::chrono::milliseconds FrontendProxyService::ResolveCreateResultTimeout(
+    const ::frontend_proxy::CreateInstanceRequest &request, const FrontendProxyServiceParam &param)
+{
+    const auto timeoutMs = request.createtimeoutms() > 0 ? request.createtimeoutms()
+                                                        : static_cast<int64_t>(param.invokeResultTimeoutMs);
+    return std::chrono::milliseconds(timeoutMs);
+}
+
 ::grpc::Status FrontendProxyService::CreateInstance(::grpc::ServerContext *context,
                                                     const ::frontend_proxy::CreateInstanceRequest *request,
                                                     ::frontend_proxy::CreateInstanceResponse *response)
@@ -782,6 +791,7 @@ bool FrontendProxyService::ValidateCreateRequest(const ::frontend_proxy::CreateI
     ::grpc::ServerContext *context, const ::frontend_proxy::CreateInstanceRequest &request,
     ::frontend_proxy::CreateInstanceResponse &response)
 {
+    const auto createTimeout = ResolveCreateResultTimeout(request, param_);
     YRLOG_INFO("{}|frontend proxy create received by proxy({}), frontendClientID({}), function({})",
                request.context().requestid(), param_.nodeID, request.context().frontendclientid(),
                request.create().function());
@@ -790,8 +800,7 @@ bool FrontendProxyService::ValidateCreateRequest(const ::frontend_proxy::CreateI
     auto createFuture = DispatchReadyCreate(param_, request);
     if (createFuture.has_value()) {
         bool cancelled = false;
-        auto createResponse = WaitFrontendResult(createFuture.value(), context, param_.invokeResultTimeoutMs,
-                                                 cancelled);
+        auto createResponse = WaitFrontendResult(createFuture.value(), context, createTimeout, cancelled);
         if (!createResponse.IsSome() || !createResponse.Get().has_create()) {
             if (param_.createWaitCanceller) {
                 param_.createWaitCanceller(request.context().requestid(),
@@ -886,6 +895,12 @@ bool FrontendProxyService::ValidateKillRequest(const ::frontend_proxy::KillInsta
                   "kill.instanceID");
         return false;
     }
+    if (request.lifecycletimeoutms() < 0 ||
+        request.lifecycletimeoutms() > MAX_SANDBOX_LIFECYCLE_TIMEOUT_MS) {
+        SetStatus(response.mutable_status(), common::ERR_PARAM_INVALID,
+                  "frontend proxy kill lifecycle timeout must be between 0 and 3600000 milliseconds");
+        return false;
+    }
     if (HasOperationRequestIDMismatch(request.context(), request.kill().requestid())) {
         SetStatus(response.mutable_status(), common::ERR_PARAM_INVALID,
                   "frontend proxy kill request id does not match context request id");
@@ -906,8 +921,10 @@ bool FrontendProxyService::ValidateKillRequest(const ::frontend_proxy::KillInsta
     auto killFuture = DispatchReadyKill(param_, request);
     if (killFuture.has_value()) {
         bool cancelled = false;
-        auto killResponse = WaitFrontendResult(killFuture.value(), context, param_.invokeResultTimeoutMs,
-                                               cancelled);
+        const auto timeoutMs = request.lifecycletimeoutms() > 0
+                                   ? static_cast<uint64_t>(request.lifecycletimeoutms())
+                                   : param_.invokeResultTimeoutMs;
+        auto killResponse = WaitFrontendResult(killFuture.value(), context, timeoutMs, cancelled);
         if (!killResponse.IsSome() || !killResponse.Get().has_kill()) {
             SetStatus(response.mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
                       cancelled ? "frontend proxy kill cancelled with unknown dispatch outcome"

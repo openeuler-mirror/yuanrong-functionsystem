@@ -27,32 +27,41 @@ using namespace functionsystem::utils;
 
 class NUMABindingTest : public Test {};
 
+constexpr StatusCode UnsupportedOrInvalidNUMAStatus()
+{
+#ifdef ENABLE_NUMA
+    return StatusCode::PARAMETER_ERROR;
+#else
+    return StatusCode::ERR_INNER_SYSTEM_ERROR;
+#endif
+}
+
 // BindCPUToNUMANodes: 空节点列表返回 PARAMETER_ERROR
 TEST_F(NUMABindingTest, BindCPUToNUMANodesEmptyList) {
     auto status = NUMABinding::BindCPUToNUMANodes({});
     EXPECT_FALSE(status.IsOk());
-    EXPECT_EQ(status.StatusCode(), StatusCode::PARAMETER_ERROR);
+    EXPECT_EQ(status.StatusCode(), UnsupportedOrInvalidNUMAStatus());
 }
 
 // BindMemoryToNUMANodes: 空节点列表返回 PARAMETER_ERROR
 TEST_F(NUMABindingTest, BindMemoryToNUMANodesEmptyList) {
     auto status = NUMABinding::BindMemoryToNUMANodes({});
     EXPECT_FALSE(status.IsOk());
-    EXPECT_EQ(status.StatusCode(), StatusCode::PARAMETER_ERROR);
+    EXPECT_EQ(status.StatusCode(), UnsupportedOrInvalidNUMAStatus());
 }
 
 // BindToNUMANodes: 空节点列表返回 PARAMETER_ERROR
 TEST_F(NUMABindingTest, BindToNUMANodesEmptyList) {
     auto status = NUMABinding::BindToNUMANodes({});
     EXPECT_FALSE(status.IsOk());
-    EXPECT_EQ(status.StatusCode(), StatusCode::PARAMETER_ERROR);
+    EXPECT_EQ(status.StatusCode(), UnsupportedOrInvalidNUMAStatus());
 }
 
 // BindCPUToNUMANode: 无效 nodeId (-1) 返回 PARAMETER_ERROR
 TEST_F(NUMABindingTest, BindCPUToNUMANodeInvalidNodeId) {
     auto status = NUMABinding::BindCPUToNUMANode(-1);
     EXPECT_FALSE(status.IsOk());
-    EXPECT_EQ(status.StatusCode(), StatusCode::PARAMETER_ERROR);
+    EXPECT_EQ(status.StatusCode(), UnsupportedOrInvalidNUMAStatus());
 }
 
 // BindCPUToNUMANode: 无效 nodeId (超出范围) 返回 PARAMETER_ERROR
@@ -63,7 +72,7 @@ TEST_F(NUMABindingTest, BindCPUToNUMANodeNodeIdOutOfRange) {
     }
     auto status = NUMABinding::BindCPUToNUMANode(invalidNodeId);
     EXPECT_FALSE(status.IsOk());
-    EXPECT_EQ(status.StatusCode(), StatusCode::PARAMETER_ERROR);
+    EXPECT_EQ(status.StatusCode(), UnsupportedOrInvalidNUMAStatus());
 }
 
 // BindMemoryToNUMANode: 无效 nodeId 返回错误（通过 CreateNodeMask 失败）
@@ -103,7 +112,7 @@ TEST_F(NUMABindingTest, BindCPUToNUMANodeWhenNUMANotAvailable) {
     if (!NUMAUtils::IsNUMAAvailable()) {
         auto status = NUMABinding::BindCPUToNUMANode(0);
         EXPECT_FALSE(status.IsOk());
-        EXPECT_EQ(status.StatusCode(), StatusCode::PARAMETER_ERROR);
+        EXPECT_EQ(status.StatusCode(), UnsupportedOrInvalidNUMAStatus());
     }
 }
 
@@ -112,7 +121,7 @@ TEST_F(NUMABindingTest, BindCPUToNUMANodesWhenNUMANotAvailable) {
     if (!NUMAUtils::IsNUMAAvailable()) {
         auto status = NUMABinding::BindCPUToNUMANodes({ 0, 1 });
         EXPECT_FALSE(status.IsOk());
-        EXPECT_EQ(status.StatusCode(), StatusCode::PARAMETER_ERROR);
+        EXPECT_EQ(status.StatusCode(), UnsupportedOrInvalidNUMAStatus());
     }
 }
 
@@ -121,7 +130,7 @@ TEST_F(NUMABindingTest, BindMemoryToNUMANodeWhenNUMANotAvailable) {
     if (!NUMAUtils::IsNUMAAvailable()) {
         auto status = NUMABinding::BindMemoryToNUMANode(0);
         EXPECT_FALSE(status.IsOk());
-        EXPECT_EQ(status.StatusCode(), StatusCode::PARAMETER_ERROR);
+        EXPECT_EQ(status.StatusCode(), UnsupportedOrInvalidNUMAStatus());
     }
 }
 
@@ -130,7 +139,7 @@ TEST_F(NUMABindingTest, BindMemoryToNUMANodesWhenNUMANotAvailable) {
     if (!NUMAUtils::IsNUMAAvailable()) {
         auto status = NUMABinding::BindMemoryToNUMANodes({ 0, 1 });
         EXPECT_FALSE(status.IsOk());
-        EXPECT_EQ(status.StatusCode(), StatusCode::PARAMETER_ERROR);
+        EXPECT_EQ(status.StatusCode(), UnsupportedOrInvalidNUMAStatus());
     }
 }
 
@@ -139,7 +148,7 @@ TEST_F(NUMABindingTest, BindToNUMANodeWhenNUMANotAvailable) {
     if (!NUMAUtils::IsNUMAAvailable()) {
         auto status = NUMABinding::BindToNUMANode(0);
         EXPECT_FALSE(status.IsOk());
-        EXPECT_EQ(status.StatusCode(), StatusCode::PARAMETER_ERROR);
+        EXPECT_EQ(status.StatusCode(), UnsupportedOrInvalidNUMAStatus());
     }
 }
 
@@ -147,7 +156,7 @@ TEST_F(NUMABindingTest, BindToNUMANodeWhenNUMANotAvailable) {
 TEST_F(NUMABindingTest, BindToNUMANodesEmptyBeforeNUMACheck) {
     auto status = NUMABinding::BindToNUMANodes({});
     EXPECT_FALSE(status.IsOk());
-    EXPECT_EQ(status.StatusCode(), StatusCode::PARAMETER_ERROR);
+    EXPECT_EQ(status.StatusCode(), UnsupportedOrInvalidNUMAStatus());
 }
 
 }  // namespace functionsystem::test

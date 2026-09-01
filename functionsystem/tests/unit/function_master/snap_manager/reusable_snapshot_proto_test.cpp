@@ -76,11 +76,15 @@ TEST(ReusableSnapshotProtoContractTest, FreezesPublicAndInternalShapeWithoutChan
 
     EXPECT_EQ(FieldNames(::messages::SnapshotArtifact::descriptor()),
               (std::set<std::string>{ "storageBackend", "objectKey", "size", "sha256", "format",
-                                      "formatVersion" }));
+                                      "formatVersion", "sourceNodeID" }));
     EXPECT_EQ(FieldNames(::messages::ReusableSnapshotMetadata::descriptor()),
               (std::set<std::string>{ "snapshotID", "names", "instanceTemplate", "artifact", "tenantID",
-                                      "createRequestID", "requestFingerprint", "phase", "createTime",
-                                      "updateTime", "version" }));
+                                      "createRequestID", "phase", "createTime",
+                                      "updateTime", "version", "sourceInstanceID" }));
+    ExpectFieldNumbers(::messages::ReusableSnapshotMetadata::descriptor(),
+                       { { "snapshotID", 1 }, { "names", 2 }, { "instanceTemplate", 3 }, { "artifact", 4 },
+                         { "tenantID", 5 }, { "createRequestID", 6 }, { "phase", 7 }, { "createTime", 8 },
+                         { "updateTime", 9 }, { "version", 10 }, { "sourceInstanceID", 11 } });
     EXPECT_EQ(FieldNames(::messages::ReusableSnapshotRestore::descriptor()),
               (std::set<std::string>{ "snapshotID", "artifact", "allowLogicalInstanceIDRebind" }));
 
@@ -95,19 +99,19 @@ TEST(ReusableSnapshotProtoContractTest, FreezesPublicAndInternalShapeWithoutChan
 
     ExpectFieldNumbers(::messages::BeginReusableSnapshotRequest::descriptor(),
                        { { "requestID", 1 }, { "tenantID", 2 }, { "sourceInstanceID", 3 },
-                         { "names", 4 }, { "requestFingerprint", 5 } });
+                         { "names", 4 } });
     ExpectFieldNumbers(::messages::BeginReusableSnapshotResponse::descriptor(),
                        { { "code", 1 }, { "message", 2 }, { "requestID", 3 }, { "snapshotID", 4 },
                          { "phase", 5 }, { "snapshotInfo", 6 } });
     ExpectFieldNumbers(::messages::CommitReusableSnapshotRequest::descriptor(),
                        { { "requestID", 1 }, { "tenantID", 2 }, { "snapshotID", 3 },
-                         { "requestFingerprint", 4 }, { "sourceInstanceInfo", 5 }, { "artifact", 6 } });
+                         { "sourceInstanceInfo", 4 }, { "artifact", 5 } });
     ExpectFieldNumbers(::messages::CommitReusableSnapshotResponse::descriptor(),
                        { { "code", 1 }, { "message", 2 }, { "requestID", 3 }, { "snapshotInfo", 4 },
                          { "version", 5 } });
     ExpectFieldNumbers(::messages::FailReusableSnapshotRequest::descriptor(),
                        { { "requestID", 1 }, { "tenantID", 2 }, { "snapshotID", 3 },
-                         { "requestFingerprint", 4 }, { "reason", 5 } });
+                         { "reason", 4 } });
     ExpectFieldNumbers(::messages::FailReusableSnapshotResponse::descriptor(),
                        { { "code", 1 }, { "message", 2 }, { "requestID", 3 } });
     ExpectFieldNumbers(::messages::GetReusableSnapshotRequest::descriptor(),

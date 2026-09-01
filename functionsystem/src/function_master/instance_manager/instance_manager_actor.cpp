@@ -723,7 +723,13 @@ void InstanceManagerActor::OnInstanceWatchEvent(const std::vector<WatchEvent> &e
                     YRLOG_ERROR("failed to transform instance({}) info from String.", eventKey);
                     break;
                 }
+                if (history->tenantid().empty()) {
+                    history->set_tenantid(ParseTenantIDFromInstanceKey(eventKey));
+                }
                 OnInstanceDelete(eventKey, history);
+                if (member_->instanceDeleteObserver) {
+                    member_->instanceDeleteObserver(history);
+                }
                 if (member_->groupManager) {
                     member_->groupManager->OnInstanceDelete(eventKey, history);
                 }
@@ -1027,7 +1033,7 @@ InstanceManagerActor::DeleteReusableSnapshotArtifact(
     const auto &artifact = input.artifact();
     if (input.requestid().empty() || input.tenantid().empty() || input.snapshotid().empty()
         || artifact.storagebackend().empty() || artifact.objectkey().empty()
-        || artifact.size() <= 0 || artifact.sha256().empty()) {
+        || (artifact.storagebackend() == "local" && artifact.sourcenodeid().empty())) {
         error.set_code(common::ERR_PARAM_INVALID);
         error.set_message("reusable Snapshot artifact delete identity is incomplete");
         return error;
@@ -1106,8 +1112,16 @@ void InstanceManagerActor::OnReusableSnapshotDeleteNodes(
     auto candidates = std::make_shared<std::vector<std::string>>();
     std::vector<std::string> healthy(nodesFuture.Get().begin(), nodesFuture.Get().end());
     std::sort(healthy.begin(), healthy.end());
+    if (request.artifact().storagebackend() == "local") {
+        const auto &sourceNodeID = request.artifact().sourcenodeid();
+        if (nodesFuture.Get().count(sourceNodeID) != 0
+            && runtimeNodes->count(sourceNodeID) != 0) {
+            candidates->push_back(sourceNodeID);
+        }
+    }
     for (const auto &nodeID : healthy) {
-        if (runtimeNodes->count(nodeID) != 0) {
+        if (request.artifact().storagebackend() != "local"
+            && runtimeNodes->count(nodeID) != 0) {
             candidates->push_back(nodeID);
         }
     }
@@ -1177,11 +1191,16 @@ void InstanceManagerActor::OnReusableSnapshotDeleteCandidate(
     size_t index,
     const std::shared_ptr<litebus::Promise<::messages::DeleteReusableSnapshotArtifactResponse>> &result)
 {
-    if (!responseFuture.IsError() && responseFuture.Get().code() == common::ERR_NONE) {
+    if (!responseFuture.IsError() && responseFuture.Get().code() == common::ERR_NONE
+        && index + 1 >= candidates->size()) {
         result->SetValue(responseFuture.Get());
         return;
     }
-    if (responseFuture.IsError()) {
+    if (!responseFuture.IsError() && responseFuture.Get().code() == common::ERR_NONE) {
+        YRLOG_INFO("reusable Snapshot delete request({}) through proxy({}) succeeded; "
+                   "continue cleaning remaining healthy nodes",
+                   request.requestid(), (*candidates)[index]);
+    } else if (responseFuture.IsError()) {
         YRLOG_WARN("reusable Snapshot delete request({}) through proxy({}) timed out or failed",
                    request.requestid(), (*candidates)[index]);
     } else {
@@ -1711,6 +1730,16 @@ void InstanceManagerActor::MasterBusiness::ProcessInstanceNotReSchedule(
     const std::string &nodeName, const std::string &reason)
 {
     RETURN_IF_NULL(instance.second);
+    if (instance.second->failover()) {
+        auto *status = instance.second->mutable_instancestatus();
+        const auto previous = status->code();
+        status->set_code(static_cast<int32_t>(InstanceState::RUNNING));
+        status->set_msg("waiting for same-node local snapshot recovery");
+        YRLOG_INFO("keep failover instance({}) RUNNING from state({}) while its same-node scheduler({}) "
+                   "is unavailable: {}",
+                   instance.second->instanceid(), previous, nodeName, reason);
+        return;
+    }
     YRLOG_INFO("change instance({}) status to FATAL because {}.", instance.second->instanceid(), reason);
 
     OnFaultLocalInstancePut(instance.first, instance.second, reason);
@@ -1884,6 +1913,16 @@ void InstanceManagerActor::MasterBusiness::OnFaultLocalInstancePut(
     // 2. container(proxy, agent) fault: No processing is required.
     // 3. pod or node fault: force delete instance
     RETURN_IF_NULL(instance);
+    if (instance->failover()) {
+        auto *status = instance->mutable_instancestatus();
+        const auto previous = status->code();
+        status->set_code(static_cast<int32_t>(InstanceState::RUNNING));
+        status->set_msg("waiting for same-node local snapshot recovery");
+        member_->instances[INSTANCE_MANAGER_OWNER][key] = instance;
+        YRLOG_INFO("keep failover instance({}) RUNNING from state({}) instead of fault cleanup: {}",
+                   instance->instanceid(), previous, reason);
+        return;
+    }
     if (instance->instancestatus().code() == static_cast<int32_t>(InstanceState::EXITING) || IsDriver(instance)
         || IsStaticFunctionInstance(*instance)) {
         YRLOG_INFO("instance({}) is driver or exiting, delete directly when {}", key, reason);
@@ -2005,6 +2044,10 @@ litebus::Future<Status> InstanceManagerActor::MasterBusiness::KillInstance(const
 
 bool InstanceManagerActor::MasterBusiness::IsInstanceShouldBeKilled(const std::shared_ptr<InstanceInfo> &info)
 {
+    if (info->failover()) {
+        YRLOG_INFO("keep failover instance({}) for same-node local snapshot recovery", info->instanceid());
+        return false;
+    }
     if (info->lowreliability() && IsNonRecoverableStatus(info->instancestatus().code())) {
         // low reliability instance, and instance cannot be recovered
         YRLOG_INFO("receive instance({}) event, which is low-reliability and not recoverable, will kill it",

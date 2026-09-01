@@ -34,6 +34,11 @@ public:
         handler();
         return Status::OK();
     }
+
+    Status StatusWork(const std::function<Status()> &handler)
+    {
+        return handler();
+    }
 };
 
 class ActorWorker {
@@ -55,6 +60,11 @@ public:
     litebus::Future<Status> AsyncWork(std::function<void()> handler)
     {
         return litebus::Async(worker_->GetAID(), &Worker::Work, handler);
+    }
+
+    litebus::Future<Status> AsyncStatusWork(std::function<Status()> handler)
+    {
+        return litebus::Async(worker_->GetAID(), &Worker::StatusWork, handler);
     }
 
     void Terminate()

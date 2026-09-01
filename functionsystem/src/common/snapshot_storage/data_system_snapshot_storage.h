@@ -33,6 +33,14 @@ public:
     virtual Status Put(const std::string &key, const std::string &value) = 0;
     virtual DataSystemGetResult Get(const std::string &key) = 0;
     virtual Status Delete(const std::string &key) = 0;
+
+    // File-oriented operations let production DataSystem clients use shared-memory
+    // buffers directly. The defaults preserve compatibility for injected clients.
+    virtual Status PutFile(const std::string &key, const std::string &sourceFile,
+                           const SnapshotObjectMetadata &metadata);
+    virtual SnapshotStat StatObject(const std::string &key);
+    virtual Status DownloadFile(const std::string &key, const std::string &destinationFile,
+                                SnapshotObjectMetadata &metadata);
 };
 
 class DataSystemSnapshotStorage final : public SnapshotStorage {
@@ -50,6 +58,12 @@ public:
     litebus::Future<SnapshotStat> Stat(const std::string &key) override;
     litebus::Future<Status> Publish(const std::string &temporaryKey, const std::string &finalKey,
                                     const SnapshotObjectMetadata &expected) override;
+    bool SupportsDirectFinalPut() const override
+    {
+        return true;
+    }
+    litebus::Future<Status> PutFinal(const std::string &finalKey, const std::string &sourceFile,
+                                     const SnapshotObjectMetadata &metadata) override;
     litebus::Future<Status> Get(const std::string &finalKey, const std::string &destinationFile) override;
     litebus::Future<Status> Delete(const std::string &key) override;
 

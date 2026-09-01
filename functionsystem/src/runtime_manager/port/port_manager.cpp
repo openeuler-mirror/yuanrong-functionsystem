@@ -16,6 +16,7 @@
 
 #include "port_manager.h"
 
+#include <algorithm>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <unordered_set>
@@ -29,6 +30,7 @@ void PortManager::InitPortResource(int initialPort, int portNum)
 {
     YRLOG_INFO("Init port resource, initial port: {}, portNum: {}", initialPort, portNum);
     portMap_.clear();
+    nextPort_ = -1;
     ready_ = false;
     while (portNum > 0) {
         if (portNum > MAX_PORT_NUM) {
@@ -40,6 +42,9 @@ void PortManager::InitPortResource(int initialPort, int portNum)
         portMap_[initialPort] = info;
         initialPort++;
         portNum--;
+    }
+    if (!portMap_.empty()) {
+        nextPort_ = portMap_.begin()->first;
     }
     ready_ = true;
 }
@@ -81,6 +86,10 @@ bool PortManager::RebuildPorts(const ReservationMap &reservations)
         }
     }
     portMap_.swap(rebuilt);
+    nextPort_ = portMap_.empty() ? -1 : portMap_.begin()->first;
+    if (!reserved.empty()) {
+        AdvanceAllocationCursor(*std::max_element(reserved.begin(), reserved.end()));
+    }
     ready_ = true;
     return true;
 }
@@ -101,21 +110,28 @@ std::string PortManager::RequestPort(const std::string &runtimeID)
         YRLOG_ERROR("PortManager port map is empty, request port failed");
         return "";
     }
-    std::string port;
-    for (auto &iter : portMap_) {
-        if (!iter.second.used) {
-            if (CheckPortInUse(iter.first)) {
-                YRLOG_INFO("port: {} is inuse, continue", iter.first);
-                continue;
-            }
-            iter.second.used = true;
-            iter.second.runtimeID = runtimeID;
-            iter.second.port = iter.first;
-            port = std::to_string(iter.first);
-            break;
+    auto iter = portMap_.lower_bound(nextPort_);
+    for (size_t scanned = 0; scanned < portMap_.size(); ++scanned) {
+        if (iter == portMap_.end()) {
+            iter = portMap_.begin();
         }
+        const int port = iter->first;
+        auto &info = iter->second;
+        ++iter;
+        if (info.used) {
+            continue;
+        }
+        if (CheckPortInUse(port)) {
+            YRLOG_INFO("port: {} is inuse, continue", port);
+            continue;
+        }
+        info.used = true;
+        info.runtimeID = runtimeID;
+        info.port = port;
+        AdvanceAllocationCursor(port);
+        return std::to_string(port);
     }
-    return port;
+    return "";
 }
 
 bool PortManager::CheckPortInUse(int port) const
@@ -180,6 +196,7 @@ int PortManager::ReleasePort(const std::string &runtimeID)
 void PortManager::Clear()
 {
     portMap_.clear();
+    nextPort_ = -1;
     ready_ = false;
 }
 
@@ -203,20 +220,26 @@ std::vector<int> PortManager::RequestPorts(const std::string &runtimeID, int cou
     }
     std::vector<int> allocated;
     allocated.reserve(count);
-    for (auto &iter : portMap_) {
-        if (static_cast<int>(allocated.size()) >= count) {
-            break;
+    auto iter = portMap_.lower_bound(nextPort_);
+    for (size_t scanned = 0; scanned < portMap_.size()
+         && static_cast<int>(allocated.size()) < count; ++scanned) {
+        if (iter == portMap_.end()) {
+            iter = portMap_.begin();
         }
-        if (!iter.second.used) {
-            if (CheckPortInUse(iter.first)) {
-                YRLOG_INFO("port: {} is inuse, skip for runtimeID: {}", iter.first, runtimeID);
-                continue;
-            }
-            iter.second.used = true;
-            iter.second.runtimeID = runtimeID;
-            iter.second.port = iter.first;
-            allocated.push_back(iter.first);
+        const int port = iter->first;
+        auto &info = iter->second;
+        ++iter;
+        if (info.used) {
+            continue;
         }
+        if (CheckPortInUse(port)) {
+            YRLOG_INFO("port: {} is inuse, skip for runtimeID: {}", port, runtimeID);
+            continue;
+        }
+        info.used = true;
+        info.runtimeID = runtimeID;
+        info.port = port;
+        allocated.push_back(port);
     }
     if (static_cast<int>(allocated.size()) < count) {
         YRLOG_ERROR("RequestPorts failed: needed {} but got {} for runtimeID: {}", count, allocated.size(), runtimeID);
@@ -232,6 +255,7 @@ std::vector<int> PortManager::RequestPorts(const std::string &runtimeID, int cou
         }
         return {};
     }
+    AdvanceAllocationCursor(allocated.back());
     return allocated;
 }
 
@@ -289,5 +313,18 @@ void PortManager::ReleasePorts(const std::string &runtimeID)
             iter.second.grpcPort = 0;
         }
     }
+}
+
+void PortManager::AdvanceAllocationCursor(int port)
+{
+    if (portMap_.empty()) {
+        nextPort_ = -1;
+        return;
+    }
+    auto next = portMap_.upper_bound(port);
+    if (next == portMap_.end()) {
+        next = portMap_.begin();
+    }
+    nextPort_ = next->first;
 }
 }  // namespace functionsystem::runtime_manager

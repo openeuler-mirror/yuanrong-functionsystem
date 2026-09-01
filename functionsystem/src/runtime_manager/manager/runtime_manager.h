@@ -66,7 +66,6 @@ public:
     void SnapshotRuntime(const litebus::AID &from, std::string &&name, std::string &&msg);
 
     /** Delete one exact reusable checkpoint after the logical Snapshot READY commit. */
-    void SnapshotAttemptFinalize(const litebus::AID &from, std::string &&name, std::string &&msg);
 
     /**
      * OOM Kill instance when receive event from metrics actor.
@@ -233,11 +232,6 @@ private:
     Status SnapshotRuntimeResponse(const litebus::AID &from,
                                    const std::shared_ptr<messages::SnapshotRuntimeRequest> &request,
                                    const litebus::Future<messages::SnapshotRuntimeResponse> &responseFuture);
-    litebus::Future<Status> FinalizeReusableSnapshotCheckpoint(
-        const ::messages::SnapshotAttemptFinalizeRequest &request);
-    void SnapshotAttemptFinalizeCompleted(
-        const litebus::AID &from, const ::messages::SnapshotAttemptFinalizeRequest &request,
-        const litebus::Future<Status> &future);
 
     void CreateInstanceMetrics(const litebus::Future<messages::StartInstanceResponse> &response,
                                const std::shared_ptr<messages::StartInstanceRequest> &request);

@@ -36,14 +36,8 @@ namespace functionsystem::local_scheduler {
 namespace {
 constexpr int32_t DEFAULT_PAUSE_TTL_SECONDS = 90'000;
 constexpr uint32_t SNAPSHOT_ATTEMPT_PROTOCOL_VERSION = 1;
+constexpr size_t ANONYMOUS_SNAPSHOT_ID_DIGEST_LENGTH = 40;
 
-std::string BuildReusableSnapshotFingerprint(
-    const resources::InstanceInfo &instanceInfo, const core_service::SnapOptions &options)
-{
-    const auto identity = instanceInfo.tenantid() + std::string(1, '\0')
-        + instanceInfo.instanceid() + std::string(1, '\0') + options.name();
-    return resume_identity::Sha256Hex(identity);
-}
 }
 
 SnapCtrlActor::SnapCtrlActor(const std::string &name, const std::string &nodeID,
@@ -129,6 +123,7 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleSnapshot(const std::string &r
     SnapOptions options;
     bool leaveRunning = false;
     int32_t ttl = 0;  // Default TTL is 0 (no expiration)
+    uint64_t checkpointTimeoutMs = 0;
     std::string functionType;
     if (!payload.empty()) {
         if (!options.ParseFromString(payload)) {
@@ -141,6 +136,7 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleSnapshot(const std::string &r
         leaveRunning = options.leaverunning();
         ttl = options.ttl();  // Extract TTL from SnapOptions
         functionType = options.functiontype();
+        checkpointTimeoutMs = options.checkpointtimeoutms();
     }
     if (options.type() == common::SnapType::PAUSE_RESUME
         && (instanceControlView_ == nullptr || instanceCtrl_ == nullptr || clientManager_ == nullptr
@@ -162,11 +158,16 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleSnapshot(const std::string &r
     }
     if (options.type() == common::SnapType::PAUSE_RESUME) {
         const auto effectiveTTL = ttl > 0 ? ttl : DEFAULT_PAUSE_TTL_SECONDS;
-        return HandlePauseResumeSnapshot(requestID, instanceID, stateMachine, effectiveTTL);
+        return HandlePauseResumeSnapshot(
+            requestID, instanceID, stateMachine, effectiveTTL, checkpointTimeoutMs);
     }
     auto instanceInfo = stateMachine->GetInstanceInfo();
     if (options.type() == common::SnapType::SNAPSHOT) {
         return HandleReusableSnapshot(requestID, instanceID, instanceInfo, options);
+    }
+    if (checkpointTimeoutMs > 0) {
+        (*instanceInfo.mutable_createoptions())["YR_CHECKPOINT_TIMEOUT_MS"] =
+            std::to_string(checkpointTimeoutMs);
     }
     YRLOG_INFO("{}|{}|start snapshot, leave_running: {}", requestID, instanceID, leaveRunning);
     ASSERT_IF_NULL(functionAgentMgr_);
@@ -213,6 +214,148 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleSnapshot(const std::string &r
         .Then(litebus::Defer(GetAID(), &SnapCtrlActor::OnHandleSnapshot, std::placeholders::_1));
 }
 
+litebus::Future<KillResponse> SnapCtrlActor::HandleAnonymousCheckpoint(
+    const std::string &requestID, const std::string &instanceID,
+    uint64_t checkpointTimeoutMs)
+{
+    auto completion = std::make_shared<litebus::Promise<KillResponse>>();
+    auto context = std::make_shared<AnonymousCheckpointContext>();
+    context->requestID = requestID;
+    context->instanceID = instanceID;
+    context->snapshotID = "anon-" + resume_identity::Sha256Hex(
+        requestID + std::string(1, '\0') + instanceID).substr(
+            0, ANONYMOUS_SNAPSHOT_ID_DIGEST_LENGTH);
+    context->completion = completion;
+    if (instanceControlView_ == nullptr || clientManager_ == nullptr || functionAgentMgr_ == nullptr) {
+        CompleteAnonymousCheckpoint(
+            context, common::ERR_INNER_SYSTEM_ERROR,
+            "anonymous checkpoint dependencies are unavailable");
+        return completion->GetFuture();
+    }
+    const auto stateMachine = instanceControlView_->GetInstance(instanceID);
+    if (stateMachine == nullptr
+        || stateMachine->GetInstanceState() != InstanceState::RUNNING) {
+        CompleteAnonymousCheckpoint(
+            context, common::ERR_STATE_MACHINE_ERROR,
+            "anonymous checkpoint requires a running instance");
+        return completion->GetFuture();
+    }
+    context->instanceInfo = stateMachine->GetInstanceInfo();
+    if (checkpointTimeoutMs > 0) {
+        (*context->instanceInfo.mutable_createoptions())["YR_CHECKPOINT_TIMEOUT_MS"] =
+            std::to_string(checkpointTimeoutMs);
+    }
+    PrepareSnap(requestID, instanceID).OnComplete(litebus::Defer(
+        GetAID(), &SnapCtrlActor::OnAnonymousCheckpointPrepared,
+        context, std::placeholders::_1));
+    return completion->GetFuture();
+}
+
+void SnapCtrlActor::OnAnonymousCheckpointPrepared(
+    const std::shared_ptr<AnonymousCheckpointContext> &context,
+    const litebus::Future<Status> &future)
+{
+    if (future.IsError() || future.Get().IsError()) {
+        CompleteAnonymousCheckpoint(
+            context, common::ERR_INNER_SYSTEM_ERROR,
+            future.IsError() ? "anonymous checkpoint PrepareSnap future failed"
+                             : future.Get().RawMessage());
+        return;
+    }
+    functionAgentMgr_->SnapshotRuntimeAnonymous(
+        context->requestID, context->instanceInfo, context->snapshotID)
+        .OnComplete(litebus::Defer(
+            GetAID(), &SnapCtrlActor::OnAnonymousCheckpointCreated,
+            context, std::placeholders::_1));
+}
+
+void SnapCtrlActor::OnAnonymousCheckpointCreated(
+    const std::shared_ptr<AnonymousCheckpointContext> &context,
+    const litebus::Future<messages::SnapshotRuntimeResponse> &future)
+{
+    if (future.IsError()) {
+        context->snapshotResponse.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+        context->snapshotResponse.set_message("anonymous SnapshotRuntime future failed");
+    } else {
+        context->snapshotResponse = future.Get();
+    }
+    context->snapStartedDeadline = std::chrono::steady_clock::now()
+        + std::chrono::milliseconds(pauseRetryPolicy_.operationTimeoutMs);
+    RetryAnonymousCheckpointClient(context);
+}
+
+void SnapCtrlActor::RetryAnonymousCheckpointClient(
+    const std::shared_ptr<AnonymousCheckpointContext> &context)
+{
+    if (std::chrono::steady_clock::now() >= context->snapStartedDeadline) {
+        CompleteAnonymousCheckpoint(
+            context, common::ERR_INNER_COMMUNICATION,
+            "timed out waiting for runtime reconnect after anonymous checkpoint");
+        return;
+    }
+    clientManager_->GetControlInterfacePosixClient(context->instanceID)
+        .OnComplete(litebus::Defer(
+            GetAID(), &SnapCtrlActor::OnAnonymousCheckpointClient,
+            context, std::placeholders::_1));
+}
+
+void SnapCtrlActor::OnAnonymousCheckpointClient(
+    const std::shared_ptr<AnonymousCheckpointContext> &context,
+    const litebus::Future<std::shared_ptr<ControlInterfacePosixClient>> &future)
+{
+    if (future.IsError() || future.Get() == nullptr) {
+        (void)litebus::AsyncAfter(
+            pauseRetryPolicy_.initialDelayMs, GetAID(),
+            &SnapCtrlActor::RetryAnonymousCheckpointClient, context);
+        return;
+    }
+    runtime::SnapStartedRequest request;
+    future.Get()->SnapStarted(std::move(request)).OnComplete(litebus::Defer(
+        GetAID(), &SnapCtrlActor::OnAnonymousCheckpointStarted,
+        context, std::placeholders::_1));
+}
+
+void SnapCtrlActor::OnAnonymousCheckpointStarted(
+    const std::shared_ptr<AnonymousCheckpointContext> &context,
+    const litebus::Future<runtime::SnapStartedResponse> &future)
+{
+    if (future.IsError()
+        || future.Get().code() == common::ERR_REQUEST_BETWEEN_RUNTIME_BUS) {
+        (void)litebus::AsyncAfter(
+            pauseRetryPolicy_.initialDelayMs, GetAID(),
+            &SnapCtrlActor::RetryAnonymousCheckpointClient, context);
+        return;
+    }
+    if (future.Get().code() != common::ERR_NONE) {
+        CompleteAnonymousCheckpoint(
+            context, common::ERR_INNER_SYSTEM_ERROR,
+            future.Get().message());
+        return;
+    }
+    if (context->snapshotResponse.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
+        CompleteAnonymousCheckpoint(
+            context, Status::GetPosixErrorCode(context->snapshotResponse.code()),
+            context->snapshotResponse.message());
+        return;
+    }
+    KillResponse response;
+    response.set_code(common::ERR_NONE);
+    if (context->snapshotResponse.has_localsnapshot()) {
+        response.set_payload(context->snapshotResponse.localsnapshot().SerializeAsString());
+    }
+    context->completion->SetValue(response);
+}
+
+void SnapCtrlActor::CompleteAnonymousCheckpoint(
+    const std::shared_ptr<AnonymousCheckpointContext> &context,
+    common::ErrorCode code, const std::string &message)
+{
+    KillResponse response;
+    response.set_code(code);
+    response.set_message(message);
+    context->completion->SetValue(response);
+}
+
 litebus::Future<KillResponse> SnapCtrlActor::HandleReusableSnapshot(
     const std::string &requestID, const std::string &instanceID,
     const resources::InstanceInfo &instanceInfo, const SnapOptions &options)
@@ -222,7 +365,10 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleReusableSnapshot(
     context->instanceID = instanceID;
     context->name = options.name();
     context->sourceInstanceInfo = instanceInfo;
-    context->requestFingerprint = BuildReusableSnapshotFingerprint(instanceInfo, options);
+    if (options.checkpointtimeoutms() > 0) {
+        (*context->sourceInstanceInfo.mutable_createoptions())["YR_CHECKPOINT_TIMEOUT_MS"] =
+            std::to_string(options.checkpointtimeoutms());
+    }
     context->completion = std::make_shared<litebus::Promise<KillResponse>>();
 
     if (requestID.empty() || instanceID.empty() || instanceInfo.tenantid().empty()
@@ -254,7 +400,6 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleReusableSnapshot(
     if (!options.name().empty()) {
         request->add_names(options.name());
     }
-    request->set_requestfingerprint(context->requestFingerprint);
     localSchedSrv_->BeginReusableSnapshot(request).OnComplete(
         litebus::Defer(GetAID(), &SnapCtrlActor::OnReusableSnapshotBegun,
                        context, std::placeholders::_1));
@@ -370,14 +515,32 @@ void SnapCtrlActor::OnReusableSnapshotCheckpointed(
     const std::shared_ptr<ReusableSnapshotContext> &context,
     const litebus::Future<::messages::SnapshotRuntimeResponse> &future)
 {
+    if (future.IsError() || future.Get().code() != common::ERR_NONE
+        || !future.Get().has_localsnapshot()) {
+        FailReusableSnapshot(
+            context, common::ERR_INNER_COMMUNICATION,
+            future.IsError() ? "reusable snapshot LOCAL_READY future failed"
+                             : future.Get().message());
+        return;
+    }
+    clientManager_->GetControlInterfacePosixClient(context->instanceID)
+        .OnComplete(litebus::Defer(
+            GetAID(), &SnapCtrlActor::OnReusableSnapshotClient,
+            context, std::placeholders::_1));
+}
+
+void SnapCtrlActor::OnReusableSnapshotPublished(
+    const std::shared_ptr<ReusableSnapshotContext> &context,
+    const litebus::Future<::messages::SnapshotRuntimeResponse> &future)
+{
     if (future.IsError()) {
         // The Agent may have checkpointed or published successfully before
         // its reply was lost. Without exact artifact facts, neither local nor
         // remote deletion is safe. Keep PUBLISHING for deterministic replay.
         CompleteReusableSnapshotRequest(
             context, BuildReusableSnapshotResponse(
-                         common::ERR_INNER_COMMUNICATION,
-                         "reusable snapshot Agent result is unknown"));
+                common::ERR_INNER_COMMUNICATION,
+                "reusable snapshot Agent result is unknown"));
         return;
     }
     const auto &response = future.Get();
@@ -388,6 +551,9 @@ void SnapCtrlActor::OnReusableSnapshotCheckpointed(
             && response.reusablesnapshotartifact().size() > 0
             && !response.reusablesnapshotartifact().sha256().empty()) {
             context->artifact = response.reusablesnapshotartifact();
+            if (context->artifact.storagebackend() == "local") {
+                context->artifact.set_sourcenodeid(nodeID_);
+            }
             FinalizeReusableSnapshot(context, ::messages::REUSABLE_SNAPSHOT_ABORTED,
                                      static_cast<common::ErrorCode>(response.code()),
                                      response.message());
@@ -399,30 +565,68 @@ void SnapCtrlActor::OnReusableSnapshotCheckpointed(
         // orphan local/remote data that cannot be deleted safely.
         CompleteReusableSnapshotRequest(
             context, BuildReusableSnapshotResponse(
-                         static_cast<common::ErrorCode>(response.code()),
-                         response.message().empty()
-                             ? "reusable snapshot publish failed without exact cleanup identity"
-                             : response.message()));
+                static_cast<common::ErrorCode>(response.code()),
+                response.message().empty()
+                    ? "reusable snapshot publish failed without exact cleanup identity"
+                    : response.message()));
         return;
     }
     if (!response.has_reusablesnapshotartifact()) {
         CompleteReusableSnapshotRequest(
             context, BuildReusableSnapshotResponse(
-                         common::ERR_INNER_SYSTEM_ERROR,
-                         "reusable snapshot Agent response omitted frozen artifact; publishing preserved"));
+                common::ERR_INNER_SYSTEM_ERROR,
+                "reusable snapshot Agent response omitted frozen artifact; publishing preserved"));
         return;
     }
     context->artifact = response.reusablesnapshotartifact();
+    if (context->artifact.storagebackend() == "local") {
+        context->artifact.set_sourcenodeid(nodeID_);
+    }
     auto request = std::make_shared<::messages::CommitReusableSnapshotRequest>();
     request->set_requestid(context->requestID);
     request->set_tenantid(context->sourceInstanceInfo.tenantid());
     request->set_snapshotid(context->snapshotID);
-    request->set_requestfingerprint(context->requestFingerprint);
     *request->mutable_sourceinstanceinfo() = context->sourceInstanceInfo;
     *request->mutable_artifact() = context->artifact;
     localSchedSrv_->CommitReusableSnapshot(request).OnComplete(
         litebus::Defer(GetAID(), &SnapCtrlActor::OnReusableSnapshotCommitted,
                        context, std::placeholders::_1));
+}
+
+void SnapCtrlActor::OnReusableSnapshotClient(
+    const std::shared_ptr<ReusableSnapshotContext> &context,
+    const litebus::Future<std::shared_ptr<ControlInterfacePosixClient>> &future)
+{
+    if (future.IsError() || future.Get() == nullptr) {
+        FinalizeReusableSnapshot(
+            context, ::messages::REUSABLE_SNAPSHOT_ABORTED,
+            common::ERR_INNER_COMMUNICATION,
+            "failed to get runtime client for reusable SnapStarted");
+        return;
+    }
+    runtime::SnapStartedRequest request;
+    future.Get()->SnapStarted(std::move(request)).OnComplete(litebus::Defer(
+        GetAID(), &SnapCtrlActor::OnReusableSnapshotStarted,
+        context, std::placeholders::_1));
+}
+
+void SnapCtrlActor::OnReusableSnapshotStarted(
+    const std::shared_ptr<ReusableSnapshotContext> &context,
+    const litebus::Future<runtime::SnapStartedResponse> &future)
+{
+    if (future.IsError() || future.Get().code() != common::ERR_NONE) {
+        FinalizeReusableSnapshot(
+            context, ::messages::REUSABLE_SNAPSHOT_ABORTED,
+            common::ERR_INNER_COMMUNICATION,
+            future.IsError() ? "reusable SnapStarted future failed"
+                             : future.Get().message());
+        return;
+    }
+    functionAgentMgr_->PublishSnapshotArtifact(
+        context->requestID, context->sourceInstanceInfo, context->snapshotID)
+        .OnComplete(litebus::Defer(
+            GetAID(), &SnapCtrlActor::OnReusableSnapshotPublished,
+            context, std::placeholders::_1));
 }
 
 void SnapCtrlActor::OnReusableSnapshotCommitted(
@@ -464,8 +668,9 @@ void SnapCtrlActor::FinalizeReusableSnapshot(
     ::messages::SnapshotAttemptFinalizeOperation operation,
     common::ErrorCode terminalCode, const std::string &terminalMessage)
 {
-    if (context->artifact.storagebackend().empty() || context->artifact.size() <= 0
-        || context->artifact.sha256().empty()) {
+    if (context->artifact.storagebackend().empty() || context->artifact.objectkey().empty()
+        || (context->artifact.storagebackend() == "local"
+            && context->artifact.sourcenodeid().empty())) {
         const auto message = "reusable snapshot exact cleanup artifact identity is incomplete";
         // Keep the PUBLISHING/READY coordination record when exact cleanup
         // cannot be proven.  Deleting it here would orphan an immutable
@@ -525,7 +730,6 @@ void SnapCtrlActor::FailReusableSnapshot(
     request->set_requestid(context->requestID);
     request->set_tenantid(context->sourceInstanceInfo.tenantid());
     request->set_snapshotid(context->snapshotID);
-    request->set_requestfingerprint(context->requestFingerprint);
     request->set_reason(message);
     localSchedSrv_->FailReusableSnapshot(request).OnComplete(
         litebus::Defer(GetAID(), &SnapCtrlActor::OnReusableSnapshotFailedRecord,

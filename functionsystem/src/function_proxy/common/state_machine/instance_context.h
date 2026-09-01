@@ -97,6 +97,7 @@ private:
 
 struct InstanceExitStatus {
     std::string instanceID;
+    std::string runtimeID;
     int32_t exitCode;
     std::string statusMsg;  // description information used to describe this status or change to this status
     int32_t exitType;
@@ -115,9 +116,11 @@ struct KillContext {
 
 inline std::shared_ptr<InstanceExitStatus> GenInstanceStatusInfo(
     const std::string &instanceID, int32_t exitCode, const std::string &statusMsg,
-    const int32_t type = static_cast<int32_t>(EXIT_TYPE::NONE_EXIT))
+    const int32_t type = static_cast<int32_t>(EXIT_TYPE::NONE_EXIT),
+    const std::string &runtimeID = {})
 {
     auto instanceStatusInfo = std::make_shared<InstanceExitStatus>();
+    instanceStatusInfo->runtimeID = runtimeID;
     instanceStatusInfo->instanceID = instanceID;
     switch (static_cast<EXIT_TYPE>(type)) {
         case (EXIT_TYPE::NONE_EXIT):

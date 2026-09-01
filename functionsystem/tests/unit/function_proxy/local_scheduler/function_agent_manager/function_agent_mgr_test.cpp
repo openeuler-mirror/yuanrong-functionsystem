@@ -97,6 +97,30 @@ const RuntimeConfig runtimeConfig{ .runtimeHeartbeatEnable = "true",
                                    .runtimeInitCallTimeoutMS = 3000,
                                    .runtimeShutdownTimeoutSeconds = 3};
 
+TEST(FunctionAgentMgrTest, RejectsListResponseFromUnexpectedAgent)
+{
+    auto metaStoreClient = std::make_shared<MockMetaStoreClient>("127.0.0.1:1");
+    auto actor = std::make_shared<local_scheduler::FunctionAgentMgrActor>(
+        "local-snapshot-list-correlation", PARAM, "nodeID", metaStoreClient);
+    const std::string requestID = "list-local-snapshot-correlation";
+    const litebus::AID expected("expected-agent", "127.0.0.1:31001");
+    const litebus::AID unexpected("unexpected-agent", "127.0.0.1:31002");
+    actor->localSnapshotListExpectedAgent_[requestID] = expected;
+    auto result = actor->localSnapshotListSync_.AddSynchronizer(requestID);
+
+    messages::ListLocalSnapshotsResponse response;
+    response.set_requestid(requestID);
+    response.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
+    actor->ListLocalSnapshotsResponse(unexpected, "ListLocalSnapshotsResponse",
+                                      response.SerializeAsString());
+    EXPECT_FALSE(result.WaitFor(20).IsOK());
+
+    actor->ListLocalSnapshotsResponse(expected, "ListLocalSnapshotsResponse",
+                                      response.SerializeAsString());
+    ASSERT_TRUE(result.WaitFor(1'000).IsOK());
+    EXPECT_EQ(result.Get().requestid(), requestID);
+}
+
 class DISABLED_FuncAgentMgrTest : public ::testing::Test {
 friend class FunctionAgentMgrActor;
 protected:

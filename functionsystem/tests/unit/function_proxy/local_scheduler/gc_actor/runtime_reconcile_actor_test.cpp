@@ -105,6 +105,10 @@ public:
                                       const std::shared_ptr<messages::ReconcileRuntimesRequest> &request) {
                 return MakeSuccessReconcileResponse(request);
             }));
+        ON_CALL(*mockInstanceCtrl_, TryLocalSnapshotFailover(_, _))
+            .WillByDefault(Return(Status(StatusCode::FAILED, "local failover unavailable")));
+        ON_CALL(*mockInstanceCtrl_, IsPauseRuntimeFenced(_, _))
+            .WillByDefault(Return(false));
     }
 
     void TearDown() override
@@ -255,6 +259,8 @@ TEST_F(RuntimeReconcileActorTest, GhostInstancesAreForceDeleted)
             return AsyncReturn(resp);
         }));
 
+    EXPECT_CALL(*mockInstanceCtrl_, TryLocalSnapshotFailover(TEST_INSTANCE_ID_1, TEST_RUNTIME_ID_1))
+        .WillOnce(Return(Status(StatusCode::FAILED, "no local snapshot")));
     std::atomic<bool> deleted{false};
     EXPECT_CALL(*mockInstanceCtrl_, ForceDeleteInstance(TEST_INSTANCE_ID_1))
         .WillRepeatedly(Invoke([&deleted](const std::string &) {
@@ -265,6 +271,65 @@ TEST_F(RuntimeReconcileActorTest, GhostInstancesAreForceDeleted)
     CreateAndSpawnActor();
     reconcileActor_->TriggerOnce(TEST_AGENT_ID);
     ASSERT_AWAIT_TRUE([&deleted]() { return deleted.load(); });
+}
+
+TEST_F(RuntimeReconcileActorTest, MissingRuntimeRecoveredFromSnapshotIsNotForceDeleted)
+{
+    auto instances = MakeInstancesMap({
+        {TEST_INSTANCE_ID_1, TEST_AGENT_ID, TEST_RUNTIME_ID_1, TEST_CONTAINER_ID_1},
+    });
+    EXPECT_CALL(*mockInstanceControlView_, GetInstances()).WillRepeatedly(Return(instances));
+    EXPECT_CALL(*mockFunctionAgentMgr_, ReconcileRuntimes(TEST_AGENT_ID, _))
+        .WillRepeatedly(Invoke([](const std::string &,
+                                  const std::shared_ptr<messages::ReconcileRuntimesRequest> &request) {
+            messages::ReconcileRuntimesResponse response;
+            response.set_requestid(request->requestid());
+            response.set_code(0);
+            response.add_missingids(TEST_CONTAINER_ID_1);
+            return AsyncReturn(response);
+        }));
+    std::atomic<bool> recovered{false};
+    EXPECT_CALL(*mockInstanceCtrl_, TryLocalSnapshotFailover(TEST_INSTANCE_ID_1, TEST_RUNTIME_ID_1))
+        .WillOnce(Invoke([&recovered](const std::string &, const std::string &) {
+            recovered = true;
+            return AsyncReturn(Status::OK());
+        }));
+    EXPECT_CALL(*mockInstanceCtrl_, ForceDeleteInstance(_)).Times(0);
+
+    CreateAndSpawnActor();
+    reconcileActor_->TriggerOnce(TEST_AGENT_ID);
+
+    ASSERT_AWAIT_TRUE([&recovered]() { return recovered.load(); });
+}
+
+TEST_F(RuntimeReconcileActorTest, PauseGatedMissingRuntimeIsNotForceDeleted)
+{
+    auto instances = MakeInstancesMap({
+        {TEST_INSTANCE_ID_1, TEST_AGENT_ID, TEST_RUNTIME_ID_1, TEST_CONTAINER_ID_1},
+    });
+    EXPECT_CALL(*mockInstanceControlView_, GetInstances()).WillRepeatedly(Return(instances));
+    EXPECT_CALL(*mockFunctionAgentMgr_, ReconcileRuntimes(TEST_AGENT_ID, _))
+        .WillRepeatedly(Invoke([](const std::string &,
+                                  const std::shared_ptr<messages::ReconcileRuntimesRequest> &request) {
+            messages::ReconcileRuntimesResponse response;
+            response.set_requestid(request->requestid());
+            response.set_code(0);
+            response.add_missingids(TEST_CONTAINER_ID_1);
+            return AsyncReturn(response);
+        }));
+    std::atomic<bool> fenced{false};
+    EXPECT_CALL(*mockInstanceCtrl_, IsPauseRuntimeFenced(TEST_INSTANCE_ID_1, TEST_RUNTIME_ID_1))
+        .WillOnce(Invoke([&fenced](const std::string &, const std::string &) {
+            fenced = true;
+            return AsyncReturn(true);
+        }));
+    EXPECT_CALL(*mockInstanceCtrl_, TryLocalSnapshotFailover(_, _)).Times(0);
+    EXPECT_CALL(*mockInstanceCtrl_, ForceDeleteInstance(_)).Times(0);
+
+    CreateAndSpawnActor();
+    reconcileActor_->TriggerOnce(TEST_AGENT_ID);
+
+    ASSERT_AWAIT_TRUE([&fenced]() { return fenced.load(); });
 }
 
 /**

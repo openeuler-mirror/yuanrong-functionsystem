@@ -62,7 +62,10 @@ void IOEventActor::DestroyInstance()
 {
     if (instance_ != nullptr) {
         YRLOG_INFO("Destroying IOEventActor singleton");
-        instance_.reset();
+        auto instance = std::move(instance_);
+        const auto aid = instance->GetAID();
+        litebus::Terminate(aid);
+        litebus::Await(aid);
     }
 }
 

@@ -17,6 +17,7 @@
 #ifndef FUNCTION_MASTER_INSTANCE_MANAGER_INSTANCE_MGR_H
 #define FUNCTION_MASTER_INSTANCE_MANAGER_INSTANCE_MGR_H
 
+#include <functional>
 #include <utility>
 
 #include "actor/actor.hpp"
@@ -44,6 +45,9 @@ public:
     virtual litebus::Future<::messages::DeleteReusableSnapshotArtifactResponse>
         DeleteReusableSnapshotArtifact(
             const ::messages::DeleteReusableSnapshotArtifactRequest &request);
+
+    void SetInstanceDeleteObserver(
+        std::function<void(const std::shared_ptr<resource_view::InstanceInfo> &)> observer);
 private:
     litebus::ActorReference actor_{ nullptr };
 };  // class InstanceManager

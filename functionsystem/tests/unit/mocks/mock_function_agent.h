@@ -143,6 +143,18 @@ public:
     }
     MOCK_METHOD3(MockNotifyFunctionStatusChange, std::pair<bool, std::string>(litebus::AID, std::string, std::string));
 
+    void ListLocalSnapshots(const litebus::AID &from, std::string &&, std::string &&msg) override
+    {
+        messages::ListLocalSnapshotsRequest request;
+        if (!request.ParseFromString(msg)) {
+            return;
+        }
+        auto response = MockListLocalSnapshots();
+        response.set_requestid(request.requestid());
+        Send(from, "ListLocalSnapshotsResponse", response.SerializeAsString());
+    }
+    MOCK_METHOD0(MockListLocalSnapshots, messages::ListLocalSnapshotsResponse());
+
 protected:
     void Init() override
     {
@@ -156,6 +168,7 @@ protected:
         Receive("QueryDebugInstanceInfos", &MockFunctionAgent::QueryDebugInstanceInfos);
         Receive("StaticFunctionScheduleResponse", &MockFunctionAgent::StaticFunctionScheduleResponse);
         Receive("NotifyFunctionStatusChange", &MockFunctionAgent::NotifyFunctionStatusChange);
+        Receive("ListLocalSnapshots", &MockFunctionAgent::ListLocalSnapshots);
     }
 };
 

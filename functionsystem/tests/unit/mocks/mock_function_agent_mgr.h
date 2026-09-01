@@ -64,6 +64,14 @@ public:
                 (const std::string &funcAgentID,
                  const std::shared_ptr<messages::ReconcileRuntimesRequest> &request),
                 (override));
+
+    MOCK_METHOD(litebus::Future<std::optional<messages::LocalSnapshotMetadata>>, LatestAnonymousSnapshot,
+                (const std::string &instanceID), (override));
+
+    MOCK_METHOD(litebus::Future<messages::DeleteLocalSnapshotResponse>, DeleteLocalSnapshot,
+                (const std::string &functionAgentID,
+                 const messages::DeleteLocalSnapshotRequest &request),
+                (override));
 };
 
 }  // namespace functionsystem::test

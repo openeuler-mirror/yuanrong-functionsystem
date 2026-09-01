@@ -33,8 +33,6 @@
 #include "common/rpc/client/grpc_client.h"
 #include "common/status/status.h"
 #include "healthcheck/health_check.h"
-#include "runtime_manager/ckpt/ckpt_file_manager.h"
-#include "runtime_manager/ckpt/ckpt_file_manager_actor.h"
 #include "runtime_manager/config/command_builder.h"
 #include "runtime_manager/executor/executor.h"
 #include "runtime_manager/executor/sandboxd/runtime_state_manager.h"
@@ -47,8 +45,6 @@ class ActorWorker;
 }
 
 namespace functionsystem::runtime_manager {
-
-class PauseArtifactPathManager;
 
 struct SandboxdRestoreResult {
     Status status;
@@ -68,8 +64,6 @@ struct SandboxdResumeIdentity {
     std::string logicalRequestID;
     std::string tenantID;
     std::string snapshotID;
-    int64_t expectedSize{0};
-    std::string expectedSHA256;
     std::map<std::string, std::string> labels;
 };
 
@@ -199,8 +193,10 @@ public:
     static Status BuildPortReservationsFromPhysicalFacts(
         const runtime::v1::ListSandboxesResponse &listResponse,
         PortManager::ReservationMap &reservations);
-    litebus::Future<Status> DeleteReusableSnapshotCheckpoint(
-        const ::messages::SnapshotAttemptFinalizeRequest &request);
+    static Status ResolveLocalSnapshotDirectory(
+        const std::string &checkpointRoot, const std::string &snapshotID,
+        std::string &checkpointDirectory);
+    static std::string RestoreSandboxID(const std::string &runtimeID);
 protected:
     void Init() override;
     void Finalize() override;
@@ -212,15 +208,15 @@ protected:
     }
 
 private:
+    void ApplyRuntimeControlEnvironment(runtime::v1::StartRequest &request) const;
+    void ApplyRuntimeControlEnvironment(
+        const std::string &runtimeClass,
+        google::protobuf::Map<std::string, std::string> *envs) const;
     static SandboxdResumeIdentity ConsumeRestoreIdentity(messages::StartInstanceRequest &request);
     static bool IsRestoreRequest(const messages::RuntimeInstanceInfo &info);
     static Status BuildSnapshotCheckpointPlan(
         const messages::SnapshotRuntimeRequest &request, const std::string &sandboxID,
         CheckpointPlan &plan);
-    static bool UsesLegacySnapshotRegistry(const messages::SnapshotRuntimeRequest &request);
-    static Status BuildReusableSnapshotCleanupIdentity(
-        const ::messages::SnapshotAttemptFinalizeRequest &request, const SandboxInfo &source,
-        const std::string &checkpointRoot, std::string &checkpointDirectory);
     // ── Start paths: normal / warm-up (Register) / restore (Restore) ───────────
 
     struct SandboxdStartContext {
@@ -267,12 +263,10 @@ private:
         const runtime::v1::NormalResponse &response, const std::shared_ptr<messages::StartInstanceRequest> &request,
         std::shared_ptr<SandboxdStartGuard> guard);
 
-    // Restore: legacy snapshots use download/ref-count; trusted resume uses an
-    // attempt-scoped PauseArtifactPathManager path directly.
+    // Restore uses the flat checkpoint-root/snapshotID directory materialized
+    // by FunctionAgent.
     litebus::Future<messages::StartInstanceResponse> StartBySnapshot(const SandboxdStartContext &context);
-    litebus::Future<messages::StartInstanceResponse> OnCheckpointDownloaded(const std::string &checkpointPath,
-                                                                            const SandboxdStartContext &context);
-    litebus::Future<messages::StartInstanceResponse> OnCheckpointRefAdded(const Status &refStatus,
+    litebus::Future<messages::StartInstanceResponse> StartFromMaterializedCheckpoint(
         const SandboxdRestoreContext &context);
     litebus::Future<messages::StartInstanceResponse> ReconcileBeforeResumeRestore(
         const SandboxdRestoreContext &context);
@@ -280,7 +274,7 @@ private:
         const SandboxdRestoreContext &context);
     litebus::Future<messages::StartInstanceResponse> OnResumeRestoreUncertain(
         const SandboxdRestoreResult &result, const SandboxdRestoreContext &context,
-        const std::shared_ptr<runtime::v1::RestoreRequest> &restoreReq, bool retried);
+        const std::shared_ptr<runtime::v1::StartRequest> &startReq, bool retried);
     litebus::Future<messages::StartInstanceResponse> OnRestoreDone(
         const SandboxdRestoreResult &result, const std::shared_ptr<messages::StartInstanceRequest> &request,
         std::shared_ptr<SandboxdStartGuard> guard, bool trustedResume, bool exactExisting = false);
@@ -289,8 +283,6 @@ private:
 
     litebus::Future<Status> StopSandbox(
         const std::shared_ptr<messages::StopInstanceRequest> &request, bool oomKilled);
-    litebus::Future<Status> DeletePauseSourceCheckpoint(
-        const std::shared_ptr<messages::StopInstanceRequest> &request);
     litebus::Future<Status> StopExactResumeSandboxAfterAgentRestart(
         const std::string &runtimeID, const std::string &requestID,
         const std::string &logicalInstanceID, const std::string &targetAttemptID);
@@ -323,9 +315,9 @@ private:
     litebus::Future<runtime::v1::NormalResponse> DoUnregister(
         const std::shared_ptr<runtime::v1::UnregisterRequest> &req);
     litebus::Future<runtime::v1::GetRegisteredResponse> DoGetRegistered();
-    litebus::Future<SandboxdRestoreResult> DoRestore(
+    litebus::Future<SandboxdRestoreResult> DoStartFromCheckpoint(
         const std::shared_ptr<messages::StartInstanceRequest> &request,
-        const std::shared_ptr<runtime::v1::RestoreRequest> &req);
+        const std::shared_ptr<runtime::v1::StartRequest> &startReq);
 
     void DoWait(const std::string &sandboxID, const std::string &runtimeID);
     void RestoreWait(const std::string &sandboxID);
@@ -412,8 +404,6 @@ private:
     void CleanupLocalRuntimeStateForOrphan(const std::string &requestID, const std::string &sandboxID);
     void DeleteSandboxAsync(const std::string &sandboxID);
     Status OnDeleteSandboxComplete(const std::string &sandboxID, litebus::Try<runtime::v1::DeleteResponse> rsp);
-    std::shared_ptr<PauseArtifactPathManager> CreatePauseArtifactPathManager(
-        const std::string &tenantHash, const std::string &instanceID);
     Status BuildStartCommandArgs(const std::shared_ptr<messages::StartInstanceRequest> &request,
                                  const std::string &port, CommandArgs *cmdArgs);
     Status ApplyPortForwardMappings(SandboxdStartParams *params,
@@ -437,10 +427,8 @@ private:
     CommandBuilder cmdBuilder_{false};
     std::shared_ptr<GrpcClient<runtime::v1::SandboxService>> sandboxd_{nullptr};
     std::shared_ptr<HealthCheck> healthCheckClient_;
-    std::shared_ptr<CkptFileManager> ckptFileManager_;
     std::shared_ptr<SandboxdCheckpointOrchestrator> ckptOrch_;
     std::string checkpointRoot_;
-    std::shared_ptr<ActorWorker> pauseArtifactWorker_;
     // runtimeIDs registered as warm-up templates (route StopInstance -> Unregister)
     std::unordered_set<std::string> warmupRuntimes_;
     std::unordered_set<std::string> registeredTemplateIDs_;
@@ -455,6 +443,7 @@ private:
     bool availableRuntimesRetryScheduled_ = false;
     bool startupPhysicalFactsReady_ = false;
     bool startupPhysicalFactsRetryScheduled_ = false;
+    std::unordered_map<std::string, runtime::v1::RuntimeInfo> runtimeCapabilities_;
 
     // ── Reconciliation state ─────────────────────────────────────────────────
     uint32_t orphanGracePeriodSec_ = kDefaultOrphanGracePeriodSec;
@@ -506,13 +495,6 @@ public:
         const std::shared_ptr<messages::SnapshotRuntimeRequest> &request) override
     {
         return litebus::Async(sandboxd_->GetAID(), &SandboxdExecutor::SnapshotRuntime, request);
-    }
-
-    virtual litebus::Future<Status> DeleteReusableSnapshotCheckpoint(
-        const ::messages::SnapshotAttemptFinalizeRequest &request)
-    {
-        return litebus::Async(sandboxd_->GetAID(),
-                              &SandboxdExecutor::DeleteReusableSnapshotCheckpoint, request);
     }
 
     litebus::Future<std::map<std::string, messages::RuntimeInstanceInfo>> GetRuntimeInstanceInfos() override

@@ -71,6 +71,10 @@ const int32_t DELETE_CHECKPOINT_SIGNAL = 22;
 // busy/>0 => TrafficReport>0. It follows core signals 1..22 and is not POSIX.
 // See docs/features/sandbox-rrt-idle-report.md.
 const int32_t RRT_IDLE_REPORT_SIGNAL = 23;
+// RRT requests a local anonymous checkpoint for its own sandbox.
+const int32_t INSTANCE_ANONYMOUS_CHECKPOINT_SIGNAL = 24;
+// User explicitly reloads a sandbox from its latest local anonymous checkpoint.
+const int32_t INSTANCE_RELOAD_SIGNAL = 25;
 
 inline std::string SignalToString(int32_t signal)
 {
@@ -97,7 +101,9 @@ inline std::string SignalToString(int32_t signal)
         { LIST_CHECKPOINTS_BY_FUNCTION_KEY_SIGNAL, "LIST_CHECKPOINTS_BY_FUNCTION_KEY_SIGNAL" },
         { LIST_CHECKPOINTS_BY_TENANT_SIGNAL, "LIST_CHECKPOINTS_BY_TENANT_SIGNAL" },
         { DELETE_CHECKPOINT_SIGNAL, "DELETE_CHECKPOINT_SIGNAL" },
-        { RRT_IDLE_REPORT_SIGNAL, "RRT_IDLE_REPORT_SIGNAL" }
+        { RRT_IDLE_REPORT_SIGNAL, "RRT_IDLE_REPORT_SIGNAL" },
+        { INSTANCE_ANONYMOUS_CHECKPOINT_SIGNAL, "INSTANCE_ANONYMOUS_CHECKPOINT_SIGNAL" },
+        { INSTANCE_RELOAD_SIGNAL, "INSTANCE_RELOAD_SIGNAL" }
     };
     return signalMap.find(signal) != signalMap.end() ? signalMap.at(signal) : "UnknownSignal";
 }

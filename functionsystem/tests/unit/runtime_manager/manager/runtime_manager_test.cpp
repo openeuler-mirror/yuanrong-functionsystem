@@ -347,26 +347,6 @@ TEST_F(RuntimeManagerCapabilityTest, RejectsDisabledDataSystemWithoutBypass)
     EXPECT_TRUE(response->startruntimeinstanceresponse().runtimeid().empty());
 }
 
-class RecordingSandboxdExecutorProxy final : public SandboxdExecutorProxy {
-public:
-    RecordingSandboxdExecutorProxy() : SandboxdExecutorProxy(nullptr) {}
-
-    void Stop() override
-    {
-    }
-
-    litebus::Future<Status> DeleteReusableSnapshotCheckpoint(
-        const ::messages::SnapshotAttemptFinalizeRequest &request) override
-    {
-        called = true;
-        captured = request;
-        return result;
-    }
-
-    bool called{ false };
-    ::messages::SnapshotAttemptFinalizeRequest captured;
-    Status result{ Status::OK() };
-};
 TEST_F(DISABLED_RuntimeManagerTest, StartInstanceTest)
 {
     const char *port = ("--port=" + std::to_string(FindAvailablePort())).c_str();
@@ -1414,37 +1394,6 @@ TEST_F(RuntimeManagerTypeTest, ResolvePauseSnapshotExecutorUsesAuthoritativeSand
 
     EXPECT_TRUE(status.IsOk()) << status.ToString();
     EXPECT_EQ(executorType, EXECUTOR_TYPE::SANDBOXD);
-}
-
-TEST_F(RuntimeManagerTypeTest, ReusableSnapshotFinalizeUsesExactSandboxdCleanupWithoutRemovingRuntime)
-{
-    messages::RuntimeInstanceInfo instanceInfo;
-    instanceInfo.set_instanceid("snapshot-source-instance");
-    instanceInfo.set_runtimeid("snapshot-source-runtime");
-    instanceInfo.mutable_container()->set_id("snapshot-source-sandbox");
-    manager_->instanceInfoMap_[instanceInfo.runtimeid()] = instanceInfo;
-    auto executor = std::make_shared<RecordingSandboxdExecutorProxy>();
-    manager_->executorMap_[EXECUTOR_TYPE::SANDBOXD] = executor;
-
-    ::messages::SnapshotAttemptFinalizeRequest request;
-    request.set_protocolversion(1);
-    request.set_operation(::messages::REUSABLE_SNAPSHOT_COMMITTED);
-    request.set_instanceid(instanceInfo.instanceid());
-    request.set_runtimeid(instanceInfo.runtimeid());
-    request.set_snapshotid("snapshot-1");
-    request.set_attemptid("attempt-1");
-    request.set_expectedsize(4096);
-    request.set_expectedsha256("sha256-value");
-
-    auto future = manager_->FinalizeReusableSnapshotCheckpoint(request);
-
-    ASSERT_TRUE(future.WaitFor(5'000).IsOK());
-    ASSERT_TRUE(future.Get().IsOk()) << future.Get().ToString();
-    EXPECT_TRUE(executor->called);
-    EXPECT_EQ(executor->captured.SerializeAsString(), request.SerializeAsString());
-    EXPECT_NE(manager_->instanceInfoMap_.find(instanceInfo.runtimeid()),
-              manager_->instanceInfoMap_.end())
-        << "exact checkpoint deletion must leave the source runtime registered and running";
 }
 
 TEST_F(RuntimeManagerTypeTest, ResolvePauseSnapshotExecutorRejectsProcessRuntime)

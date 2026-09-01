@@ -17,6 +17,7 @@
 #include "runtime_manager/executor/sandboxd/sandboxd_request_builder.h"
 
 #include <gtest/gtest.h>
+#include <google/protobuf/descriptor.h>
 
 #include <memory>
 #include <string>
@@ -31,6 +32,35 @@ using namespace functionsystem::runtime_manager;
 namespace functionsystem::test {
 
 // ── SandboxdRequestBuilder tests (flat SandboxService StartRequest) ───────────
+
+TEST(SandboxdProtoContractTest, UsesPublicCheckpointAndStartRestore)
+{
+    const auto *service = google::protobuf::DescriptorPool::generated_pool()->FindServiceByName(
+        "runtime.v1.SandboxService");
+    ASSERT_NE(service, nullptr);
+    EXPECT_NE(service->FindMethodByName("Checkpoint"), nullptr);
+    EXPECT_EQ(service->FindMethodByName("Restore"), nullptr);
+    EXPECT_EQ(service->FindMethodByName("DeleteCheckpoint"), nullptr);
+
+    const auto *checkpoint = runtime::v1::CheckpointRequest::descriptor();
+    ASSERT_NE(checkpoint, nullptr);
+    ASSERT_NE(checkpoint->FindFieldByName("id"), nullptr);
+    ASSERT_NE(checkpoint->FindFieldByName("checkpoint_dir"), nullptr);
+    ASSERT_NE(checkpoint->FindFieldByName("timeout_seconds"), nullptr);
+    ASSERT_NE(checkpoint->FindFieldByName("compress"), nullptr);
+    ASSERT_NE(checkpoint->FindFieldByName("leave_running"), nullptr);
+    EXPECT_EQ(checkpoint->FindFieldByName("id")->number(), 1);
+    EXPECT_EQ(checkpoint->FindFieldByName("checkpoint_dir")->number(), 2);
+    EXPECT_EQ(checkpoint->FindFieldByName("timeout_seconds")->number(), 3);
+    EXPECT_EQ(checkpoint->FindFieldByName("compress")->number(), 4);
+    EXPECT_EQ(checkpoint->FindFieldByName("leave_running")->number(), 5);
+    EXPECT_EQ(runtime::v1::CheckpointResponse::descriptor()->field_count(), 0);
+
+    const auto *start = runtime::v1::StartRequest::descriptor();
+    ASSERT_NE(start, nullptr);
+    ASSERT_NE(start->FindFieldByName("checkpoint_info"), nullptr);
+    EXPECT_EQ(start->FindFieldByName("checkpoint_info")->number(), 21);
+}
 
 class SandboxdRequestBuilderTest : public ::testing::Test {
 public:
@@ -80,6 +110,27 @@ public:
     std::unique_ptr<CommandBuilder>         cmdBuilder_;
     std::unique_ptr<SandboxdRequestBuilder> builder_;
 };
+
+TEST_F(SandboxdRequestBuilderTest, AttachesCheckpointInfoToStart)
+{
+    runtime::v1::StartRequest request;
+    auto status = SandboxdRequestBuilder::AttachCheckpointInfo(
+        request, "/var/lib/akernel/checkpoints/snap-1");
+
+    ASSERT_TRUE(status.IsOk()) << status.ToString();
+    ASSERT_TRUE(request.has_checkpoint_info());
+    EXPECT_EQ(request.checkpoint_info().checkpoint_dir(),
+              "/var/lib/akernel/checkpoints/snap-1");
+}
+
+TEST_F(SandboxdRequestBuilderTest, RejectsRelativeCheckpointDirectory)
+{
+    runtime::v1::StartRequest request;
+    auto status = SandboxdRequestBuilder::AttachCheckpointInfo(request, "checkpoints/snap-1");
+
+    EXPECT_TRUE(status.IsError());
+    EXPECT_FALSE(request.has_checkpoint_info());
+}
 
 // Build succeeds and returns a flat StartRequest.
 TEST_F(SandboxdRequestBuilderTest, BuildReturnsFlatStartRequest)

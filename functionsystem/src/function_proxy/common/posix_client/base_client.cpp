@@ -65,8 +65,10 @@ void BaseClient::Close() noexcept
 
 void BaseClient::RegisterUserCallback(const std::function<void()> &userCb)
 {
+    std::unique_lock<std::shared_mutex> lock(rwMut_);
+    userCb_ = userCb;
     if (posix_ != nullptr) {
-        posix_->RegisterUserCallback(userCb);
+        posix_->RegisterUserCallback(userCb_);
     }
 }
 
@@ -77,6 +79,9 @@ void BaseClient::UpdatePosix(const std::shared_ptr<grpc::PosixClient> &posix)
         posix_->Stop();
     }
     posix_ = posix;
+    if (posix_ != nullptr && userCb_ != nullptr) {
+        posix_->RegisterUserCallback(userCb_);
+    }
 }
 
 litebus::Future<runtime_rpc::StreamingMessage> BaseClient::Send(
