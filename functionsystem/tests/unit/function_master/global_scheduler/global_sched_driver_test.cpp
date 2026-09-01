@@ -400,10 +400,12 @@ TEST_F(GlobalSchedDriverTest, QueryAgentCountRouter)
 resource_view::SchedulingQueueInfo GetSchedulingQueueInfo(std::string instanceId)
 {
     Resources resources;
-    Resource resource_cpu = view_utils::GetCpuResource();
+    Resource resource_cpu = view_utils::GetNameResourceWithValue("CPU", 2000);
     (*resources.mutable_resources())["CPU"] = resource_cpu;
-    Resource resource_memory = view_utils::GetMemResource();
+    Resource resource_memory = view_utils::GetNameResourceWithValue("Memory", 4096);
     (*resources.mutable_resources())["Memory"] = resource_memory;
+    (*resources.mutable_resources())["ssd"] = view_utils::GetNameResourceWithValue("ssd", 1.5);
+    (*resources.mutable_resources())["NPU"] = view_utils::GetGpuCountResource({ 1, 1 }, "NPU");
 
     resource_view::SchedulingQueueInfo instanceInfo;
     instanceInfo.set_instanceid(instanceId);
@@ -451,8 +453,36 @@ TEST_F(GlobalSchedDriverTest, GetSchedulingQueue)
         EXPECT_EQ(jsonBody.at("instanceInfos").size(), 2UL);
         EXPECT_EQ(jsonBody.at("instanceInfos").at(0).at("enqueueTimeMs"), "1000");
         EXPECT_EQ(jsonBody.at("instanceInfos").at(0).at("waitDurationMs"), "100");
+        const auto &resources = jsonBody.at("instanceInfos").at(0).at("resources");
+        EXPECT_EQ(resources.at("cpu"), "2000m");
+        EXPECT_EQ(resources.at("memory"), "4096Mi");
+        EXPECT_EQ(resources.at("ssd"), "1.5");
+        EXPECT_EQ(resources.at("NPU"), "2");
+        EXPECT_FALSE(resources.contains("resources"));
         EXPECT_FALSE(jsonBody.at("instanceInfos").at(0).contains("extensions"));
         EXPECT_FALSE(jsonBody.at("instanceInfos").at(0).contains("parentID"));
+    }
+
+    // case3: protobuf response remains unchanged
+    {
+        auto resp = messages::QuerySchedulingQueueResponse();
+        resp.set_requestid("requestIdIdId");
+        *resp.add_instanceinfos() = GetSchedulingQueueInfo("app-script-1-instanceid");
+        EXPECT_CALL(*mockGlobalSched_, GetSchedulingQueue(_)).WillOnce(Return(resp));
+        std::unordered_map<std::string, std::string> headers = {
+            { "Type", "protobuf" },
+        };
+
+        auto response = litebus::http::Get(urlGetSchedulingQueue, headers);
+        response.Wait();
+        EXPECT_EQ(response.Get().retCode, litebus::http::ResponseCode::OK);
+        messages::QuerySchedulingQueueResponse decoded;
+        EXPECT_TRUE(decoded.ParseFromString(response.Get().body));
+        ASSERT_EQ(decoded.instanceinfos_size(), 1);
+        EXPECT_EQ(decoded.instanceinfos(0).resources().resources().at("CPU").scalar().value(), 2000);
+        EXPECT_EQ(decoded.instanceinfos(0).resources().resources().at("Memory").scalar().value(), 4096);
+        EXPECT_EQ(decoded.instanceinfos(0).resources().resources().at("NPU").type(),
+                  resource_view::ValueType::Value_Type_VECTORS);
     }
 
     globalSchedDriver_->Stop();
@@ -506,6 +536,10 @@ TEST_F(GlobalSchedDriverTest, QueryResourcesRouter)
     {
         auto resp = messages::QueryResourcesInfoResponse();
         auto resource = view_utils::Get1DResourceUnit(resourceId);
+        (*resource.mutable_capacity()->mutable_resources())["NPU"] =
+            view_utils::GetGpuCountResource({ 1, 1 }, "NPU");
+        (*resource.mutable_capacity()->mutable_resources())["ssd"] =
+            view_utils::GetNameResourceWithValue("ssd", 3);
         auto fragment = view_utils::Get1DResourceUnit("fragment-1");
         fragment.set_status(static_cast<uint32_t>(resource_view::UnitStatus::EVICTING));
         (*resource.mutable_fragment())[fragment.id()] = fragment;
@@ -518,6 +552,9 @@ TEST_F(GlobalSchedDriverTest, QueryResourcesRouter)
         auto infos = messages::QueryResourcesInfoResponse();
         EXPECT_EQ(google::protobuf::util::JsonStringToMessage(body, &infos).ok(), true);
         EXPECT_EQ(infos.resource().id(), resourceId);
+        EXPECT_EQ(infos.resource().capacity().resources().at("NPU").type(),
+                  resource_view::ValueType::Value_Type_VECTORS);
+        EXPECT_EQ(infos.resource().capacity().resources().at("ssd").scalar().value(), 3);
         EXPECT_EQ(infos.resource().fragment().at("fragment-1").status(),
                   static_cast<uint32_t>(resource_view::UnitStatus::EVICTING));
     }

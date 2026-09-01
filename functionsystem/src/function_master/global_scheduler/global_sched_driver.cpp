@@ -18,14 +18,20 @@
 
 #include <logs/api/provider.h>
 
+#include <cmath>
+#include <iomanip>
+#include <locale>
 #include <memory>
+#include <sstream>
 #include <utility>
 
 #include "common/constants/actor_name.h"
 #include "common/constants/metastore_keys.h"
 #include "common/logs/logging.h"
+#include "common/resource_view/resource_type.h"
 #include "meta_store_client/meta_store_client.h"
 #include "common/scheduler_topology/sched_tree.h"
+#include "nlohmann/json.hpp"
 
 namespace functionsystem::global_scheduler {
 
@@ -73,21 +79,110 @@ std::string BuildUpdateLocalSchedulingStatusBody(const std::string &status, cons
     return "{\"status\":\"" + status + "\",\"message\":\"" + message + "\"}";
 }
 
-std::string AppendCountToJsonObject(std::string json, int count)
+std::string FormatResourceValue(double value)
 {
-    if (json.empty() || json.back() != '}') {
-        YRLOG_ERROR("failed to append count to scheduling queue response: invalid json object");
+    if (!std::isfinite(value) || value < 0) {
         return {};
     }
 
-    json.pop_back();
-    if (!json.empty() && json.back() != '{') {
-        json.append(",");
+    std::ostringstream stream;
+    stream.imbue(std::locale::classic());
+    stream << std::setprecision(15) << value;
+    return stream.str();
+}
+
+size_t CountVectorCards(const resource_view::Resource &resource)
+{
+    if (!resource.has_vectors() || resource.vectors().values().empty()) {
+        return 0;
     }
-    json.append("\"count\":");
-    json.append(std::to_string(count));
-    json.append("}");
-    return json;
+
+    const auto &categories = resource.vectors().values();
+    auto category = categories.find(resource_view::IDS_KEY);
+    bool countEveryValue = category != categories.end();
+    if (category == categories.end()) {
+        category = categories.find(resource_view::HETEROGENEOUS_CARDNUM_KEY);
+    }
+    if (category == categories.end()) {
+        category = categories.find(resource_view::HETEROGENEOUS_MEM_KEY);
+    }
+    if (category == categories.end()) {
+        category = categories.begin();
+    }
+
+    size_t count = 0;
+    for (const auto &vector : category->second.vectors()) {
+        if (countEveryValue) {
+            count += static_cast<size_t>(vector.second.values_size());
+            continue;
+        }
+        for (const auto value : vector.second.values()) {
+            if (value > 0) {
+                ++count;
+            }
+        }
+    }
+    return count;
+}
+
+bool FlattenResources(const resource_view::Resources &resources, nlohmann::json &output)
+{
+    output = nlohmann::json::object();
+    for (const auto &[name, resource] : resources.resources()) {
+        auto outputName = name;
+        std::string outputValue;
+        if (resource.type() == resource_view::ValueType::Value_Type_SCALAR) {
+            if (!resource.has_scalar()) {
+                YRLOG_ERROR("resource({}) is scalar but has no scalar value", name);
+                return false;
+            }
+            outputValue = FormatResourceValue(resource.scalar().value());
+            if (outputValue.empty()) {
+                YRLOG_ERROR("resource({}) has invalid scalar value({})", name, resource.scalar().value());
+                return false;
+            }
+            if (name == resource_view::CPU_RESOURCE_NAME) {
+                outputName = "cpu";
+                outputValue.append("m");
+            } else if (name == resource_view::MEMORY_RESOURCE_NAME) {
+                outputName = "memory";
+                outputValue.append("Mi");
+            }
+        } else if (resource.type() == resource_view::ValueType::Value_Type_VECTORS) {
+            outputValue = std::to_string(CountVectorCards(resource));
+        } else {
+            YRLOG_WARN("skip unsupported scheduling queue resource({}) type({})", name,
+                       static_cast<int>(resource.type()));
+            continue;
+        }
+
+        if (output.contains(outputName)) {
+            YRLOG_ERROR("duplicated flattened resource name({})", outputName);
+            return false;
+        }
+        output[outputName] = std::move(outputValue);
+    }
+    return true;
+}
+
+bool FlattenSchedulingQueueResources(const messages::QuerySchedulingQueueResponse &response, nlohmann::json &body)
+{
+    auto items = body.find("instanceInfos");
+    if (items == body.end() || !items->is_array()
+        || items->size() != static_cast<size_t>(response.instanceinfos_size())) {
+        YRLOG_ERROR("invalid scheduling queue JSON instanceInfos");
+        return false;
+    }
+
+    for (int i = 0; i < response.instanceinfos_size(); ++i) {
+        nlohmann::json resources;
+        if (!FlattenResources(response.instanceinfos(i).resources(), resources)) {
+            return false;
+        }
+        (*items)[static_cast<size_t>(i)]["resources"] = std::move(resources);
+    }
+    body["count"] = response.instanceinfos_size();
+    return true;
 }
 
 void AgentApiRouter::InitGetSchedulingQueueHandler(const std::shared_ptr<GlobalSched> &globalSched)
@@ -116,13 +211,13 @@ void AgentApiRouter::InitGetSchedulingQueueHandler(const std::shared_ptr<GlobalS
                 google::protobuf::util::JsonOptions options;
                 options.always_print_primitive_fields = true;
                 (void)google::protobuf::util::MessageToJsonString(resp, &rspBody, options);
-                rspBody = AppendCountToJsonObject(std::move(rspBody), resp.instanceinfos_size());
-                if (rspBody.empty()) {
+                auto body = nlohmann::json::parse(rspBody, nullptr, false);
+                if (body.is_discarded() || !FlattenSchedulingQueueResources(resp, body)) {
                     return HttpResponse(litebus::http::ResponseCode::INTERNAL_SERVER_ERROR);
                 }
                 YRLOG_DEBUG("GetSchedulingQueue: size {}", resp.instanceinfos_size());
 
-                return litebus::http::Ok(std::move(rspBody), litebus::http::ResponseBodyType::JSON);
+                return litebus::http::Ok(body.dump(), litebus::http::ResponseBodyType::JSON);
             });
     };
 

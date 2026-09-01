@@ -13,7 +13,7 @@
 | --- | --- | --- |
 | `count` | number | 当前返回的排队实例数量，等于 `instanceInfos` 长度 |
 | `instanceInfos` | array | 排队中的实例信息 |
-| `instanceInfos[].resources` | object | 该实例等待的资源请求 |
+| `instanceInfos[].resources` | object | 扁平资源映射；CPU/内存使用 Kubernetes quantity 字符串，自定义 scalar 使用数字字符串，vector 使用卡数 |
 | `instanceInfos[].enqueueTimeMs` | string | 实例进入调度队列的 Unix 毫秒时间戳 |
 | `instanceInfos[].waitDurationMs` | string | 从入队到查询时刻的等待时长，单位毫秒 |
 
@@ -30,13 +30,22 @@ curl -s http://127.0.0.1:8080/global-scheduler/scheduling_queue | jq
     {
       "instanceID": "req-a-instance",
       "requestID": "req-a",
-      "resources": {},
+      "resources": {
+        "cpu": "2000m",
+        "memory": "4096Mi",
+        "NPU": "2",
+        "ssd": "1"
+      },
       "enqueueTimeMs": "1715060000000",
       "waitDurationMs": "183"
     }
   ]
 }
 ```
+
+资源名称除 `CPU` 转为 `cpu`、`Memory` 转为 `memory` 外保持不变。无法转换的 scalar
+资源会使接口返回服务端错误，不会静默按 0 输出。设置请求头 `Type: protobuf` 时仍返回完整的
+protobuf 响应。
 
 ## 2. 控制指定节点的本地调度状态
 
