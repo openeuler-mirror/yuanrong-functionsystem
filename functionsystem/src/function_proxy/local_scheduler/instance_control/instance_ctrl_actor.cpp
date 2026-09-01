@@ -8622,6 +8622,9 @@ litebus::Future<CallResultAck> InstanceCtrlActor::HandleCreateTransitionResult(
         }
     }
     if (result.preState.IsNone()) {
+        if (resolver->IsExactRemoteOwnerPersistenceConflict(result)) {
+            return ReclaimCreateContenderForRemoteOwner(contenderSnapshot, callResult, resolver, result);
+        }
         YRLOG_ERROR("{}|failed to update instance info for meta store", callResult->requestid());
         callResult->set_code(common::ErrorCode::ERR_ETCD_OPERATION_ERROR);
         callResult->set_message(
@@ -8630,6 +8633,23 @@ litebus::Future<CallResultAck> InstanceCtrlActor::HandleCreateTransitionResult(
     return SendCallResult(contenderSnapshot.instanceid(),
                           GetCreateResultDstInstance(contenderSnapshot, callResult->requestid()),
                           contenderSnapshot.parentfunctionproxyaid(), callResult);
+}
+
+litebus::Future<CallResultAck> InstanceCtrlActor::ReclaimCreateContenderForRemoteOwner(
+    const InstanceInfo &contenderSnapshot,
+    const std::shared_ptr<functionsystem::CallResult> &callResult,
+    const std::shared_ptr<InstanceGenerationConflictResolver> &resolver,
+    const TransitionResult &result)
+{
+    const auto &authoritativeOwner = result.savedInfo.functionproxyid();
+    YRLOG_WARN("{}|instance({}) failed to transition to RUNNING because authoritative owner changed "
+               "from ({}) to ({}); reclaim local runtime and resources",
+               contenderSnapshot.requestid(), contenderSnapshot.instanceid(),
+               contenderSnapshot.functionproxyid(),
+               authoritativeOwner.empty() ? "<unknown>" : authoritativeOwner);
+    return ReclaimCreateContenderAndSendError(
+        contenderSnapshot, callResult, resolver,
+        "failed to transition to running, authoritative instance is owned by another proxy");
 }
 
 litebus::Future<CallResultAck> InstanceCtrlActor::HandleCreateGenerationChange(

@@ -16,6 +16,8 @@
 
 #include "local_sched_srv_actor.h"
 
+#include <algorithm>
+
 #include <async/asyncafter.hpp>
 #include <async/defer.hpp>
 
@@ -186,7 +188,7 @@ litebus::Future<messages::ScheduleResponse> LocalSchedSrvActor::ForwardSchedule(
 {
     auto forwardSchedulePromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
     forwardSchedulePromise_[req->requestid()] = forwardSchedulePromise;
-    ForwardScheduleWithRetry(req, forwardSchedulePromise, 1);
+    ForwardScheduleWithRetry(req, forwardSchedulePromise, 1, 0);
     return forwardSchedulePromise->GetFuture();
 }
 
@@ -262,20 +264,61 @@ void LocalSchedSrvActor::ResponseNotifyWorkerStatus(const litebus::AID &from, st
     notifyWorkerStatusSync_.Synchronized(rsp.workerip() + "_" + std::to_string(rsp.healthy()), Status::OK());
 }
 
+bool LocalSchedSrvActor::HandleForwardScheduleTimeout(
+    const std::shared_ptr<messages::ScheduleRequest> &req,
+    const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &promise, const uint32_t retryTimes,
+    const uint64_t elapsedMs, uint64_t &forwardTimeout)
+{
+    const int64_t configuredTimeout = req->instance().scheduleoption().scheduletimeoutms();
+    const uint64_t scheduleTimeout = configuredTimeout > 0 ? static_cast<uint64_t>(configuredTimeout) : 0;
+    const int32_t configuredInitTimeout = req->instance().scheduleoption().initcalltimeout();
+    const uint64_t legacyInitTimeout = configuredInitTimeout > 0
+                                           ? static_cast<uint64_t>(configuredInitTimeout) * 1000
+                                           : 0;
+    // scheduleTimeoutMs owns new requests. Keep initCallTimeout only as a compatibility
+    // fallback for older callers that did not populate the scheduling field.
+    const uint64_t effectiveScheduleTimeout = scheduleTimeout > 0 ? scheduleTimeout : legacyInitTimeout;
+    if (scheduleTimeout == 0 && legacyInitTimeout > 0 && elapsedMs == 0) {
+        YRLOG_WARN("{}|schedule timeout is absent; use legacy init call timeout ({})ms for domain forwarding",
+                   req->requestid(), legacyInitTimeout);
+    }
+    forwardTimeout =
+        effectiveScheduleTimeout > 0 ? effectiveScheduleTimeout + FORWARD_SCHEDULE_GRACE_TIMEOUT : 0;
+    const bool isTimeout =
+        forwardTimeout > 0 ? (elapsedMs >= forwardTimeout) : (retryTimes > FORWARD_SCHEDULE_MAX_RETRY);
+    if (!isTimeout) {
+        return false;
+    }
+    YRLOG_ERROR(
+        "{}|forward to domain scheduler get response timeout, after max retry times({}) or reach forward "
+        "timeout({}ms), configured domain schedule timeout({}ms), effective schedule timeout({}ms)",
+        req->requestid(), FORWARD_SCHEDULE_MAX_RETRY, forwardTimeout,
+        scheduleTimeout, effectiveScheduleTimeout);
+    if (!domainSchedRegisterInfo_.aid.Name().empty()) {
+        auto reason = fmt::format("{}|frontend forward schedule timeout", req->requestid());
+        (void)TryCancelSchedule(GenCancelSchedule(req->requestid(), messages::CancelType::REQUEST, reason))
+            .Then([requestID(req->requestid())](const Status &status) {
+                if (status.IsError()) {
+                    YRLOG_ERROR("{}|failed to cancel timed-out domain schedule request: {}", requestID,
+                                status.ToString());
+                } else {
+                    YRLOG_INFO("{}|canceled timed-out domain schedule request", requestID);
+                }
+                return status;
+            });
+    }
+    GenErrorForwardResponseClearPromise(req, promise, "forward to domain scheduler timeout",
+                                        static_cast<int32_t>(StatusCode::LS_FORWARD_DOMAIN_TIMEOUT));
+    return true;
+}
+
 void LocalSchedSrvActor::ForwardScheduleWithRetry(
     const std::shared_ptr<messages::ScheduleRequest> &req,
-    const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &promise, const uint32_t retryTimes)
+    const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &promise, const uint32_t retryTimes,
+    const uint64_t elapsedMs)
 {
-    auto count = retryTimes <= 0 ? 0 : retryTimes - 1;
-    auto confTimeout = req->instance().scheduleoption().initcalltimeout() * 1000;
-    bool isTimeout =
-        confTimeout > 0 ? (count * forwardRequestTimeOutMs_ >= confTimeout) : (retryTimes > FORWARD_SCHEDULE_MAX_RETRY);
-    if (isTimeout) {
-        YRLOG_ERROR(
-            "{}|forward to domain scheduler get response timeout, after max retry times({}) or reach max timeout({}ms)",
-            req->requestid(), FORWARD_SCHEDULE_MAX_RETRY, confTimeout);
-        GenErrorForwardResponseClearPromise(req, promise, "forward to domain scheduler timeout",
-                                            static_cast<int32_t>(StatusCode::LS_FORWARD_DOMAIN_TIMEOUT));
+    uint64_t forwardTimeout = 0;
+    if (HandleForwardScheduleTimeout(req, promise, retryTimes, elapsedMs, forwardTimeout)) {
         return;
     }
     if (domainSchedRegisterInfo_.aid.Name().empty()) {
@@ -294,12 +337,17 @@ void LocalSchedSrvActor::ForwardScheduleWithRetry(
             litebus::Async(aid, &LocalSchedSrvActor::SendForwardToDomain, req);
             return true;
         });
+    const uint64_t retryDelayMs = forwardTimeout > 0
+                                      ? std::min<uint64_t>(forwardRequestTimeOutMs_, forwardTimeout - elapsedMs)
+                                      : forwardRequestTimeOutMs_;
     (void)promise->GetFuture().After(
-        forwardRequestTimeOutMs_,
-        [aid, req, promise, retryTimes](const litebus::Future<messages::ScheduleResponse> &future) {
+        retryDelayMs,
+        [aid, req, promise, retryTimes, elapsedMs, retryDelayMs](
+            const litebus::Future<messages::ScheduleResponse> &future) {
             YRLOG_WARN("{}|forward to domain scheduler get response timeout, begin to retry, times({})",
                        req->requestid(), retryTimes);
-            litebus::Async(aid, &LocalSchedSrvActor::ForwardScheduleWithRetry, req, promise, retryTimes + 1);
+            litebus::Async(aid, &LocalSchedSrvActor::ForwardScheduleWithRetry,
+                           req, promise, retryTimes + 1, elapsedMs + retryDelayMs);
             return messages::ScheduleResponse{};
         });
 }
