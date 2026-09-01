@@ -636,6 +636,11 @@ TEST_F(LocalSchedSrvActorTest, ForwardScheduleUsesScheduleTimeoutInsteadOfInitCa
     EXPECT_CALL(*virtual_, GetResourceViewChanges())
         .WillRepeatedly(Return(AsyncReturn(std::make_shared<resource_view::ResourceUnitChanges>())));
 
+    uint64_t forwardTimeout = 0;
+    auto promise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+    EXPECT_FALSE(dstActor_->HandleForwardScheduleTimeout(req, promise, 1, 0, forwardTimeout));
+    EXPECT_EQ(forwardTimeout, 7000);
+
     auto future = litebus::Async(driverActor_->GetAID(), &LocalSchedSrvActorTestDriver::ForwardSchedule,
                                  dstActor_->GetAID(), req);
 
@@ -667,6 +672,11 @@ TEST_F(LocalSchedSrvActorTest, ForwardScheduleUsesInitCallTimeoutForLegacyReques
     EXPECT_CALL(*virtual_, GetResourceViewChanges())
         .WillRepeatedly(Return(AsyncReturn(std::make_shared<resource_view::ResourceUnitChanges>())));
 
+    uint64_t forwardTimeout = 0;
+    auto promise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+    EXPECT_FALSE(dstActor_->HandleForwardScheduleTimeout(req, promise, 1, 0, forwardTimeout));
+    EXPECT_EQ(forwardTimeout, 6000);
+
     auto future = litebus::Async(driverActor_->GetAID(), &LocalSchedSrvActorTestDriver::ForwardSchedule,
                                  dstActor_->GetAID(), req);
 
@@ -695,6 +705,11 @@ TEST_F(LocalSchedSrvActorTest, ForwardScheduleAllowsDomainResponseGrace)
         .WillRepeatedly(Return(AsyncReturn(std::make_shared<resource_view::ResourceUnitChanges>())));
     EXPECT_CALL(*virtual_, GetResourceViewChanges())
         .WillRepeatedly(Return(AsyncReturn(std::make_shared<resource_view::ResourceUnitChanges>())));
+
+    uint64_t forwardTimeout = 0;
+    auto promise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+    EXPECT_FALSE(dstActor_->HandleForwardScheduleTimeout(req, promise, 1, 0, forwardTimeout));
+    EXPECT_EQ(forwardTimeout, 5100);
 
     auto future = litebus::Async(driverActor_->GetAID(), &LocalSchedSrvActorTestDriver::ForwardSchedule,
                                  dstActor_->GetAID(), req);
