@@ -8025,6 +8025,33 @@ TEST_F(InitialLowReliabilityRouteConflictActorTest, IncompleteLocalRuntimeViewSt
     EXPECT_FALSE(resolver->MatchesContenderGenerationView(localView));
 }
 
+TEST_F(InitialLowReliabilityRouteConflictActorTest, RemoteOwnerRollbackRequiresExactCapturedGeneration)
+{
+    auto contender = MakeLoserInfo();
+    contender.set_version(1);
+    auto authoritative = contender;
+    authoritative.set_version(2);
+    authoritative.set_functionproxyid("frontend-proxy");
+    authoritative.mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::FAILED));
+    auto resolver = std::make_shared<InstanceGenerationConflictResolver>(contender, false);
+    TransitionResult conflict{
+        litebus::None(), authoritative, contender, 0,
+        Status(StatusCode::INSTANCE_TRANSACTION_WRONG_VERSION, "version is incorrect")
+    };
+
+    EXPECT_TRUE(resolver->IsExactRemoteOwnerPersistenceConflict(conflict));
+
+    conflict.previousInfo.clear_runtimeid();
+    EXPECT_TRUE(resolver->IsExactRemoteOwnerPersistenceConflict(conflict));
+
+    conflict.savedInfo.set_functionproxyid(contender.functionproxyid());
+    EXPECT_FALSE(resolver->IsExactRemoteOwnerPersistenceConflict(conflict));
+
+    conflict.savedInfo.CopyFrom(authoritative);
+    conflict.previousInfo.set_runtimeid("new-local-runtime");
+    EXPECT_FALSE(resolver->IsExactRemoteOwnerPersistenceConflict(conflict));
+}
+
 TEST_F(InitialLowReliabilityRouteConflictActorTest, RegisteredCallbackRejectsChangedLocalGenerationWithoutCleanup)
 {
     const auto loser = MakeLoserInfo();
@@ -8461,6 +8488,70 @@ TEST_F(InitialLowReliabilityRouteConflictActorTest, UnresolvedRouteConflictRecla
     EXPECT_EQ(result.Get().code(), common::ErrorCode::ERR_NONE);
     EXPECT_EQ(sentCallResultFuture.Get()->code(), common::ErrorCode::ERR_ETCD_OPERATION_ERROR);
     EXPECT_THAT(sentCallResultFuture.Get()->message(), HasSubstr("failed to resolve route conflict"));
+    EXPECT_FALSE(sentCallResultFuture.Get()->has_runtimeinfo());
+}
+
+TEST_F(InitialLowReliabilityRouteConflictActorTest, RunningVersionConflictWithRemoteOwnerRollsBackLocalAllocation)
+{
+    auto loser = MakeLoserInfo();
+    loser.set_version(1);
+    auto localCreating = loser;
+    localCreating.clear_runtimeid();
+    auto authoritative = loser;
+    authoritative.set_version(2);
+    authoritative.set_functionproxyid("frontend-proxy");
+    authoritative.clear_runtimeid();
+    authoritative.clear_functionagentid();
+    authoritative.mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::FAILED));
+
+    auto scheduleRequest = std::make_shared<messages::ScheduleRequest>();
+    scheduleRequest->set_requestid(loser.requestid());
+    scheduleRequest->mutable_instance()->CopyFrom(loser);
+    auto callResult = MakeCallResult();
+    auto stateMachine = std::make_shared<MockInstanceStateMachine>(LOSER_PROXY_ID);
+
+    EXPECT_CALL(*instanceControlView_, GetInstance(loser.instanceid()))
+        .Times(2)
+        .WillRepeatedly(Return(stateMachine));
+    EXPECT_CALL(*stateMachine, GetInstanceState()).WillOnce(Return(InstanceState::CREATING));
+    EXPECT_CALL(*stateMachine, GetVersion()).WillOnce(Return(1)).WillOnce(Return(2));
+    EXPECT_CALL(*stateMachine, IsSaving()).WillOnce(Return(false));
+    EXPECT_CALL(*stateMachine, GetInstanceInfo()).Times(4).WillRepeatedly(Return(localCreating));
+    TransitionResult persistenceFailure{
+        litebus::None(), authoritative, localCreating, 0,
+        Status(StatusCode::INSTANCE_TRANSACTION_WRONG_VERSION, "version is incorrect")
+    };
+    EXPECT_CALL(*stateMachine, TransitionToImpl(InstanceState::RUNNING, 1, "running", true, 0))
+        .WillOnce(Return(persistenceFailure));
+    EXPECT_CALL(*stateMachine, UpdateInstanceInfo(Truly([localCreating](const InstanceInfo &actual) {
+        return actual.SerializeAsString() == localCreating.SerializeAsString();
+    })));
+    EXPECT_CALL(*stateMachine, UpdateInstanceInfo(Truly([authoritative](const InstanceInfo &actual) {
+        return actual.SerializeAsString() == authoritative.SerializeAsString();
+    })));
+    EXPECT_CALL(*stateMachine, SetVersion(0));
+
+    PrimeLoserLifecycle(loser);
+    litebus::Future<std::shared_ptr<messages::KillInstanceRequest>> killRequestFuture;
+    litebus::Future<std::vector<std::string>> deletedInstancesFuture;
+    ExpectExactLoserCleanup(loser, killRequestFuture, deletedInstancesFuture);
+    EXPECT_CALL(*observer_, GetLocalSchedulerAID).Times(0);
+    CallResultAck ack;
+    ack.set_code(common::ErrorCode::ERR_NONE);
+    litebus::Future<std::shared_ptr<functionsystem::CallResult>> sentCallResultFuture;
+    EXPECT_CALL(*actor_, MockSendCallResult(loser.instanceid(), loser.parentid(),
+                                            loser.parentfunctionproxyaid(), _))
+        .WillOnce(DoAll(FutureArg<3>(&sentCallResultFuture), Return(ack)));
+
+    auto callback = actor_->RegisterCreateCallResultCallback(scheduleRequest);
+    auto result = callback(callResult);
+
+    ASSERT_AWAIT_READY(result);
+    ASSERT_AWAIT_READY(sentCallResultFuture);
+    AssertExactLoserCleanup(loser, killRequestFuture, deletedInstancesFuture);
+    EXPECT_EQ(result.Get().code(), common::ErrorCode::ERR_NONE);
+    EXPECT_EQ(sentCallResultFuture.Get()->code(), common::ErrorCode::ERR_ETCD_OPERATION_ERROR);
+    EXPECT_THAT(sentCallResultFuture.Get()->message(), HasSubstr("owned by another proxy"));
     EXPECT_FALSE(sentCallResultFuture.Get()->has_runtimeinfo());
 }
 

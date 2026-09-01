@@ -8479,6 +8479,15 @@ litebus::Future<CallResultAck> InstanceCtrlActor::HandleCreateTransitionResult(
                 "failed to transition to running, route is missing after Create conflict");
         }
     }
+    if (resolver->IsExactRemoteOwnerPersistenceConflict(result)) {
+        YRLOG_WARN("{}|instance({}) failed to transition to RUNNING because authoritative owner changed "
+                   "from ({}) to ({}); reclaim local runtime and resources",
+                   contenderSnapshot.requestid(), contenderSnapshot.instanceid(),
+                   contenderSnapshot.functionproxyid(), result.savedInfo.functionproxyid());
+        return ReclaimCreateContenderAndSendError(
+            contenderSnapshot, callResult, resolver,
+            "failed to transition to running, authoritative instance is owned by another proxy");
+    }
     if (result.preState.IsNone()) {
         YRLOG_ERROR("{}|failed to update instance info for meta store", callResult->requestid());
         callResult->set_code(common::ErrorCode::ERR_ETCD_OPERATION_ERROR);
