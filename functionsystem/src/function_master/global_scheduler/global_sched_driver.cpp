@@ -19,7 +19,9 @@
 #include <logs/api/provider.h>
 
 #include <cmath>
+#include <cstddef>
 #include <iomanip>
+#include <limits>
 #include <locale>
 #include <memory>
 #include <sstream>
@@ -87,11 +89,11 @@ std::string FormatResourceValue(double value)
 
     std::ostringstream stream;
     stream.imbue(std::locale::classic());
-    stream << std::setprecision(15) << value;
+    stream << std::setprecision(std::numeric_limits<double>::max_digits10) << value;
     return stream.str();
 }
 
-size_t CountVectorCards(const resource_view::Resource &resource)
+std::size_t CountVectorCards(const resource_view::Resource &resource)
 {
     if (!resource.has_vectors() || resource.vectors().values().empty()) {
         return 0;
@@ -99,7 +101,7 @@ size_t CountVectorCards(const resource_view::Resource &resource)
 
     const auto &categories = resource.vectors().values();
     auto category = categories.find(resource_view::IDS_KEY);
-    bool countEveryValue = category != categories.end();
+    const bool shouldCountEveryValue = category != categories.end();
     if (category == categories.end()) {
         category = categories.find(resource_view::HETEROGENEOUS_CARDNUM_KEY);
     }
@@ -110,13 +112,13 @@ size_t CountVectorCards(const resource_view::Resource &resource)
         category = categories.begin();
     }
 
-    size_t count = 0;
-    for (const auto &vector : category->second.vectors()) {
-        if (countEveryValue) {
-            count += static_cast<size_t>(vector.second.values_size());
+    std::size_t count = 0;
+    for (const auto &vectorByName : category->second.vectors()) {
+        if (shouldCountEveryValue) {
+            count += static_cast<std::size_t>(vectorByName.second.values_size());
             continue;
         }
-        for (const auto value : vector.second.values()) {
+        for (const auto value : vectorByName.second.values()) {
             if (value > 0) {
                 ++count;
             }
@@ -169,7 +171,7 @@ bool FlattenSchedulingQueueResources(const messages::QuerySchedulingQueueRespons
 {
     auto items = body.find("instanceInfos");
     if (items == body.end() || !items->is_array()
-        || items->size() != static_cast<size_t>(response.instanceinfos_size())) {
+        || items->size() != static_cast<std::size_t>(response.instanceinfos_size())) {
         YRLOG_ERROR("invalid scheduling queue JSON instanceInfos");
         return false;
     }
@@ -179,7 +181,7 @@ bool FlattenSchedulingQueueResources(const messages::QuerySchedulingQueueRespons
         if (!FlattenResources(response.instanceinfos(i).resources(), resources)) {
             return false;
         }
-        (*items)[static_cast<size_t>(i)]["resources"] = std::move(resources);
+        (*items)[static_cast<std::size_t>(i)]["resources"] = std::move(resources);
     }
     body["count"] = response.instanceinfos_size();
     return true;
