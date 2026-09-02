@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cctype>
 #include <limits>
+#include <unordered_set>
 
 #include "curl/curl.h"
 #include "nlohmann/json.hpp"
@@ -38,7 +39,7 @@ std::string ToLower(std::string value)
     return value;
 }
 
-litebus::Option<DevClusterMetrics> ParseExternalGpuDevice(const nlohmann::json &xpu)
+litebus::Option<DevClusterMetrics> ParseExternalXpuDevice(const nlohmann::json &xpu)
 {
     if (!xpu.contains("product_model") || !xpu["product_model"].is_string() ||
         !xpu.contains("device_ids") || !xpu["device_ids"].is_array()) {
@@ -51,6 +52,7 @@ litebus::Option<DevClusterMetrics> ParseExternalGpuDevice(const nlohmann::json &
     }
 
     std::vector<int> deviceIDs;
+    std::unordered_set<int> uniqueIDs;
     for (const auto &id : xpu["device_ids"]) {
         if (!id.is_number_integer()) {
             return {};
@@ -59,7 +61,11 @@ litebus::Option<DevClusterMetrics> ParseExternalGpuDevice(const nlohmann::json &
         if (deviceID < 0 || deviceID > std::numeric_limits<int>::max()) {
             return {};
         }
-        deviceIDs.emplace_back(static_cast<int>(deviceID));
+        const auto normalizedID = static_cast<int>(deviceID);
+        if (!uniqueIDs.insert(normalizedID).second) {
+            return {};
+        }
+        deviceIDs.emplace_back(normalizedID);
     }
     if (deviceIDs.empty()) {
         return {};
@@ -75,7 +81,7 @@ litebus::Option<DevClusterMetrics> ParseExternalGpuDevice(const nlohmann::json &
 }
 }  // namespace
 
-litebus::Option<Metric> ParseExternalGpuMetric(const std::string &response)
+litebus::Option<Metric> ParseExternalXpuMetric(const std::string &response, const std::string &expectedType)
 {
     try {
         auto root = nlohmann::json::parse(response);
@@ -86,22 +92,29 @@ litebus::Option<Metric> ParseExternalGpuMetric(const std::string &response)
             return Metric{};
         }
 
-        litebus::Option<Metric> gpuMetric;
-        size_t gpuEntryCount = 0;
+        litebus::Option<Metric> xpuMetric;
+        size_t matchingEntryCount = 0;
+        const auto normalizedExpectedType = ToLower(expectedType);
+        if (normalizedExpectedType != "gpu" && normalizedExpectedType != "npu") {
+            return {};
+        }
         for (const auto &xpu : root["xpu"]) {
             if (!xpu.is_object() || !xpu.contains("type") || !xpu["type"].is_string()) {
                 return {};
             }
 
             auto type = ToLower(xpu["type"].get<std::string>());
-            if (type != "gpu") {
-                continue;
-            }
-            ++gpuEntryCount;
-            if (gpuEntryCount > 1) {
+            if (type != "gpu" && type != "npu") {
                 return {};
             }
-            auto device = ParseExternalGpuDevice(xpu);
+            if (type != normalizedExpectedType) {
+                continue;
+            }
+            ++matchingEntryCount;
+            if (matchingEntryCount > 1) {
+                return {};
+            }
+            auto device = ParseExternalXpuDevice(xpu);
             if (device.IsNone()) {
                 return {};
             }
@@ -110,13 +123,20 @@ litebus::Option<Metric> ParseExternalGpuMetric(const std::string &response)
             Metric metric;
             metric.value = static_cast<double>(parsedDevice.count);
             metric.devClusterMetrics = std::move(parsedDevice);
-            gpuMetric = std::move(metric);
+            xpuMetric = std::move(metric);
         }
-        return gpuEntryCount == 1 ? gpuMetric : litebus::Option<Metric>{};
+        // A syntactically valid response without this type is an explicit
+        // absence and must clear the previous capacity for this collector.
+        return matchingEntryCount == 1 ? xpuMetric : litebus::Option<Metric>{Metric{}};
     } catch (const std::exception &e) {
         YRLOG_DEBUG_COUNT_60("Failed to parse external XPU response: {}, error: {}", response, e.what());
     }
     return {};
+}
+
+litebus::Option<Metric> ParseExternalGpuMetric(const std::string &response)
+{
+    return ParseExternalXpuMetric(response, "gpu");
 }
 
 litebus::Option<Metric> ParseExternalStorageMetric(const std::string &response)
@@ -265,21 +285,25 @@ Metric ExternalSystemMemoryCollector::GetLimit() const
     return *previous_;
 }
 
-ExternalSystemGPUCollector::ExternalSystemGPUCollector(const litebus::ActorReference &curlActorRef)
-    : ExternalSystemCollector(0, metrics_type::GPU, curlActorRef), previous_(std::make_shared<Metric>())
+ExternalSystemXPUCollector::ExternalSystemXPUCollector(const MetricsType &metricsType,
+                                                       const std::string &externalType,
+                                                       const litebus::ActorReference &curlActorRef)
+    : ExternalSystemCollector(0, metricsType, curlActorRef), externalType_(ToLower(externalType)),
+      previous_(std::make_shared<Metric>())
 {
     uuid_ = litebus::uuid_generator::UUID::GetRandomUUID().ToString();
 }
 
-litebus::Future<Metric> ExternalSystemGPUCollector::GetUsage() const
+litebus::Future<Metric> ExternalSystemXPUCollector::GetUsage() const
 {
     return CollectFromExternal().Then(
-        [previous(previous_), uuid(uuid_)](const std::string &response) -> litebus::Future<Metric> {
-            YRLOG_DEBUG_COUNT_60("Received GPU response: {}", response);
+        [previous(previous_), uuid(uuid_), externalType(externalType_)](
+            const std::string &response) -> litebus::Future<Metric> {
+            YRLOG_DEBUG_COUNT_60("Received external {} response: {}", externalType, response);
             if (response.empty()) {
                 return previous != nullptr ? *previous : Metric{};
             }
-            auto parsed = ParseExternalGpuMetric(response);
+            auto parsed = ParseExternalXpuMetric(response, externalType);
             if (parsed.IsNone()) {
                 return previous != nullptr ? *previous : Metric{};
             }
@@ -294,7 +318,7 @@ litebus::Future<Metric> ExternalSystemGPUCollector::GetUsage() const
         });
 }
 
-Metric ExternalSystemGPUCollector::GetLimit() const
+Metric ExternalSystemXPUCollector::GetLimit() const
 {
     return previous_ != nullptr ? *previous_ : Metric{};
 }

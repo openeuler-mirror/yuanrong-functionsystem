@@ -115,6 +115,7 @@ void MetricsActor::AddCpuMemoryAndLabelCollectors(const Flags &flags)
     std::shared_ptr<BaseMetricsCollector> systemCPUCollector;
     std::shared_ptr<BaseMetricsCollector> systemMemoryCollector;
     std::shared_ptr<BaseMetricsCollector> systemGPUCollector;
+    std::shared_ptr<BaseMetricsCollector> systemNPUCollector;
     std::shared_ptr<BaseMetricsCollector> systemStorageCollector;
     if (metricsConfig_.metricsCollectorType == "proc") {
         auto callback = [func = std::bind(&MetricsActor::GenAllMetricsWithoutSystem,
@@ -130,7 +131,8 @@ void MetricsActor::AddCpuMemoryAndLabelCollectors(const Flags &flags)
         systemCPUCollector = std::make_shared<ExternalSystemCPUCollector>(metricsConfig_.procMetricsCPU, curlActorRef);
         systemMemoryCollector = std::make_shared<ExternalSystemMemoryCollector>(
             metricsConfig_.procMetricsMemory, curlActorRef);
-        systemGPUCollector = std::make_shared<ExternalSystemGPUCollector>(curlActorRef);
+        systemGPUCollector = std::make_shared<ExternalSystemXPUCollector>(metrics_type::GPU, "gpu", curlActorRef);
+        systemNPUCollector = std::make_shared<ExternalSystemXPUCollector>(metrics_type::NPU, "npu", curlActorRef);
         systemStorageCollector = std::make_shared<ExternalSystemStorageCollector>(curlActorRef);
     } else {
         systemCPUCollector = std::make_shared<SystemCPUCollector>(procFSTools_);
@@ -141,6 +143,9 @@ void MetricsActor::AddCpuMemoryAndLabelCollectors(const Flags &flags)
     filter_[systemMemoryCollector->GenFilter()] = systemMemoryCollector;
     if (systemGPUCollector != nullptr) {
         filter_[systemGPUCollector->GenFilter()] = systemGPUCollector;
+    }
+    if (systemNPUCollector != nullptr) {
+        filter_[systemNPUCollector->GenFilter()] = systemNPUCollector;
     }
     if (systemStorageCollector != nullptr) {
         filter_[systemStorageCollector->GenFilter()] = systemStorageCollector;
