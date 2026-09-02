@@ -201,9 +201,29 @@ TransitionResult InstanceStateMachine::VerifyTransitionState(const TransContext 
 
     auto nextStateList = STATE_TRANSITION_MAP.at(oldState);
     if (nextStateList.find(context.newState) == nextStateList.end()) {
-        YRLOG_ERROR("{}|transition failed, instance({}) with state({}) next state can not be {}", requestID,
-                    instanceID_, fmt::underlying(oldState), fmt::underlying(context.newState));
-        return TransitionResult{ litebus::None(), {}, {}, 0, Status(StatusCode::ERR_STATE_MACHINE_ERROR) };
+        // force is only meant to drive a not-ready instance (NEW/SCHEDULING/
+        // CREATING) straight to FATAL for an immediate kill. EVICTING is excluded:
+        // an eviction is already draining the instance and a concurrent force-FATAL
+        // risks double resource release. Any other source state (already-terminal
+        // FATAL/EXITED/EVICTED, or a state whose legal transitions exclude FATAL
+        // such as SCHEDULE_FAILED) cannot accept it; return idempotent success.
+        static const std::unordered_set<InstanceState> FORCE_FATAL_ALLOWED_SOURCES = {
+            InstanceState::NEW, InstanceState::SCHEDULING, InstanceState::CREATING,
+        };
+        if (context.force && context.newState == InstanceState::FATAL) {
+            if (FORCE_FATAL_ALLOWED_SOURCES.find(oldState) != FORCE_FATAL_ALLOWED_SOURCES.end()) {
+                YRLOG_WARN("{}|force transition instance({}) from ({}) to FATAL bypasses the guard", requestID,
+                           instanceID_, fmt::underlying(oldState));
+            } else {
+                YRLOG_INFO("{}|force FATAL on instance({}) in state({}) not in allowed source set, idempotent skip",
+                           requestID, instanceID_, fmt::underlying(oldState));
+                return TransitionResult{ litebus::None(), {}, {}, 0, Status::OK() };
+            }
+        } else {
+            YRLOG_ERROR("{}|transition failed, instance({}) with state({}) next state can not be {}", requestID,
+                        instanceID_, fmt::underlying(oldState), fmt::underlying(context.newState));
+            return TransitionResult{ litebus::None(), {}, {}, 0, Status(StatusCode::ERR_STATE_MACHINE_ERROR) };
+        }
     }
     if (isLocalAbnormal_) {
         YRLOG_ERROR("{}|local is abnormal, failed to transition instance({}) from ({}) to ({})", requestID, instanceID_,

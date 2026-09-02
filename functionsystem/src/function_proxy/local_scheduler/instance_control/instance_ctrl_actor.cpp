@@ -3458,9 +3458,23 @@ litebus::Future<Status> InstanceCtrlActor::UpdateInstance(const DeployInstanceRe
     ASSERT_IF_NULL(instanceControlView_);
     auto stateMachine = instanceControlView_->GetInstance(request->instance().instanceid());
     if (stateMachine == nullptr) {
-        YRLOG_ERROR("{}|failed to update instance, failed to find state machine of instance({})", request->requestid(),
-                    request->instance().instanceid());
-        return Status(StatusCode::ERR_INNER_SYSTEM_ERROR, "failed to update instance");
+        // state machine torn down by the kill chain (force-FATAL on not-ready state), but the sandbox
+        // may still exist since the deploy response arrives only now. kill the orphan with response.runtimeid.
+        if (!response.runtimeid().empty()) {
+            request->mutable_instance()->set_runtimeid(response.runtimeid());
+            request->mutable_instance()->set_executortype(response.executortype());
+            YRLOG_WARN("{}|{}|instance({}) state machine gone during deploy, kill orphan runtime({}) to avoid leak.",
+                       request->traceid(), request->requestid(), request->instance().instanceid(),
+                       response.runtimeid());
+            (void)litebus::Async(GetAID(), &InstanceCtrlActor::KillRuntime, request->instance(), false);
+        } else {
+            // No runtime id was returned, so there is no sandbox to kill; the exit
+            // handler (ForceDeleteInstance on seeing FATAL) owns the remaining cleanup.
+            YRLOG_WARN("{}|{}|instance({}) state machine gone during deploy and no runtimeid returned, "
+                       "rely on exitHandler for cleanup",
+                       request->traceid(), request->requestid(), request->instance().instanceid());
+        }
+        return Status(StatusCode::ERR_INSTANCE_EXITED, "instance already exited during deploy");
     }
     if (response.code() != 0) {
         YRLOG_ERROR("{}|{}|failed to deploy instance({}), code: {}, message: {}", request->traceid(),
@@ -3504,6 +3518,26 @@ litebus::Future<Status> InstanceCtrlActor::UpdateInstance(const DeployInstanceRe
     // This will be parsed in RegisterTraefikRoute when registering to Traefik
     if (!response.portmappings().empty() && traefikRegistry_) {
         (void)litebus::Async(GetAID(), &InstanceCtrlActor::RegisterTraefikRoute, request->instance());
+    }
+
+    // instance force-FATAL'd by the kill chain during deploy. kill again with the real runtimeid
+    // (the kill chain ran with an empty one and missed the sandbox), and skip CheckReadiness to
+    // block the HandleCheckReadinessFailure -> AsyncDeployInstance redeploy that overwrites FATAL.
+    // FAILED is included: a sandbox may still exist and would leak without KillRuntime.
+    auto curState = stateMachine->GetInstanceState();
+    if (curState == InstanceState::FATAL || curState == InstanceState::FAILED
+        || curState == InstanceState::EXITING || curState == InstanceState::EXITED) {
+        if (!response.runtimeid().empty()) {
+            request->mutable_instance()->set_runtimeid(response.runtimeid());
+            request->mutable_instance()->set_executortype(response.executortype());
+        }
+        YRLOG_WARN("{}|{}|instance({}) in terminal state({}) when deploy response arrives, "
+                   "kill orphan runtime({}) and skip readiness to block redeploy.",
+                   request->traceid(), request->requestid(), request->instance().instanceid(),
+                   fmt::underlying(curState),
+                   response.runtimeid().empty() ? std::string{"(none)"} : response.runtimeid());
+        (void)litebus::Async(GetAID(), &InstanceCtrlActor::KillRuntime, request->instance(), false);
+        return Status(StatusCode::ERR_INSTANCE_EXITED, "instance already exited during deploy");
     }
     SetBillingMetrics(request, response);
 
@@ -4832,6 +4866,22 @@ void InstanceCtrlActor::OnQueryInstanceStatusInfo(const litebus::Future<messages
         }
     }
     if (isRuntimeRecoverEnable) {
+        // In CREATING the init call is in-flight; a heartbeat-lost now is likely a false alarm.
+        // FAILED + RescheduleWithID would redeploy (FAILED->SCHEDULING->CREATING, new runtimeID),
+        // racing the init call's success callback CREATING->RUNNING. The generation guard that
+        // would skip that stale transition only runs under route-conflict arbitration, which
+        // IsRouteConflictResolutionCandidate disables for recover-retry instances -- exactly the
+        // ones reaching here -- so FAILED->RUNNING is rejected and the instance sticks at FAILED.
+        // Let the init call or its timeout (HandleCallResultTimeout -> FATAL, init-call-timeout
+        // bounded) drive the state. Do not narrow to IsAgentInstance: non-agent recover-retry
+        // instances reach here via isRuntimeRecoverEnable alone and would be re-exposed to the race.
+        auto currentState = stateMachine->GetInstanceState();
+        if (currentState == InstanceState::CREATING) {
+            YRLOG_WARN("instance({}) in CREATING (init-call-wait), heartbeat-lost discarded",
+                       instanceInfo.instanceid());
+            promise->SetValue(Status::OK());
+            return;
+        }
         if (redeployTimesMap_.find(instanceInfo.instanceid()) == redeployTimesMap_.end()) {
             (void)litebus::Async(GetAID(), &InstanceCtrlActor::TransInstanceState, stateMachine,
                                  TransContext{ InstanceState::FAILED, stateMachine->GetVersion(), msg, true, errCode })
@@ -5975,25 +6025,26 @@ litebus::Future<std::shared_ptr<KillContext>> InstanceCtrlActor::ProcessKillCtxB
     auto state = killCtx->instanceContext->GetState();
     YRLOG_INFO("{}|kill instance({})), current status ({})", killCtx->instanceContext->GetRequestID(), instanceID,
                fmt::underlying(state));
-    if (state == InstanceState::NEW || state == InstanceState::SCHEDULING || state == InstanceState::CREATING
-        || state == InstanceState::EVICTING) {
-        YRLOG_WARN("instance({}) state({}) is not ready, register callback for state change.", instanceID,
-                   fmt::underlying(state));
-        auto promise = std::make_shared<litebus::Promise<std::shared_ptr<KillContext>>>();
-        std::string eventKey = "CheckKillParam-signal-" + std::to_string(killCtx->killRequest->signal()) + "-" +
-            litebus::uuid_generator::UUID::GetRandomUUID().ToString();
-        stateMachine->AddStateChangeCallback(
-            { InstanceState::RUNNING, InstanceState::FAILED, InstanceState::FATAL, InstanceState::EVICTED,
-              InstanceState::SCHEDULE_FAILED, InstanceState::SUB_HEALTH },
-            [promise, killCtx](const resources::InstanceInfo &instanceInfo) {
-                auto states = instanceInfo.instancestatus().code();
-                if (static_cast<InstanceState>(states) == InstanceState::FAILED) {
-                    killCtx->instanceIsFailed = true;
-                }
-                killCtx->instanceContext->UpdateInstanceInfo(instanceInfo);
-                promise->SetValue(killCtx);
-            }, eventKey);
-        return promise->GetFuture();
+    if (state == InstanceState::NEW || state == InstanceState::SCHEDULING
+        || state == InstanceState::CREATING) {
+        YRLOG_WARN("instance({}) state({}) is not ready, force transition to FATAL for immediate kill.",
+                   instanceID, fmt::underlying(state));
+        // 复用 HandleCallResultTimeout(305s 自动清理)语义:同步强转 FATAL 后放行,
+        // 让后续 Exit->ForceDeleteInstance 见 FATAL 直接走 exitHandler 删沙箱;
+        // in-flight init 的取消由后续 ShutDownInstance 内部 SyncFailedInitResult 兜底。
+        auto transContext = TransContext{ InstanceState::FATAL, stateMachine->GetVersion(),
+            "force kill on not-ready state", true, ::common::ErrorCode::ERR_INSTANCE_EXITED, 0,
+            static_cast<int32_t>(EXIT_TYPE::KILLED_INFO) };
+        transContext.scheduleReq = killCtx->instanceContext->GetScheduleRequest();
+        // NEW->FATAL is illegal in the transition map; force bypasses the guard.
+        transContext.force = true;
+        (void)TransInstanceState(stateMachine, transContext);
+        // sync the post-force-FATAL instance info into killCtx so downstream kill
+        // steps (Exit/ForceDeleteInstance read killCtx->instanceContext for logs
+        // and instanceID) see FATAL instead of the stale not-ready state.
+        killCtx->instanceContext->UpdateInstanceInfo(stateMachine->GetInstanceInfo());
+        killCtx->instanceIsFailed = true;
+        return killCtx;
     }
     if ((state == InstanceState::RUNNING || state == InstanceState::SUB_HEALTH) &&
         killCtx->instanceContext->GetInstanceInfo().functionproxyid() == nodeID_) {

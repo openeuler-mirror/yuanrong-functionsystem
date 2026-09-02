@@ -51,6 +51,10 @@ struct TransContext {
     // Permit a same-state CAS that changes only the persisted sandbox network
     // policy. Other metadata differences are rejected by the state machine.
     bool allowNetworkPolicyRefresh = false;
+    // when true, bypass the STATE_TRANSITION_MAP guard so a not-ready instance
+    // (NEW/SCHEDULING/CREATING/EVICTING) can be driven straight to FATAL for an
+    // immediate kill. Restricted to FATAL transitions; other targets still guard.
+    bool force = false;
 };
 
 struct TransitionResult {
