@@ -27,6 +27,7 @@
 #include "common/proto/pb/message_pb.h"
 #include "runtime_manager/config/build.h"
 #include "runtime_manager/config/command_builder.h"
+#include "utils/scoped_env.h"
 #include "utils/os_utils.hpp"
 
 using namespace functionsystem::runtime_manager;
@@ -62,6 +63,14 @@ TEST(SandboxdProtoContractTest, UsesPublicCheckpointAndStartRestore)
     ASSERT_NE(start, nullptr);
     ASSERT_NE(start->FindFieldByName("checkpoint_info"), nullptr);
     EXPECT_EQ(start->FindFieldByName("checkpoint_info")->number(), 21);
+}
+
+TEST(SandboxdProtoContractTest, UsesPr44InjectEntrypointField)
+{
+    const auto *field = runtime::v1::StartRequest::descriptor()->FindFieldByName("inject_entrypoint");
+    ASSERT_NE(field, nullptr);
+    EXPECT_EQ(field->number(), 22);
+    EXPECT_EQ(field->cpp_type(), google::protobuf::FieldDescriptor::CPPTYPE_STRING);
 }
 
 class SandboxdRequestBuilderTest : public ::testing::Test {
@@ -237,6 +246,93 @@ TEST_F(SandboxdRequestBuilderTest, SelfContainedBootstrapUsesOnlyBootstrapComman
     EXPECT_EQ(startReq->command(1), "--serve");
     EXPECT_EQ(startReq->envs().at("YR_LANGUAGE"), "rust");
     EXPECT_EQ(startReq->runtime(), "runc");
+}
+
+TEST_F(SandboxdRequestBuilderTest, InheritedImageEntrypointUsesSandboxdField22AndRuntimeMarker)
+{
+    auto params = MakeMinimalParams();
+    auto *options = params.request->mutable_runtimeinstanceinfo()->mutable_deploymentconfig()->mutable_deployoptions();
+    (*options)["rootfs"] = R"({"runtime":"runsc","type":"image","imageurl":"example/image:latest"})";
+    (*options)["inherit_entrypoint"] = "true";
+
+    auto [status, startReq] = builder_->Build(params);
+
+    ASSERT_TRUE(status.IsOk()) << status.RawMessage();
+    ASSERT_NE(startReq, nullptr);
+    EXPECT_EQ(startReq->inject_entrypoint(), "/tmp/yr-image-process.json");
+    EXPECT_EQ(startReq->envs().at("YR_IMAGE_PROCESS_CONFIG"), startReq->inject_entrypoint());
+}
+
+TEST_F(SandboxdRequestBuilderTest, InheritedImageEntrypointPathCanComeFromDeploymentEnvironment)
+{
+    ScopedEnv imageProcessConfig("YR_IMAGE_PROCESS_CONFIG");
+    imageProcessConfig.Set("/tmp/custom-image-process.json");
+    auto params = MakeMinimalParams();
+    auto *options = params.request->mutable_runtimeinstanceinfo()->mutable_deploymentconfig()->mutable_deployoptions();
+    (*options)["rootfs"] = R"({"runtime":"runsc","type":"image","imageurl":"example/image:latest"})";
+    (*options)["inherit_entrypoint"] = "true";
+
+    auto [status, startReq] = builder_->Build(params);
+    ASSERT_TRUE(status.IsOk()) << status.RawMessage();
+    ASSERT_NE(startReq, nullptr);
+    EXPECT_EQ(startReq->inject_entrypoint(), "/tmp/custom-image-process.json");
+    EXPECT_EQ(startReq->envs().at("YR_IMAGE_PROCESS_CONFIG"), "/tmp/custom-image-process.json");
+}
+
+TEST_F(SandboxdRequestBuilderTest, InheritedEntrypointRejectsNonImageAndInvalidBoolean)
+{
+    for (const std::string &value : { "true", "TRUE", "1" }) {
+        auto params = MakeMinimalParams();
+        auto *options =
+            params.request->mutable_runtimeinstanceinfo()->mutable_deploymentconfig()->mutable_deployoptions();
+        (*options)["inherit_entrypoint"] = value;
+        if (value != "true") {
+            (*options)["rootfs"] =
+                R"({"runtime":"runsc","type":"image","imageurl":"example/image:latest"})";
+        }
+
+        auto [status, startReq] = builder_->Build(params);
+
+        EXPECT_FALSE(status.IsOk()) << value;
+        EXPECT_EQ(startReq, nullptr) << value;
+    }
+}
+
+TEST_F(SandboxdRequestBuilderTest, InheritedEntrypointRejectsInvalidInjectionPath)
+{
+    ScopedEnv imageProcessConfig("YR_IMAGE_PROCESS_CONFIG");
+    for (const std::string &path : { "relative.json", "/", "/tmp/../image-process.json" }) {
+        imageProcessConfig.Set(path);
+        auto params = MakeMinimalParams();
+        auto *options =
+            params.request->mutable_runtimeinstanceinfo()->mutable_deploymentconfig()->mutable_deployoptions();
+        (*options)["rootfs"] = R"({"runtime":"runsc","type":"image","imageurl":"example/image:latest"})";
+        (*options)["inherit_entrypoint"] = "true";
+
+        auto [status, startReq] = builder_->Build(params);
+
+        EXPECT_FALSE(status.IsOk()) << path;
+        EXPECT_EQ(startReq, nullptr) << path;
+    }
+}
+
+TEST_F(SandboxdRequestBuilderTest, MissingOrFalseInheritedEntrypointKeepsLegacyRequest)
+{
+    for (const std::string &value : { "", "false" }) {
+        auto params = MakeMinimalParams();
+        if (!value.empty()) {
+            (*params.request->mutable_runtimeinstanceinfo()
+                  ->mutable_deploymentconfig()
+                  ->mutable_deployoptions())["inherit_entrypoint"] = value;
+        }
+
+        auto [status, startReq] = builder_->Build(params);
+
+        ASSERT_TRUE(status.IsOk()) << status.RawMessage();
+        ASSERT_NE(startReq, nullptr);
+        EXPECT_TRUE(startReq->inject_entrypoint().empty());
+        EXPECT_EQ(startReq->envs().count("YR_IMAGE_PROCESS_CONFIG"), 0);
+    }
 }
 
 TEST_F(SandboxdRequestBuilderTest, RuntimeOnlyOverlayInheritsServiceRootfsAndBypassesIncompatibleTemplate)

@@ -379,6 +379,22 @@ TEST_F(FunctionAgentUtilsTest, NetworkPolicyFlowsFromCreateOptionsToSandboxdStar
     EXPECT_EQ(sandboxdRequest->network_policy().dns().rules(0).pattern(), "github.com");
 }
 
+TEST_F(FunctionAgentUtilsTest, InheritedEntrypointFlowsFromCreateOptionsToDeployOptions)
+{
+    auto deployInstanceRequest = std::make_shared<messages::DeployInstanceRequest>();
+    deployInstanceRequest->set_language("python3.9");
+    (*deployInstanceRequest->mutable_createoptions())[CONTAINER_INHERIT_ENTRYPOINT] = "true";
+
+    auto runtimeRequest = std::make_unique<messages::StartInstanceRequest>();
+    function_agent::SetStartRuntimeInstanceRequestConfig(runtimeRequest, deployInstanceRequest, "");
+
+    EXPECT_EQ(runtimeRequest->runtimeinstanceinfo()
+                  .deploymentconfig()
+                  .deployoptions()
+                  .at(CONTAINER_INHERIT_ENTRYPOINT),
+              "true");
+}
+
 TEST_F(FunctionAgentUtilsTest, SetStopRuntimeInstanceRequestSuccess)
 {
     auto runtimeID = litebus::uuid_generator::UUID::GetRandomUUID().ToString();

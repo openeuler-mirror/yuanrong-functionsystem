@@ -339,6 +339,8 @@ const std::string CONTAINER_NETWORK = "network";
 
 const std::string CONTAINER_NETWORK_POLICY = "network_policy";
 
+const std::string CONTAINER_INHERIT_ENTRYPOINT = "inherit_entrypoint";
+
 // port forwarding internal env vars
 const std::string YR_INTERNAL_HOST_IP = "YR_INTERNAL_HOST_IP";
 const std::string YR_PORT_FORWARDINGS = "YR_PORT_FORWARDINGS";
