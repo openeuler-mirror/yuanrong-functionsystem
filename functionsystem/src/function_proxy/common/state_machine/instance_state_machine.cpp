@@ -128,12 +128,13 @@ TransitionResult InstanceStateMachine::VerifyTransitionState(const TransContext 
     auto nextStateList = STATE_TRANSITION_MAP.at(oldState);
     if (nextStateList.find(context.newState) == nextStateList.end()) {
         // force is only meant to drive a not-ready instance (NEW/SCHEDULING/
-        // CREATING/EVICTING) straight to FATAL for an immediate kill. Any
-        // other source state (already-terminal FATAL/EXITED/EVICTED, or a
-        // state whose legal transitions exclude FATAL such as SCHEDULE_FAILED)
-        // cannot accept it; return idempotent success instead of an error.
+        // CREATING) straight to FATAL for an immediate kill. EVICTING is excluded:
+        // an eviction is already draining the instance and a concurrent force-FATAL
+        // risks double resource release. Any other source state (already-terminal
+        // FATAL/EXITED/EVICTED, or a state whose legal transitions exclude FATAL
+        // such as SCHEDULE_FAILED) cannot accept it; return idempotent success.
         static const std::unordered_set<InstanceState> FORCE_FATAL_ALLOWED_SOURCES = {
-            InstanceState::NEW, InstanceState::SCHEDULING, InstanceState::CREATING, InstanceState::EVICTING,
+            InstanceState::NEW, InstanceState::SCHEDULING, InstanceState::CREATING,
         };
         if (context.force && context.newState == InstanceState::FATAL) {
             if (FORCE_FATAL_ALLOWED_SOURCES.find(oldState) != FORCE_FATAL_ALLOWED_SOURCES.end()) {
