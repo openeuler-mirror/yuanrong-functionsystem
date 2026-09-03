@@ -648,13 +648,13 @@ TEST_F(ConchExecutorTest, Constructor)
 
 /**
  * Feature: CreateRequest (the conch-specific contract)
- * Description: CreateRequest must emit sandbox_runtime:"conch", policy.conch.template_id
+ * Description: CreateRequest must emit sandbox_runtime:"conch", policy.conch.template_name
  *              from imageurl, bind_mounts under policy.conch.filesystem_policy.bind_mounts,
  *              and guest env under policy.conch.env. It must NOT emit the supervisor-only
  *              policy.environment / process / namespace / cgroup segments (ConchPolicy is
  *              extra="forbid").
  */
-TEST_F(ConchExecutorTest, CreateRequest_EmitsConchRuntimeAndTemplateId)
+TEST_F(ConchExecutorTest, CreateRequest_EmitsConchRuntimeAndTemplateName)
 {
     auto request = std::make_shared<messages::StartInstanceRequest>();
     request->set_type(static_cast<int32_t>(EXECUTOR_TYPE::CONCH));
@@ -668,15 +668,15 @@ TEST_F(ConchExecutorTest, CreateRequest_EmitsConchRuntimeAndTemplateId)
     // top-level routing field routes jiuwenbox to the conch backend
     EXPECT_EQ(req["sandbox_runtime"], "conch");
     EXPECT_EQ(req["policy_mode"], "append");
-    // template_id sourced from rootfs imageurl
-    ASSERT_TRUE(req["policy"]["conch"].contains("template_id"));
-    EXPECT_EQ(req["policy"]["conch"]["template_id"], "sha256:abc123");
+    // template_name sourced from rootfs imageurl
+    ASSERT_TRUE(req["policy"]["conch"].contains("template_name"));
+    EXPECT_EQ(req["policy"]["conch"]["template_name"], "sha256:abc123");
 }
 
-TEST_F(ConchExecutorTest, CreateRequest_EmptyImageurlYieldsEmptyTemplateId)
+TEST_F(ConchExecutorTest, CreateRequest_EmptyImageurlYieldsEmptyTemplateName)
 {
-    // No rootfs -> ParseRootfsImageUrl returns "" -> conch.template_id stays empty,
-    // conchd falls back to JIUWENBOX_CONCH_TEMPLATE_ID / sandbox.default_template_id.
+    // No rootfs -> ParseRootfsImageUrl returns "" -> conch.template_name stays empty,
+    // jiuwenbox falls back to JIUWENBOX_CONCH_TEMPLATE_NAME / conchd default_template_name.
     auto request = std::make_shared<messages::StartInstanceRequest>();
     request->set_type(static_cast<int32_t>(EXECUTOR_TYPE::CONCH));
     request->mutable_runtimeinstanceinfo()->set_runtimeid("rt");
@@ -684,7 +684,7 @@ TEST_F(ConchExecutorTest, CreateRequest_EmptyImageurlYieldsEmptyTemplateId)
     auto req = executor_->TestCreateRequest(request);
 
     EXPECT_EQ(req["sandbox_runtime"], "conch");
-    EXPECT_EQ(req["policy"]["conch"]["template_id"], "");
+    EXPECT_EQ(req["policy"]["conch"]["template_name"], "");
 }
 
 TEST_F(ConchExecutorTest, CreateRequest_BindMountsUnderConchFilesystemPolicy)
@@ -790,7 +790,7 @@ TEST_F(ConchExecutorTest, CreateRequest_OmitsSupervisorOnlyPolicySegments)
     EXPECT_FALSE(policy.contains("namespace"));
     EXPECT_FALSE(policy.contains("cgroup"));
     EXPECT_FALSE(policy.contains("filesystem_policy"));  // conch uses conch.filesystem_policy
-    // conch object carries only template_id (+ env / filesystem_policy when non-empty)
+    // conch object carries only template_name (+ env / filesystem_policy when non-empty)
     ASSERT_TRUE(policy.contains("conch"));
 }
 
@@ -807,7 +807,7 @@ TEST_F(ConchExecutorTest, CreateRequest_DefaultPolicy)
 
     EXPECT_EQ(req["sandbox_runtime"], "conch");
     EXPECT_EQ(req["policy_mode"], "append");
-    EXPECT_EQ(req["policy"]["conch"]["template_id"], "");
+    EXPECT_EQ(req["policy"]["conch"]["template_name"], "");
     // env always carries the default home dir; no user envs are merged in
     ASSERT_TRUE(req["policy"]["conch"].contains("env"));
     EXPECT_EQ(req["policy"]["conch"]["env"]["JIUWENSWARM_HOME"], "/home/agentos");
