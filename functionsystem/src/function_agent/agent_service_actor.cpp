@@ -1467,19 +1467,8 @@ Status AgentServiceActor::ForwardStartRuntime(
     }
     YRLOG_INFO("{}|{}|send StartInstance request to ({}-{}), instance: {}", request->traceid(), request->requestid(),
                registerRuntimeMgr_.name, registerRuntimeMgr_.address, request->instanceid());
-    if (Send(litebus::AID(registerRuntimeMgr_.name, registerRuntimeMgr_.address), "StartInstance",
-             startInstanceRequest->SerializeAsString()) != 1) {
-        ReleaseRestoreSnapshotPin(request->requestid());
-        auto response = InitDeployInstanceResponse(
-            static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION),
-            "failed to send StartInstance to RuntimeManager", *request);
-        (void)Send(localSchedFuncAgentMgrAID_, "DeployInstanceResponse", response.SerializeAsString());
-        DeleteCodeReferByDeployInstanceRequest(request);
-        deployingRequest_.erase(request->requestid());
-        prepareEnvRequest_.erase(request->requestid());
-        return Status(StatusCode::ERR_INNER_COMMUNICATION,
-                      "failed to send StartInstance to RuntimeManager");
-    }
+    (void)Send(litebus::AID(registerRuntimeMgr_.name, registerRuntimeMgr_.address), "StartInstance",
+               startInstanceRequest->SerializeAsString());
     prepareEnvRequest_.erase(request->requestid());
     return Status::OK();
 }

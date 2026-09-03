@@ -1025,6 +1025,59 @@ TEST_F(AgentServiceActorTest, RestoreSnapshotIDIsValidatedBeforeRuntimeManager)
     std::filesystem::remove_all(checkpointRoot);
 }
 
+TEST_F(AgentServiceActorTest, QueuedStartInstanceIsNotReportedAsSendFailure)
+{
+    struct ResumeActorOnExit {
+        explicit ResumeActorOnExit(const litebus::AID &actor) : actor(actor) {}
+        ~ResumeActorOnExit()
+        {
+            litebus::SetActorStatus(actor, true);
+        }
+        litebus::AID actor;
+    } resumeRuntimeManager(testRuntimeManager_->GetAID());
+
+    testRuntimeManager_->SetIsNeedToResponse(false);
+    litebus::SetActorStatus(testRuntimeManager_->GetAID(), false);
+
+    auto makeDeployRequest = [](const std::string &requestID, const std::string &instanceID) {
+        auto request = std::make_shared<messages::DeployInstanceRequest>();
+        request->set_requestid(requestID);
+        request->set_instanceid(instanceID);
+        request->mutable_funcdeployspec()->set_storagetype(function_agent::LOCAL_STORAGE_TYPE);
+        return request;
+    };
+    litebus::Future<Status> prepared(Status::OK());
+    auto first = litebus::Async(
+        dstActor_->GetAID(), &function_agent::AgentServiceActor::StartRuntime,
+        makeDeployRequest(TEST_REQUEST_ID, TEST_INSTANCE_ID), prepared);
+    auto second = litebus::Async(
+        dstActor_->GetAID(), &function_agent::AgentServiceActor::StartRuntime,
+        makeDeployRequest(TEST_REQUEST_ID_2, TEST_INSTANCE_ID_2), prepared);
+
+    ASSERT_AWAIT_READY_FOR(first, 5'000);
+    ASSERT_AWAIT_READY_FOR(second, 5'000);
+    EXPECT_TRUE(first.Get().IsOk()) << first.Get().ToString();
+    EXPECT_TRUE(second.Get().IsOk()) << second.Get().ToString();
+}
+
+TEST_F(AgentServiceActorTest, MissingMergedRuntimeManagerActorDoesNotRejectStartRequest)
+{
+    dstActor_->SetRuntimeManagerAID(litebus::AID("missingRuntimeManager"), true);
+
+    auto request = std::make_shared<messages::DeployInstanceRequest>();
+    request->set_requestid(TEST_REQUEST_ID);
+    request->set_instanceid(TEST_INSTANCE_ID);
+    request->mutable_funcdeployspec()->set_storagetype(function_agent::LOCAL_STORAGE_TYPE);
+
+    litebus::Future<Status> prepared(Status::OK());
+    auto started = litebus::Async(
+        dstActor_->GetAID(), &function_agent::AgentServiceActor::StartRuntime,
+        request, prepared);
+
+    ASSERT_AWAIT_READY_FOR(started, 5'000);
+    EXPECT_TRUE(started.Get().IsOk()) << started.Get().ToString();
+}
+
 TEST_F(AgentServiceActorTest, RestoreSnapshotPinLivesUntilRuntimeLifecycleEnds)
 {
     auto pattern = (std::filesystem::temp_directory_path()
