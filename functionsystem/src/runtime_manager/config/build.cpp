@@ -192,6 +192,7 @@ std::map<std::string, std::string> GeneratePosixEnvs(const RuntimeConfig &config
     addIfValid(POD_IP, config.ip);
     addIfValid(YR_RUNTIME_ID, info.runtimeid());
     addIfValid(INSTANCE_ID_ENV, info.instanceid());
+    addIfValid("YR_TRACE_ID", info.traceid());
     const auto &requestEnvs = info.runtimeconfig().posixenvs();
     const auto dataSystemCapability = datasystem_capability::ResolveCapability(requestEnvs);
     posixEnvs.emplace(datasystem_capability::YR_DATASYSTEM_DEPLOYED,

@@ -507,7 +507,11 @@ nlohmann::json SupervisorExecutor::CreateRequest(const std::shared_ptr<messages:
 
     YRLOG_INFO("{}|Create sandbox for {}", runtimeID, hostUser);
 
-    return nlohmann::json{ { "policy", std::move(policy) }, { "policy_mode", "append" } };
+    nlohmann::json body = nlohmann::json{ { "policy", std::move(policy) }, { "policy_mode", "append" } };
+    body["trace_id"] = info.traceid();
+    body["instance_id"] = info.instanceid();
+    body["runtime_id"] = runtimeID;
+    return body;
 }
 
 litebus::Future<runtime::v1::StartResponse> SupervisorExecutor::CreateSandbox(
