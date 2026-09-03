@@ -590,10 +590,11 @@ nlohmann::json SupervisorExecutor::BuildCommand(const std::shared_ptr<runtime::v
         // content (e.g. python -c "print('hello')") and must not be interpreted by sh.
         cmdLine += ShellQuote(start->command()[i]);
     }
-    // Reuse the redirect paths already set on the StartRequest by SetRequestEnvsAndLogsForStart
-    // (which also mkdir/touch/chown them), instead of re-deriving the log layout here.
-    // Quote them too: runtimeID/path may contain spaces or shell metacharacters.
-    cmdLine += " >" + ShellQuote(start->stdout()) + " 2>" + ShellQuote(start->stderr());
+    // Reuse the redirect path already set on the StartRequest by SetRequestEnvsAndLogsForStart
+    // (which also mkdir/chmod it), instead of re-deriving the log layout here.
+    // Quote it too: runtimeID/path may contain spaces or shell metacharacters.
+    // stdout and stderr share one path (ConfigRuntimeRedirectLog); 2>&1 merges them into it.
+    cmdLine += " >" + ShellQuote(start->stdout()) + " 2>&1";
 
     command.push_back("sh");
     command.push_back("-c");

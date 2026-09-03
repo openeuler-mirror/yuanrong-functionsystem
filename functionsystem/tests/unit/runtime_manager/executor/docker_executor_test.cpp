@@ -506,7 +506,8 @@ TEST_F(DockerExecutorTest, BuildShellCmdLine_QuotedArgvAndTolerantRedirect)
     EXPECT_THAT(cmdLine, testing::HasSubstr("; rm -rf /'\\''"));
     // redirect paths quoted too (space + single quote survived).
     EXPECT_THAT(cmdLine, testing::HasSubstr(">'/tmp/log dir/a'\\''b.out'"));
-    EXPECT_THAT(cmdLine, testing::HasSubstr("2>'/tmp/log dir/a'\\''b.err'"));
+    // stderr merged into stdout via 2>&1
+    EXPECT_THAT(cmdLine, testing::HasSubstr("2>&1"));
     // The ';' vector's bare sequence "; rm -rf /')" (the ' sitting right before ')' in the payload)
     // is broken by the '\'' insertion, so the unescaped form must NOT appear.
     EXPECT_THAT(cmdLine, testing::Not(testing::HasSubstr("; rm -rf /')")));
@@ -554,7 +555,7 @@ TEST_F(DockerExecutorTest, BuildShellCmdLine_EmptyArgv)
     // Tolerant skeleton fully closed: then-branch (exec with redirect), else-branch (bare exec), ; fi tail.
     EXPECT_THAT(cmdLine, testing::StartsWith("if ( >"));
     EXPECT_THAT(cmdLine, testing::HasSubstr("then exec  >"));   // empty argv: exec followed by the redirect
-    EXPECT_THAT(cmdLine, testing::HasSubstr(" 2>'/tmp/err.log'"));
+    EXPECT_THAT(cmdLine, testing::HasSubstr(" 2>&1"));          // stderr merged into stdout
     EXPECT_THAT(cmdLine, testing::HasSubstr("; else exec ;"));  // else branch present and closed
     EXPECT_THAT(cmdLine, testing::EndsWith("; fi"));
 }

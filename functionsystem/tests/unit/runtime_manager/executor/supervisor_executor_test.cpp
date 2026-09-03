@@ -1204,7 +1204,8 @@ TEST_F(SupervisorExecutorTest, BuildCommand_ShellQuotesTokensAndRedirects)
     EXPECT_THAT(cmdLine, testing::HasSubstr("'print('\\''hello; rm -rf /'\\''"));
     // redirect paths quoted too (space + quote survived)
     EXPECT_THAT(cmdLine, testing::HasSubstr(" >'/tmp/log dir/a'\\''b.out'"));
-    EXPECT_THAT(cmdLine, testing::HasSubstr(" 2>'/tmp/log dir/a'\\''b.err'"));
+    // stderr merged into stdout via 2>&1
+    EXPECT_THAT(cmdLine, testing::HasSubstr(" 2>&1"));
     // injection payload must NOT appear as a bare command
     EXPECT_THAT(cmdLine, testing::Not(testing::HasSubstr("; rm -rf /')")));
 }
@@ -1223,7 +1224,7 @@ TEST_F(SupervisorExecutorTest, BuildCommand_EmptyTokensAndPaths)
     auto command = executor_->TestBuildCommand(start);
     ASSERT_EQ(command.size(), 3);
     std::string cmdLine = command[2];
-    EXPECT_EQ(cmdLine, "'' 'arg with space' >'' 2>''");
+    EXPECT_EQ(cmdLine, "'' 'arg with space' >'' 2>&1");
 }
 
 }  // namespace functionsystem::runtime_manager
