@@ -27,6 +27,7 @@
 #include <limits>
 #include <string_view>
 #include <unordered_set>
+#include <set>
 
 #include <utils/os_utils.hpp>
 
@@ -63,8 +64,42 @@ constexpr size_t MAX_NETWORK_RULES = 256;
 const std::string YR_FUNCTION_LIB_PATH = "YR_FUNCTION_LIB_PATH";
 const std::string FUNCTION_LIB_PATH = "FUNCTION_LIB_PATH";
 const std::string GPU_DEVICE_IDS = "GPU-DEVICE-IDS";
+const std::string NPU_DEVICE_IDS = "NPU-DEVICE-IDS";
+const std::string CUDA_VISIBLE_DEVICES = "CUDA_VISIBLE_DEVICES";
+const std::string ASCEND_VISIBLE_DEVICES = "ASCEND_VISIBLE_DEVICES";
+const std::string ASCEND_RT_VISIBLE_DEVICES = "ASCEND_RT_VISIBLE_DEVICES";
 // Namespace alias for brevity
 using namespace resource_view;  // NOLINT(google-build-using-namespace)
+
+Status ParseDeviceIDs(const std::string &value, runtime::v1::XpuAllocation *allocation)
+{
+    if (value.empty()) {
+        return Status(StatusCode::ERR_PARAM_INVALID, "XPU device IDs must not be empty");
+    }
+    std::set<uint32_t> seen;
+    size_t begin = 0;
+    while (begin <= value.size()) {
+        const auto end = value.find(',', begin);
+        const auto token = value.substr(begin, end == std::string::npos ? value.size() - begin : end - begin);
+        if (token.empty()) {
+            return Status(StatusCode::ERR_PARAM_INVALID, "XPU device IDs contain an empty token");
+        }
+        uint32_t deviceID = 0;
+        const auto result = std::from_chars(token.data(), token.data() + token.size(), deviceID);
+        if (result.ec != std::errc() || result.ptr != token.data() + token.size()) {
+            return Status(StatusCode::ERR_PARAM_INVALID, fmt::format("invalid XPU device ID: {}", token));
+        }
+        if (!seen.insert(deviceID).second) {
+            return Status(StatusCode::ERR_PARAM_INVALID, fmt::format("duplicate XPU device ID: {}", deviceID));
+        }
+        allocation->add_device_ids(deviceID);
+        if (end == std::string::npos) {
+            break;
+        }
+        begin = end + 1;
+    }
+    return Status::OK();
+}
 
 // Returns the directory portion of a path (like dirname(3))
 std::string DirName(const std::string &path)
@@ -866,7 +901,9 @@ std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> SandboxdRequestBui
     if (params.registeredTemplateIDs.count(templateID) > 0 && IsTemplateCompatible(info, *start)) {
         start->set_template_id(templateID);
     }
-    ApplyXpuAllocations(params.envs, start.get());
+    if (auto status = ApplyXpuAllocations(params.envs, start.get()); !status.IsOk()) {
+        return {status, nullptr};
+    }
     ApplyEnvsAndLogs(updatedEnvs, params.runtimeID, start.get());
 
     // YR_LANGUAGE follows the service runtime field. The container runtime is
@@ -1039,37 +1076,27 @@ Status SandboxdRequestBuilder::ApplyWritableLayerSize(const std::shared_ptr<mess
     return Status::OK();
 }
 
-void SandboxdRequestBuilder::ApplyXpuAllocations(const Envs &envs, runtime::v1::StartRequest *start) const
+Status SandboxdRequestBuilder::ApplyXpuAllocations(const Envs &envs, runtime::v1::StartRequest *start) const
 {
-    auto iter = envs.userEnvs.find(GPU_DEVICE_IDS);
-    if (iter == envs.userEnvs.end() || iter->second.empty()) {
-        return;
+    const auto gpuIter = envs.userEnvs.find(GPU_DEVICE_IDS);
+    const auto npuIter = envs.userEnvs.find(NPU_DEVICE_IDS);
+    const bool hasGPU = gpuIter != envs.userEnvs.end();
+    const bool hasNPU = npuIter != envs.userEnvs.end();
+    if (hasGPU && hasNPU) {
+        return Status(StatusCode::ERR_PARAM_INVALID, "GPU and NPU allocations cannot be requested together");
+    }
+    if (!hasGPU && !hasNPU) {
+        return Status::OK();
     }
 
     auto *allocation = start->add_xpu_allocations();
-    allocation->set_type("gpu");
-
-    const auto &value = iter->second;
-    size_t begin = 0;
-    while (begin <= value.size()) {
-        const auto end = value.find(',', begin);
-        const auto token = value.substr(begin, end == std::string::npos ? value.size() - begin : end - begin);
-        uint32_t deviceID = 0;
-        const auto result = std::from_chars(token.data(), token.data() + token.size(), deviceID);
-        if (result.ec == std::errc() && result.ptr == token.data() + token.size()) {
-            allocation->add_device_ids(deviceID);
-        } else {
-            YRLOG_WARN("ignore invalid physical GPU device ID: {}", token);
-        }
-        if (end == std::string::npos) {
-            break;
-        }
-        begin = end + 1;
-    }
-
-    if (allocation->device_ids().empty()) {
+    const auto &iter = hasNPU ? npuIter : gpuIter;
+    allocation->set_type(hasNPU ? "npu" : "gpu");
+    if (auto status = ParseDeviceIDs(iter->second, allocation); !status.IsOk()) {
         start->mutable_xpu_allocations()->RemoveLast();
+        return status;
     }
+    return Status::OK();
 }
 
 void SandboxdRequestBuilder::ApplyEnvsAndLogs(const Envs &envs, const std::string &runtimeID,
@@ -1080,7 +1107,15 @@ void SandboxdRequestBuilder::ApplyEnvsAndLogs(const Envs &envs, const std::strin
 
     // Flat request carries a single envs map (no separate runtime/user envs).
     const auto combined = cmdBuilder_.CombineEnvs(envs);
-    start->mutable_envs()->insert(combined.begin(), combined.end());
+    for (const auto &[key, value] : combined) {
+        // Physical IDs and provider-owned visibility variables are consumed by
+        // sandboxd's XPU provider. Forwarding either would let a caller
+        // override the trusted OCI edits and is rejected by sandboxd.
+        if (key != GPU_DEVICE_IDS && key != NPU_DEVICE_IDS && key != CUDA_VISIBLE_DEVICES &&
+            key != ASCEND_VISIBLE_DEVICES && key != ASCEND_RT_VISIBLE_DEVICES) {
+            (*start->mutable_envs())[key] = value;
+        }
+    }
     (*start->mutable_envs())[YR_ONLY_STDOUT] = "true";
 
     std::string stdOut;

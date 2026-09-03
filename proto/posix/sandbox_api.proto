@@ -211,7 +211,7 @@ message Mount {
 
 // XpuAllocation describes physical devices already selected by FunctionSystem.
 message XpuAllocation {
-  // Type is the normalized XPU type, such as gpu.
+  // Type is the normalized XPU type, such as gpu or npu.
   string type = 1;
   // DeviceIDs contains node-local physical device IDs.
   repeated uint32 device_ids = 2;

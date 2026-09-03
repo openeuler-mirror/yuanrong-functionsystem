@@ -463,6 +463,7 @@ TEST_F(SandboxdRequestBuilderTest, FlatRequestCarriesPhysicalGpuAllocation)
 {
     auto params = MakeMinimalParams();
     params.envs.userEnvs["GPU-DEVICE-IDS"] = "3,8";
+    params.envs.userEnvs["CUDA_VISIBLE_DEVICES"] = "0,1";
 
     auto [status, startReq] = builder_->Build(params);
 
@@ -474,6 +475,46 @@ TEST_F(SandboxdRequestBuilderTest, FlatRequestCarriesPhysicalGpuAllocation)
     ASSERT_EQ(allocation.device_ids_size(), 2);
     EXPECT_EQ(allocation.device_ids(0), 3U);
     EXPECT_EQ(allocation.device_ids(1), 8U);
+    EXPECT_EQ(startReq->envs().count("GPU-DEVICE-IDS"), 0U);
+    EXPECT_EQ(startReq->envs().count("CUDA_VISIBLE_DEVICES"), 0U);
+}
+
+TEST_F(SandboxdRequestBuilderTest, FlatRequestCarriesPhysicalNpuAllocation)
+{
+    auto params = MakeMinimalParams();
+    params.envs.userEnvs["NPU-DEVICE-IDS"] = "1,3";
+    params.envs.userEnvs["ASCEND_VISIBLE_DEVICES"] = "1,3";
+    params.envs.userEnvs["ASCEND_RT_VISIBLE_DEVICES"] = "0,1";
+
+    auto [status, startReq] = builder_->Build(params);
+
+    ASSERT_TRUE(status.IsOk()) << status.RawMessage();
+    ASSERT_NE(startReq, nullptr);
+    ASSERT_EQ(startReq->xpu_allocations_size(), 1);
+    const auto &allocation = startReq->xpu_allocations(0);
+    EXPECT_EQ(allocation.type(), "npu");
+    ASSERT_EQ(allocation.device_ids_size(), 2);
+    EXPECT_EQ(allocation.device_ids(0), 1U);
+    EXPECT_EQ(allocation.device_ids(1), 3U);
+    EXPECT_EQ(startReq->envs().count("NPU-DEVICE-IDS"), 0U);
+    EXPECT_EQ(startReq->envs().count("ASCEND_VISIBLE_DEVICES"), 0U);
+    EXPECT_EQ(startReq->envs().count("ASCEND_RT_VISIBLE_DEVICES"), 0U);
+}
+
+TEST_F(SandboxdRequestBuilderTest, RejectsInvalidOrMixedXpuAllocations)
+{
+    auto params = MakeMinimalParams();
+    params.envs.userEnvs["GPU-DEVICE-IDS"] = "0,0";
+    auto [duplicateStatus, duplicateRequest] = builder_->Build(params);
+    EXPECT_FALSE(duplicateStatus.IsOk());
+    EXPECT_EQ(duplicateRequest, nullptr);
+
+    params = MakeMinimalParams();
+    params.envs.userEnvs["GPU-DEVICE-IDS"] = "0";
+    params.envs.userEnvs["NPU-DEVICE-IDS"] = "1";
+    auto [mixedStatus, mixedRequest] = builder_->Build(params);
+    EXPECT_FALSE(mixedStatus.IsOk());
+    EXPECT_EQ(mixedRequest, nullptr);
 }
 
 TEST_F(SandboxdRequestBuilderTest, FlatRequestCarriesWritableLayerSize)

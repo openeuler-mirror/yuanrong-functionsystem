@@ -25,7 +25,9 @@
 #include "base_metrics_collector.h"
 
 namespace functionsystem::runtime_manager {
-// A valid empty inventory returns an empty Metric; malformed or unsupported input returns None.
+// A valid inventory without the requested type returns an empty Metric;
+// malformed input or a malformed requested entry returns None.
+litebus::Option<Metric> ParseExternalXpuMetric(const std::string &response, const std::string &expectedType);
 litebus::Option<Metric> ParseExternalGpuMetric(const std::string &response);
 litebus::Option<Metric> ParseExternalStorageMetric(const std::string &response);
 
@@ -115,16 +117,18 @@ private:
     std::shared_ptr<Metric> previous_;
 };
 
-class ExternalSystemGPUCollector : public ExternalSystemCollector {
+class ExternalSystemXPUCollector : public ExternalSystemCollector {
 public:
-    ExternalSystemGPUCollector() = default;
-    explicit ExternalSystemGPUCollector(const litebus::ActorReference &curlActorRef);
-    ~ExternalSystemGPUCollector() override = default;
+    ExternalSystemXPUCollector() = default;
+    ExternalSystemXPUCollector(const MetricsType &metricsType, const std::string &externalType,
+                               const litebus::ActorReference &curlActorRef);
+    ~ExternalSystemXPUCollector() override = default;
 
     litebus::Future<Metric> GetUsage() const override;
     Metric GetLimit() const override;
 
 private:
+    std::string externalType_;
     std::string uuid_;
     std::shared_ptr<Metric> previous_;
 };
