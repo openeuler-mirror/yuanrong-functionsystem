@@ -1037,18 +1037,18 @@ std::string DockerExecutor::BuildShellCmdLine(const std::string &execPath,
         quotedArgv += ShellQuote(argv[i]);
     }
 
-    // Skip redirect when stdout/stderr is empty (log dir preparation failed): >'' / 2>''
-    // would make sh -c fail with ENOENT.
-    if (startReq.stdout().empty() || startReq.stderr().empty()) {
+    // Skip redirect when the log path is empty (log dir preparation failed): >'' would make
+    // sh -c fail with ENOENT. stdout and stderr share one path (ConfigRuntimeRedirectLog).
+    if (startReq.stdout().empty()) {
         return "exec " + quotedArgv;
     }
 
-    // Tolerant redirect: subshell ( >OUT ) probes whether the redirect target is writable; on
-    // open failure the yr_runtime_main execs with inherited stdout/stderr so startup is never blocked.
-    // Paths stay ShellQuote-wrapped, no injection.
+    // Tolerant redirect: subshell ( >LOG ) probes whether the redirect target is writable; on
+    // open failure the yr_runtime_main execs with inherited stdout/stderr so startup is never
+    // blocked. stderr merges into the same file via 2>&1. Paths stay ShellQuote-wrapped,
+    // no injection.
     return "if ( >" + ShellQuote(startReq.stdout()) + " ) 2>/dev/null; then exec " + quotedArgv + " >"
-        + ShellQuote(startReq.stdout()) + " 2>" + ShellQuote(startReq.stderr()) + "; else exec "
-        + quotedArgv + "; fi";
+        + ShellQuote(startReq.stdout()) + " 2>&1; else exec " + quotedArgv + "; fi";
 }
 
 std::string DockerExecutor::ParseCreateContainerResponse(const nlohmann::json &resp, const std::string &runtimeID)
@@ -1120,7 +1120,7 @@ litebus::Future<messages::StartInstanceResponse> DockerExecutor::StartRuntime(
     // target writability is probed inside the container's sh; on failure the runtime execs with
     // inherited stdout/stderr so startup is never blocked by a redirect open failure.
     std::string cmdLine = BuildShellCmdLine(execPath, startReq);
-    if (startReq.stdout().empty() || startReq.stderr().empty()) {
+    if (startReq.stdout().empty()) {
         YRLOG_WARN("{}|stdout/stderr path empty, container runtime logs cannot redirect to host",
                    runtimeID);
     }

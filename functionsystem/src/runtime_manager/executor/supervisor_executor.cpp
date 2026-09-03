@@ -52,6 +52,7 @@ constexpr size_t CONTENT_LENGTH_PREFIX_LEN = 15;   // length of "content-length:
 constexpr int HTTP_STATUS_UNPARSED = 0;
 constexpr int HTTP_STATUS_OK_MIN = 200;
 constexpr int HTTP_STATUS_OK_MAX = 300;   // exclusive upper bound of 2xx
+constexpr int HTTP_STATUS_NO_CONTENT = 204;
 constexpr double CPU_MILLICORES_PER_CORE = 1000.0;   // CPU resource is in milli-cores (1000 = 1 core)
 
 SupervisorExecutor::SupervisorExecutor(const std::string &name, const litebus::AID &functionAgentAID)
@@ -112,9 +113,15 @@ void SupervisorExecutor::ParseResponse(litebus::Promise<nlohmann::json> promise,
         promise.SetFailed(static_cast<int32_t>(ERR_INNER_COMMUNICATION));
         return;
     }
+    // 204 No Content (e.g. DELETE success) has an empty body; treat as success.
+    // Other 2xx with an empty body is malformed (a body was expected) -> fail.
     if (respBody.empty()) {
-        YRLOG_ERROR("HTTP response body is empty");
-        promise.SetFailed(static_cast<int32_t>(ERR_INNER_COMMUNICATION));
+        if (httpStatus == HTTP_STATUS_NO_CONTENT) {
+            promise.SetValue(nlohmann::json::object());
+        } else {
+            YRLOG_ERROR("supervisor returned {} with empty body, expected a JSON body", httpStatus);
+            promise.SetFailed(static_cast<int32_t>(ERR_INNER_COMMUNICATION));
+        }
         return;
     }
     try {
@@ -583,10 +590,11 @@ nlohmann::json SupervisorExecutor::BuildCommand(const std::shared_ptr<runtime::v
         // content (e.g. python -c "print('hello')") and must not be interpreted by sh.
         cmdLine += ShellQuote(start->command()[i]);
     }
-    // Reuse the redirect paths already set on the StartRequest by SetRequestEnvsAndLogsForStart
-    // (which also mkdir/touch/chown them), instead of re-deriving the log layout here.
-    // Quote them too: runtimeID/path may contain spaces or shell metacharacters.
-    cmdLine += " >" + ShellQuote(start->stdout()) + " 2>" + ShellQuote(start->stderr());
+    // Reuse the redirect path already set on the StartRequest by SetRequestEnvsAndLogsForStart
+    // (which also mkdir/chmod it), instead of re-deriving the log layout here.
+    // Quote it too: runtimeID/path may contain spaces or shell metacharacters.
+    // stdout and stderr share one path (ConfigRuntimeRedirectLog); 2>&1 merges them into it.
+    cmdLine += " >" + ShellQuote(start->stdout()) + " 2>&1";
 
     command.push_back("sh");
     command.push_back("-c");
