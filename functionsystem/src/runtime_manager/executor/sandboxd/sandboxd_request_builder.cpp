@@ -909,7 +909,9 @@ std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> SandboxdRequestBui
     // YR_LANGUAGE follows the service runtime field. The container runtime is
     // the sandbox backend (for example runc/runsc), not the user runtime.
     (*start->mutable_envs())["YR_LANGUAGE"] = ResolveRuntimeLanguage(params.request);
-    if (!start->inject_entrypoint().empty()) {
+    if (start->inject_entrypoint().empty()) {
+        start->mutable_envs()->erase(YR_IMAGE_PROCESS_CONFIG);
+    } else {
         // FunctionSystem owns runtime discovery. sandboxd consumes the field
         // only to inject the read-only process spec at the same path.
         (*start->mutable_envs())[YR_IMAGE_PROCESS_CONFIG] = start->inject_entrypoint();

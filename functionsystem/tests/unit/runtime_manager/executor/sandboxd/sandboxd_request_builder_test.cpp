@@ -318,6 +318,8 @@ TEST_F(SandboxdRequestBuilderTest, InheritedEntrypointRejectsInvalidInjectionPat
 
 TEST_F(SandboxdRequestBuilderTest, MissingOrFalseInheritedEntrypointKeepsLegacyRequest)
 {
+    ScopedEnv imageProcessConfig("YR_IMAGE_PROCESS_CONFIG");
+    imageProcessConfig.Set("/tmp/deployment-image-process.json");
     for (const std::string &value : { "", "false" }) {
         auto params = MakeMinimalParams();
         if (!value.empty()) {
