@@ -28,6 +28,8 @@
 #include <string_view>
 #include <unordered_set>
 
+#include <utils/os_utils.hpp>
+
 #include "common/constants/constants.h"
 #include "common/logs/logging.h"
 #include "common/resource_view/resource_type.h"
@@ -46,6 +48,8 @@ const std::string CONTAINER_ROOTFS = "rootfs";
 const std::string CONTAINER_EXTRA_CONFIG = "extra_config";
 const std::string CONTAINER_MOUNTS = "mounts";
 const std::string CONTAINER_NETWORK = "network";
+const std::string YR_IMAGE_PROCESS_CONFIG = "YR_IMAGE_PROCESS_CONFIG";
+const std::string DEFAULT_IMAGE_PROCESS_CONFIG = "/tmp/yr-image-process.json";
 const std::string STORAGE_RESOURCE_NAME = "storage";
 // Resource defaults
 constexpr double DEFAULT_CPU_MILLICORES = 500.0;
@@ -79,6 +83,37 @@ Status InvalidRootfsConfig(const std::string &message)
 {
     YRLOG_ERROR("Invalid rootfs overlay: {}", message);
     return Status(StatusCode::ERR_PARAM_INVALID, message);
+}
+
+Status ConfigureImageEntrypoint(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                runtime::v1::StartRequest &start)
+{
+    const auto &opts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
+    const auto option = opts.find(CONTAINER_INHERIT_ENTRYPOINT);
+    if (option == opts.end() || option->second == "false") {
+        return Status::OK();
+    }
+    if (option->second != "true") {
+        return Status(StatusCode::ERR_PARAM_INVALID,
+                      "inherit_entrypoint must be exactly true or false");
+    }
+    if (start.rootfs().type() != runtime::v1::RootfsSrcType::IMAGE) {
+        return Status(StatusCode::ERR_PARAM_INVALID,
+                      "inherit_entrypoint requires a resolved image rootfs");
+    }
+
+    std::string target = DEFAULT_IMAGE_PROCESS_CONFIG;
+    if (auto configured = litebus::os::GetEnv(YR_IMAGE_PROCESS_CONFIG);
+        configured.IsSome() && !configured.Get().empty()) {
+        target = configured.Get();
+    }
+    const auto normalized = std::filesystem::path(target).lexically_normal();
+    if (!normalized.is_absolute() || normalized == "/" || normalized.string() != target) {
+        return Status(StatusCode::ERR_PARAM_INVALID,
+                      fmt::format("{} must be an absolute canonical file path", YR_IMAGE_PROCESS_CONFIG));
+    }
+    start.set_inject_entrypoint(target);
+    return Status::OK();
 }
 
 Status ValidateJSONKeys(const nlohmann::json &object, const std::string &path,
@@ -785,6 +820,9 @@ std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> SandboxdRequestBui
     if (auto s = BuildRootfs(params.request, *start); !s.IsOk()) {
         return { s, nullptr };
     }
+    if (auto s = ConfigureImageEntrypoint(params.request, *start); !s.IsOk()) {
+        return { s, nullptr };
+    }
 
     ApplyExtraConfig(params.request, start.get());
     if (auto status = ApplyNetworkPolicy(params.request, params.portMappings, start.get()); !status.IsOk()) {
@@ -834,6 +872,11 @@ std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> SandboxdRequestBui
     // YR_LANGUAGE follows the service runtime field. The container runtime is
     // the sandbox backend (for example runc/runsc), not the user runtime.
     (*start->mutable_envs())["YR_LANGUAGE"] = ResolveRuntimeLanguage(params.request);
+    if (!start->inject_entrypoint().empty()) {
+        // FunctionSystem owns runtime discovery. sandboxd consumes the field
+        // only to inject the read-only process spec at the same path.
+        (*start->mutable_envs())[YR_IMAGE_PROCESS_CONFIG] = start->inject_entrypoint();
+    }
 
     // trace_id is the distributed trace ID propagated from the upstream request
     // (runtimeinstanceinfo().traceid()), not the local runtimeID.

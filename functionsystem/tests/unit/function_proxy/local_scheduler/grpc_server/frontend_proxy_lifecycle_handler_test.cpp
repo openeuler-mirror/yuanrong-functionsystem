@@ -16,15 +16,31 @@
 
 #include <gtest/gtest.h>
 
-#include <chrono>
 #include <memory>
-#include <thread>
 
 #include "common/proto/pb/posix_pb.h"
+#include "common/metadata/metadata.h"
 #include "grpc_server/frontend_proxy_service/frontend_proxy_lifecycle_handler.h"
 
 namespace functionsystem::test {
 using namespace local_scheduler;
+
+class ForceLowReliabilityGuard {
+public:
+    explicit ForceLowReliabilityGuard(bool enabled)
+        : previous_(IsForceLowReliabilityInstanceEnabled())
+    {
+        SetForceLowReliabilityInstance(enabled);
+    }
+
+    ~ForceLowReliabilityGuard()
+    {
+        SetForceLowReliabilityInstance(previous_);
+    }
+
+private:
+    bool previous_;
+};
 
 TEST(FrontendProxyLifecycleHandlerTest, CreateReadyTimeoutUsesFrontendValueWithLegacyFallback)
 {
@@ -59,6 +75,7 @@ TEST(FrontendProxyLifecycleHandlerTest, ReusesPosixServerWhenComponentPortIsDisa
 
 TEST(FrontendProxyLifecycleHandlerTest, CreateUsesFrontendSystemCallerWithoutRuntimeParent)
 {
+    [[maybe_unused]] ForceLowReliabilityGuard forceLowReliability(true);
     std::shared_ptr<messages::ScheduleRequest> capturedScheduleReq;
     auto dispatcher = BuildFrontendProxyCreateReadyDispatcher(
         [&capturedScheduleReq](const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
@@ -71,7 +88,8 @@ TEST(FrontendProxyLifecycleHandlerTest, CreateUsesFrontendSystemCallerWithoutRun
             readyResult->set_code(common::ERR_NONE);
             readyResult->mutable_runtimeinfo()->set_route("grpc://owning-proxy");
             readyResult->mutable_runtimeinfo()->set_proxyid("owning-node");
-            // Delivered before Schedule completes; must not surface in the response.
+            // Deliberately deliver ready before Schedule completes. The
+            // pre-registered ticket must retain it exactly once.
             (void)callback(readyResult);
             messages::ScheduleResponse scheduleResponse;
             scheduleResponse.set_code(common::ERR_NONE);
@@ -109,14 +127,17 @@ TEST(FrontendProxyLifecycleHandlerTest, CreateUsesFrontendSystemCallerWithoutRun
     ASSERT_NE(extensionIter, capturedScheduleReq->instance().extensions().end());
     EXPECT_EQ(extensionIter->second, "frontend");
 
-    // create returns on schedule success with no CallResult.
-    EXPECT_EQ(response.Get().create().code(), common::ERR_NONE);
-    EXPECT_EQ(response.Get().create().instanceid(), "frontend-create-instance");
-    EXPECT_FALSE(response.Get().has_callresult());
+    ASSERT_TRUE(response.Get().has_callresult());
+    EXPECT_EQ(response.Get().callresult().requestid(), "request-1");
+    EXPECT_EQ(response.Get().callresult().instanceid(), "frontend-create-instance");
+    ASSERT_TRUE(response.Get().callresult().has_runtimeinfo());
+    EXPECT_EQ(response.Get().callresult().runtimeinfo().route(), "grpc://owning-proxy");
+    EXPECT_EQ(response.Get().callresult().runtimeinfo().proxyid(), "owning-node");
 }
 
-TEST(FrontendProxyLifecycleHandlerTest, CreateReturnsOnScheduleEvenWhenRuntimeNeverReportsReady)
+TEST(FrontendProxyLifecycleHandlerTest, CreateReadyWaitTimesOutWhenRuntimeNeverReportsReady)
 {
+    [[maybe_unused]] ForceLowReliabilityGuard forceLowReliability(true);
     bool unregistered = false;
     auto dispatcher = BuildFrontendProxyCreateReadyDispatcher(
         [](const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
@@ -146,14 +167,39 @@ TEST(FrontendProxyLifecycleHandlerTest, CreateReturnsOnScheduleEvenWhenRuntimeNe
     auto response = dispatcher(request).Get(1000);
 
     ASSERT_TRUE(response.IsSome());
-    // create returns on schedule success even though ready never arrives.
-    EXPECT_EQ(response.Get().create().code(), common::ERR_NONE);
-    EXPECT_EQ(response.Get().create().instanceid(), "frontend-create-timeout-instance");
-    EXPECT_FALSE(response.Get().has_callresult());
-
-    // the ready ticket still times out and unregisters in the background.
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    EXPECT_EQ(response.Get().create().code(), common::ERR_INNER_SYSTEM_ERROR);
+    EXPECT_EQ(response.Get().create().message(), "frontend proxy create ready call result timed out");
     EXPECT_TRUE(unregistered);
+}
+
+TEST(FrontendProxyLifecycleHandlerTest, CreateReturnsOnScheduleWhenForceLowReliabilityIsDisabled)
+{
+    [[maybe_unused]] ForceLowReliabilityGuard forceLowReliability(false);
+    auto dispatcher = BuildFrontendProxyCreateReadyDispatcher(
+        [](const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+           const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &,
+           FrontendProxyReadyCallback) {
+            messages::ScheduleResponse response;
+            response.set_code(common::ERR_NONE);
+            response.set_requestid(scheduleReq->requestid());
+            response.set_instanceid("frontend-create-async-instance");
+            return litebus::Future<messages::ScheduleResponse>(response);
+        });
+
+    ::frontend_proxy::CreateInstanceRequest request;
+    request.mutable_context()->set_frontendclientid("frontend-client-1");
+    request.mutable_context()->set_requestid("request-async");
+    request.mutable_context()->set_tenantid("tenant-a");
+    request.mutable_create()->set_function("0/tenant/faas/fn");
+    request.mutable_create()->set_requestid("request-async");
+    (*request.mutable_create()->mutable_createoptions())["source"] = "frontend";
+
+    auto response = dispatcher(request).Get(1000);
+
+    ASSERT_TRUE(response.IsSome());
+    EXPECT_EQ(response.Get().create().code(), common::ERR_NONE);
+    EXPECT_EQ(response.Get().create().instanceid(), "frontend-create-async-instance");
+    EXPECT_FALSE(response.Get().has_callresult());
 }
 
 }  // namespace functionsystem::test
