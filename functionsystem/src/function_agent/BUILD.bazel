@@ -65,6 +65,7 @@ cc_library(
         ":function_agent_inc",
         "//functionsystem/src/common:datasystem_capability",
         "//functionsystem/src/common:rpc",
+        "//functionsystem/src/common:snapshot_storage",
         "//functionsystem/src/common:metadata",
         "//functionsystem/src/common:kv_client",
         "//functionsystem/src/common:posix_pb",

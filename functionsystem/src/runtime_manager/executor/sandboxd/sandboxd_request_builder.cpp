@@ -1008,8 +1008,15 @@ void SandboxdRequestBuilder::ApplyBootstrapMount(const std::shared_ptr<messages:
 void SandboxdRequestBuilder::ApplyCommands(const std::shared_ptr<messages::StartInstanceRequest> &request,
                                            const CommandArgs &cmdArgs, runtime::v1::StartRequest *start) const
 {
-    for (const auto &cmd : BuildBootstrapCommands(request)) {
-        *start->add_command() = cmd;
+    const auto bootstrapCommands = BuildBootstrapCommands(request);
+    if (bootstrapCommands.empty()) {
+        if (!cmdArgs.execPath.empty()) {
+            *start->add_command() = cmdArgs.execPath;
+        }
+    } else {
+        for (const auto &cmd : bootstrapCommands) {
+            *start->add_command() = cmd;
+        }
     }
     bool skipNext = false;
     for (const auto &arg : cmdArgs.args) {

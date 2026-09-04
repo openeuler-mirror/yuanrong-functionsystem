@@ -98,6 +98,16 @@ TEST_F(RuntimeStateManagerTest, UpdateSandboxIDReturnsNewValue)
     EXPECT_EQ(mgr_.GetSandboxID(runtimeID), "new-sandbox-id");
 }
 
+TEST_F(RuntimeStateManagerTest, UpdateNetworkEndpointReturnsSandboxIP)
+{
+    const std::string runtimeID = "rt-endpoint";
+    mgr_.Register(SandboxInfo{ runtimeID, {}, {}, {}, {} });
+
+    mgr_.UpdateNetworkEndpoint(runtimeID, "10.88.0.2");
+
+    EXPECT_EQ(mgr_.GetSandboxIP(runtimeID), "10.88.0.2");
+}
+
 // T10-5: HasSandbox false before UpdateSandboxID (sandboxID empty), true after
 TEST_F(RuntimeStateManagerTest, HasSandboxFalseBeforeUpdateTrueAfter)
 {

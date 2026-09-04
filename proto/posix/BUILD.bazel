@@ -99,6 +99,27 @@ proto_library(
     visibility = ["//visibility:public"],
 )
 
+proto_library(
+    name = "data_plane_gateway_activity_proto",
+    srcs = ["data_plane_gateway_activity.proto"],
+    strip_import_prefix = "/proto/posix",
+    visibility = ["//visibility:public"],
+)
+
+cc_proto_library(
+    name = "data_plane_gateway_activity_cc_proto",
+    deps = [":data_plane_gateway_activity_proto"],
+    visibility = ["//visibility:public"],
+)
+
+cc_grpc_library(
+    name = "data_plane_gateway_activity_cc_grpc",
+    srcs = [":data_plane_gateway_activity_proto"],
+    grpc_only = True,
+    deps = [":data_plane_gateway_activity_cc_proto"],
+    visibility = ["//visibility:public"],
+)
+
 cc_proto_library(
     name = "sandbox_api_cc_proto",
     deps = [":sandbox_api_proto"],
@@ -334,6 +355,8 @@ cc_library(
         ":exec_service_cc_grpc",
         ":sandbox_api_cc_proto",
         ":sandbox_api_cc_grpc",
+        ":data_plane_gateway_activity_cc_proto",
+        ":data_plane_gateway_activity_cc_grpc",
         ":runtime_service_cc_proto",
         ":runtime_rpc_cc_proto",
         ":runtime_rpc_cc_grpc",

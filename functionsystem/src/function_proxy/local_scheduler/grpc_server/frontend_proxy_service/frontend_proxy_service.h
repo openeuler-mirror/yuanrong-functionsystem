@@ -48,7 +48,7 @@ struct FrontendProxyServiceParam {
         std::function<litebus::Future<::frontend_proxy::KillInstanceResponse>(
             const ::frontend_proxy::KillInstanceRequest &)>;
     using KillCleanupProbe =
-        std::function<litebus::Future<FrontendKillCleanupSnapshot>(const std::string &, const std::string &)>;
+        std::function<litebus::Future<FrontendKillCleanupSnapshot>(const std::string &, const std::string &, uint64_t)>;
 
     std::string nodeID;
     std::string endpointAddress;
@@ -79,7 +79,7 @@ struct FrontendProxyServiceParam {
     bool requireAuthenticatedPeer { false };
     uint64_t invokeResultTimeoutMs { 60000 };
     uint64_t invokeResultTimeoutBufferMs { 5000 };
-    uint64_t killCleanupTimeoutMs { 2000 };
+    uint64_t killCleanupObservationDelayMs { 200 };
 };
 
 // FrontendProxyService is the same-port frontend entrypoint for faasfrontend.

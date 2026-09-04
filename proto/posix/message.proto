@@ -336,6 +336,9 @@ message DeployInstanceResponse {
   string portMappings = 11;
   int32 executorType =12;
   string containerIP = 13;  // container/sandbox internal IP (docker bridge network via inspect)
+  string sandboxID = 14;
+  string sandboxIP = 15;
+  string nodeProxyAddress = 17;
 }
 
 message KillInstanceRequest {
@@ -572,6 +575,9 @@ message StartRuntimeInstanceResponse {
   string containerID = 6;
   int32 executorType = 7;  // Executor type (RUNTIME/CONTAINER/SANDBOX)
   string containerIP = 8;  // container/sandbox internal IP (docker bridge network via inspect)
+  string sandboxID = 9;
+  string sandboxIP = 10;
+  string nodeProxyAddress = 12;
 }
 
 message StartInstanceResponse {

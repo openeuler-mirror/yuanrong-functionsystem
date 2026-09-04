@@ -831,29 +831,25 @@ TEST(FrontendProxyServiceTest, KillAuthoritativeDeletedIsOnlyAcceptedAsExplicitS
     EXPECT_TRUE(response.status().retryreason().empty());
 }
 
-TEST(FrontendProxyServiceTest, KillSuccessWaitsForObservedCleanupCompletion)
+TEST(FrontendProxyServiceTest, KillSuccessSchedulesCleanupObservationWithoutWaiting)
 {
     int probes = 0;
+    auto cleanup = std::make_shared<litebus::Promise<FrontendKillCleanupSnapshot>>();
     FrontendProxyServiceParam param;
     param.nodeID = "proxy-node-a";
     param.enableKillDispatch = true;
-    param.killCleanupTimeoutMs = 100;
     param.killReadyDispatcher = [](const ::frontend_proxy::KillInstanceRequest &) {
         ::frontend_proxy::KillInstanceResponse response;
         response.mutable_kill()->set_code(common::ERR_NONE);
         return litebus::Future<::frontend_proxy::KillInstanceResponse>(response);
     };
-    param.killCleanupProbe = [&probes](const std::string &requestID, const std::string &instanceID) {
-        FrontendKillCleanupSnapshot snapshot;
-        snapshot.requestTicketKnown = true;
-        snapshot.requestTicketCleared = ++probes > 1;
-        snapshot.instanceTicketKnown = true;
-        snapshot.instanceTicketCleared = probes > 1;
-        snapshot.runtimeState = probes > 1 ? "terminated" : "terminating";
-        snapshot.instanceState = probes > 1 ? "absent" : "exiting";
+    param.killCleanupProbe = [&probes, cleanup](const std::string &requestID, const std::string &instanceID,
+                                               uint64_t delayMs) {
+        ++probes;
         EXPECT_EQ(requestID, "kill-cleanup-complete");
         EXPECT_EQ(instanceID, "instance-a");
-        return litebus::Future<FrontendKillCleanupSnapshot>(snapshot);
+        EXPECT_EQ(delayMs, 200);
+        return cleanup->GetFuture();
     };
     FrontendProxyService service(std::move(param));
     ::frontend_proxy::KillInstanceRequest request;
@@ -866,22 +862,29 @@ TEST(FrontendProxyServiceTest, KillSuccessWaitsForObservedCleanupCompletion)
 
     EXPECT_TRUE(service.KillInstance(nullptr, &request, &response).ok());
     EXPECT_EQ(response.status().code(), common::ERR_NONE);
-    EXPECT_GE(probes, 2);
+    EXPECT_EQ(probes, 1);
+    FrontendKillCleanupSnapshot snapshot;
+    snapshot.requestTicketKnown = true;
+    snapshot.requestTicketCleared = true;
+    snapshot.instanceTicketKnown = true;
+    snapshot.instanceTicketCleared = true;
+    snapshot.runtimeState = "terminated";
+    snapshot.instanceState = "absent";
+    cleanup->SetValue(snapshot);
 }
 
-TEST(FrontendProxyServiceTest, KillSuccessDoesNotSynthesizeCleanupWhenEvidenceStaysIncomplete)
+TEST(FrontendProxyServiceTest, KillSuccessDoesNotPollIncompleteCleanupEvidence)
 {
     size_t probes = 0;
     FrontendProxyServiceParam param;
     param.nodeID = "proxy-node-a";
     param.enableKillDispatch = true;
-    param.killCleanupTimeoutMs = 20;
     param.killReadyDispatcher = [](const ::frontend_proxy::KillInstanceRequest &) {
         ::frontend_proxy::KillInstanceResponse response;
         response.mutable_kill()->set_code(common::ERR_NONE);
         return litebus::Future<::frontend_proxy::KillInstanceResponse>(response);
     };
-    param.killCleanupProbe = [&probes](const std::string &, const std::string &) {
+    param.killCleanupProbe = [&probes](const std::string &, const std::string &, uint64_t) {
         ++probes;
         FrontendKillCleanupSnapshot snapshot;
         snapshot.requestTicketKnown = true;
@@ -901,12 +904,9 @@ TEST(FrontendProxyServiceTest, KillSuccessDoesNotSynthesizeCleanupWhenEvidenceSt
     request.mutable_kill()->set_instanceid("instance-a");
     ::frontend_proxy::KillInstanceResponse response;
 
-    const auto started = std::chrono::steady_clock::now();
     EXPECT_TRUE(service.KillInstance(nullptr, &request, &response).ok());
-    const auto elapsed = std::chrono::steady_clock::now() - started;
     EXPECT_EQ(response.status().code(), common::ERR_NONE);
-    EXPECT_GE(probes, static_cast<size_t>(1));
-    EXPECT_GE(elapsed, std::chrono::milliseconds(10));
+    EXPECT_EQ(probes, static_cast<size_t>(1));
 }
 
 TEST(FrontendProxyServiceTest, RealGrpcCancellationRemovesCreateReadyWaiter)

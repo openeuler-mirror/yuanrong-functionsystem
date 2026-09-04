@@ -17,9 +17,10 @@
 #ifndef LOCAL_SCHEDULER_IDLE_ACTOR_H
 #define LOCAL_SCHEDULER_IDLE_ACTOR_H
 
-#include <cstdint>
 #include <actor/actor.hpp>
 #include <async/future.hpp>
+#include <cstddef>
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 
@@ -44,6 +45,7 @@ namespace functionsystem::local_scheduler {
  */
 class IdleActor : public BasisActor {
 public:
+    using GatewayActivityCounts = std::unordered_map<std::string, size_t>;
     /**
      * @param name                Actor name (nodeID + postfix)
      * @param nodeID              Node identifier for ownership checks
@@ -69,6 +71,15 @@ public:
      */
     void TrafficReport(const std::string &instanceID, const size_t &processingNum);
 
+    /** Reconcile the independent count of PENDING/RUNNING background commands. */
+    void CommandActivityReport(const std::string &instanceID, const size_t &activeCommands);
+
+    /** Replace the complete gateway snapshot received from one node. */
+    void GatewayActivityReconcile(const GatewayActivityCounts &activeStreamCounts);
+
+    /** Mark gateway activity unknown; idle eviction must remain paused. */
+    bool GatewayActivityUnavailable();
+
     /**
      * Update exec session count for an instance.
      * Called when exec sessions start or end via ExecStream.
@@ -79,9 +90,9 @@ public:
     void SessionCountDelta(const std::string &instanceID, int delta);
 
     /**
-     * Reconcile idle timer state after an instance reaches RUNNING.
-     * This compensates for an initial idle traffic report that arrived before
-     * the local state machine was visible as RUNNING.
+     * Initialize/reconcile idle timer state after an instance reaches RUNNING.
+     * A new instance with no traffic observation is idle by default. An
+     * earlier idle or busy traffic report is preserved.
      *
      * @param instanceID  Instance identifier
      */
@@ -91,6 +102,7 @@ public:
 
 private:
     void SessionAlive(const std::string &instanceID, bool hasActiveSessions);
+    void TryStartIdleTimer(const std::string &instanceID);
     void StartIdleTimer(const std::string &instanceID);
     void CancelIdleTimer(const std::string &instanceID);
 
@@ -99,6 +111,7 @@ private:
      * to detect stale callbacks that were queued after CancelIdleTimer incremented the counter.
      */
     void HandleIdleTimeout(const std::string &instanceID, uint64_t generation);
+    void HandleCommandActivityTimeout(const std::string &instanceID, uint64_t generation);
 
     std::string nodeID_;
     std::shared_ptr<InstanceControlView> instanceControlView_;
@@ -124,6 +137,22 @@ private:
         uint64_t token = 0;
     };
     std::unordered_map<std::string, PauseGateRecord> pauseGatedInstances_;
+
+    // Complete active stream count reported by the independent node proxy.
+    std::unordered_map<std::string, size_t> instanceGatewayStreamCounts_;
+
+    // Background commands are an independent busy source. Presence in this
+    // map also means the first authoritative RRT snapshot has arrived.
+    std::unordered_map<std::string, size_t> instanceCommandCounts_;
+    std::unordered_map<std::string, litebus::Timer> commandActivityTimers_;
+    std::unordered_map<std::string, uint64_t> commandActivityGenerations_;
+    int64_t commandActivityTimeoutSeconds_ = 30;
+
+    bool commandActivityEnabled_ = false;
+
+    // True after the dedicated activity channel is configured but before a
+    // valid batch is received, or while all gateway leases are expired.
+    bool gatewayActivityUnknown_ = false;
 };
 
 }  // namespace functionsystem::local_scheduler

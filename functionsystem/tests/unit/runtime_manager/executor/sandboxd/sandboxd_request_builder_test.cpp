@@ -151,6 +151,9 @@ TEST_F(SandboxdRequestBuilderTest, BuildReturnsFlatStartRequest)
 
     EXPECT_TRUE(status.IsOk());
     ASSERT_NE(startReq, nullptr);
+    ASSERT_GT(startReq->command_size(), 1);
+    EXPECT_EQ(startReq->command(0), "python3.9");
+    EXPECT_EQ(startReq->command(1), "--rt_server_address");
 }
 
 // sandbox_id is left empty: sandboxd generates it and returns it in StartResponse.id.

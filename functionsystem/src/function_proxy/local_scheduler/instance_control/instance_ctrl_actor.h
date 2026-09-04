@@ -24,6 +24,7 @@
 #include <unordered_set>
 
 #include "common/proto/pb/message_pb.h"
+#include "common/proto/pb/posix/data_plane_gateway_activity.pb.h"
 #include "common/proto/pb/posix_pb.h"
 #include "common/resource_view/resource_type.h"
 #include "common/resource_view/resource_view_mgr.h"
@@ -169,6 +170,10 @@ struct InstanceCtrlConfig {
     std::string udsPath;
     // proxy gRPC service address (ip:port format)
     std::string proxyGrpcAddress;
+    // Optional node-local Rust Node Proxy address (host:port).
+    std::string nodeProxyAddress;
+    // Node-local gRPC UDS used to publish/retire Node Proxy routes.
+    std::string nodeProxyRouteControlUds;
 };
 
 class InstanceCtrlActor : public BasisActor {
@@ -178,6 +183,7 @@ public:
     ~InstanceCtrlActor() override;
 
     void Init() override;
+    Status SyncDataPlaneRoutes();
 
     /**
      * receive schedule instance request from client
@@ -559,6 +565,9 @@ public:
                                                const std::shared_ptr<KillRequest> &killReq);
     FrontendKillCleanupSnapshot ProbeFrontendKillCleanup(const std::string &requestID,
                                                          const std::string &instanceID);
+    void ResolveFrontendKillCleanupProbe(
+        const std::string &requestID, const std::string &instanceID,
+        const std::shared_ptr<litebus::Promise<FrontendKillCleanupSnapshot>> &promise);
     // Record the last deploy failure for a frontend create (POST /api/agent) whose
     // ready ticket is still pending. No-op unless a ready ticket is registered AND
     // createOptions["create_error_policy"]=="last_failure_on_timeout". The policy
@@ -919,8 +928,11 @@ private:
     litebus::Future<Status> KillRuntimeForInstanceDelete(const InstanceInfo &instanceInfo);
     litebus::Future<Status> KillRuntimeWithSnapshotCleanup(
         const InstanceInfo &instanceInfo, bool isRecovering, bool deleteInstanceSnapshots);
+    Status SetDataPlaneRoute(const InstanceInfo &instanceInfo,
+                             data_plane_gateway_activity::DataPlaneGatewayRouteState state);
     litebus::Future<Status> RecordFrontendKillRuntimeResult(
-        const InstanceInfo &instanceInfo, const messages::KillInstanceResponse &response);
+        const InstanceInfo &instanceInfo, const std::string &frontendKillRequestID,
+        const messages::KillInstanceResponse &response);
     void ExpireFrontendKillRuntimeEvidence(const std::string &instanceID, const std::string &requestID);
     inline bool IsValidKillParam(
         const Status &status, std::shared_ptr<KillContext> &killCtx, const std::shared_ptr<KillRequest> &killReq,
@@ -1425,7 +1437,12 @@ private:
 
     std::unordered_map<std::string, std::shared_ptr<litebus::Promise<KillResponse>>> killingRequest_;
     // Short-lived, payload-free evidence used only by the frontend cleanup probe.
-    std::unordered_map<std::string, std::pair<std::string, std::string>> frontendKillRuntimeEvidence_;
+    struct FrontendKillRuntimeEvidence {
+        std::string killRequestID;
+        std::string instanceRequestID;
+        std::string state;
+    };
+    std::unordered_map<std::string, FrontendKillRuntimeEvidence> frontendKillRuntimeEvidence_;
 
     BACK_OFF_RETRY_HELPER(InstanceCtrlActor, litebus::Option<InstanceState>, checkStateHelper_);
 

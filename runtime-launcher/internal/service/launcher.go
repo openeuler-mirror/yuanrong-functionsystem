@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -30,10 +31,11 @@ import (
 )
 
 const (
-	defaultCPUMillicore = 500.0
-	defaultMemoryMB     = 512.0
-	runtimeLabelSlots   = 2
-	cpuQuotaMultiplier  = 100
+	defaultCPUMillicore    = 500.0
+	defaultMemoryMB        = 512.0
+	runtimeLabelSlots      = 2
+	cpuQuotaMultiplier     = 100
+	endpointCleanupTimeout = 5 * time.Second
 )
 
 // LauncherService implements sandboxd-compatible runtime.v1.SandboxService.
@@ -89,13 +91,57 @@ func (s *LauncherService) startWithConfig(
 		log.Printf("[service] Start failed: %v", err)
 		return &runtimev1.StartResponse{Code: 1, Message: fmt.Sprintf("create sandbox failed: %v", err)}, nil
 	}
+
+	var endpoint *runtime.NetworkEndpoint
+	if networkHasIsolatedEndpoint(cfg.Network) {
+		endpoint, err = s.runtime.ResolveEndpoint(ctx, containerID)
+		if err != nil {
+			log.Printf("[service] resolve endpoint for sandbox %s failed: %v", containerID, err)
+			s.cleanupFailedStart(containerID)
+			return &runtimev1.StartResponse{
+				Code:    1,
+				Message: fmt.Sprintf("resolve sandbox endpoint failed: %v", err),
+			}, nil
+		}
+		if endpoint == nil {
+			log.Printf("[service] runtime returned no endpoint for sandbox %s", containerID)
+			s.cleanupFailedStart(containerID)
+			return &runtimev1.StartResponse{Code: 1, Message: "runtime returned no sandbox endpoint"}, nil
+		}
+		if endpoint.SandboxIP == "" {
+			log.Printf(
+				"[service] invalid endpoint for sandbox %s: sandbox_ip=%q",
+				containerID,
+				endpoint.SandboxIP,
+			)
+			s.cleanupFailedStart(containerID)
+			return &runtimev1.StartResponse{Code: 1, Message: "runtime returned an invalid sandbox endpoint"}, nil
+		}
+	}
 	runtimeID := cfg.ID
 	if runtimeID == "" {
 		runtimeID = containerID
 	}
 	s.stateMgr.AddContainer(containerID, runtimeID, cfg)
 	go s.watchContainer(containerID)
-	return &runtimev1.StartResponse{Code: 0, Id: containerID}, nil
+	response := &runtimev1.StartResponse{Code: 0, Id: containerID}
+	if endpoint != nil {
+		response.SandboxIp = endpoint.SandboxIP
+	}
+	return response, nil
+}
+
+func (s *LauncherService) cleanupFailedStart(containerID string) {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), endpointCleanupTimeout)
+	defer cancel()
+	if err := s.runtime.Delete(cleanupCtx, containerID, 0); err != nil {
+		log.Printf("[service] cleanup sandbox %s after endpoint failure failed: %v", containerID, err)
+	}
+}
+
+func networkHasIsolatedEndpoint(network string) bool {
+	mode := strings.ToLower(strings.TrimSpace(network))
+	return mode != "" && mode != "host" && mode != "none" && !strings.HasPrefix(mode, "container:")
 }
 
 // Delete stops the sandbox container and removes its tracked state.

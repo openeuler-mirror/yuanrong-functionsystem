@@ -268,6 +268,8 @@ void Flags::AddGrpcServerFlags()
             "Whether to expose ExecStreamService on a gRPC server.", true);
     AddFlag(&Flags::enableFrontendProxyService_, "enable_frontend_proxy_service",
             "Whether to expose FrontendProxyService on a gRPC server.", true);
+    AddFlag(&Flags::advertiseFrontendProxyCreate_, "advertise_frontend_proxy_create",
+            "Whether this FunctionProxy advertises the faas.create capability.", true);
     AddFlag(&Flags::maxGrpcSize_, "max_grpc_size", "posix max grpc size", DEFAULT_MAX_GRPC_SIZE,
             NumCheck(MIN_MAX_GRPC_SIZE, MAX_MAX_GRPC_SIZE));
     AddFlag(&Flags::enableServerMode_, "enable_server_mode",

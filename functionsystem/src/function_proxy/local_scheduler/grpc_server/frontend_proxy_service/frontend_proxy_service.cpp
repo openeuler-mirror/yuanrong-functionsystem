@@ -419,58 +419,35 @@ bool ForwardFrontendEvents(
     return writeOK;
 }
 
-struct KillCleanupObservation {
-    FrontendKillCleanupSnapshot snapshot;
-    std::string outcome { "probe-not-configured" };
-};
-
-KillCleanupObservation ObserveKillCleanup(const FrontendProxyServiceParam &param, ::grpc::ServerContext *context,
-                                          const std::string &requestID, const std::string &instanceID,
-                                          bool killSucceeded)
+void ObserveKillCleanupAsync(const FrontendProxyServiceParam &param,
+                             const ::frontend_proxy::FrontendRequestContext &context,
+                             const std::string &instanceID)
 {
-    KillCleanupObservation observation;
-    observation.snapshot.pendingInvokeCount = frontend_call_result_registry::PendingCount(instanceID);
     if (!param.killCleanupProbe) {
-        return observation;
+        return;
     }
-
-    const auto started = std::chrono::steady_clock::now();
-    while (std::chrono::steady_clock::now() - started
-           < std::chrono::milliseconds(param.killCleanupTimeoutMs)) {
-        const auto elapsed = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - started).count());
-        if (elapsed >= param.killCleanupTimeoutMs) {
-            observation.outcome = "incomplete-timeout";
-            return observation;
-        }
-        bool cancelled = false;
-        auto snapshot = WaitFrontendResult(param.killCleanupProbe(requestID, instanceID), context,
-                                           param.killCleanupTimeoutMs - elapsed, cancelled);
-        if (!snapshot.IsSome()) {
-            observation.outcome = cancelled ? "cancelled" : "probe-timeout";
-            return observation;
-        }
-        observation.snapshot = snapshot.Get();
-        observation.snapshot.pendingInvokeCount = frontend_call_result_registry::PendingCount(instanceID);
-        if (!killSucceeded) {
-            observation.outcome = "kill-failed";
-            return observation;
-        }
-        if (observation.snapshot.IsComplete()) {
-            observation.outcome = "complete";
-            return observation;
-        }
-        const auto elapsedAfterProbe = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - started).count());
-        if (elapsedAfterProbe >= param.killCleanupTimeoutMs) {
-            observation.outcome = "incomplete-timeout";
-            return observation;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(
-            std::min(FRONTEND_WAIT_POLL_MS, param.killCleanupTimeoutMs - elapsedAfterProbe)));
-    }
-    observation.outcome = "incomplete-timeout";
-    return observation;
+    auto requestID = context.requestid();
+    auto nodeID = param.nodeID;
+    auto endpointAddress = param.endpointAddress;
+    param.killCleanupProbe(requestID, instanceID, param.killCleanupObservationDelayMs).OnComplete(
+        [context, requestID = std::move(requestID), instanceID, nodeID = std::move(nodeID),
+         endpointAddress = std::move(endpointAddress)](
+            const litebus::Future<FrontendKillCleanupSnapshot> &future) {
+            FrontendKillCleanupSnapshot snapshot;
+            std::string outcome = "probe-failed";
+            if (future.IsOK()) {
+                snapshot = future.Get();
+                snapshot.pendingInvokeCount = frontend_call_result_registry::PendingCount(instanceID);
+                outcome = snapshot.IsComplete() ? "complete" : "incomplete";
+            }
+            if (outcome != "complete") {
+                YRLOG_WARN("{}|frontend kill cleanup observation {} for instance({})", requestID, outcome,
+                           instanceID);
+            }
+            LogLifecycleEvent("kill", "cleanup-observed", context, nodeID, instanceID,
+                              outcome, false, "", outcome, endpointAddress, nodeID, 1,
+                              FrontendProxyService::lifecycleTransport, &snapshot);
+        });
 }
 
 litebus::Future<SharedStreamMsg> DispatchInvoke(const FrontendProxyServiceParam &param,
@@ -942,19 +919,20 @@ bool FrontendProxyService::ValidateKillRequest(const ::frontend_proxy::KillInsta
         const bool ownerUnknown = response.kill().code() == common::ERR_INSTANCE_NOT_FOUND && !routeStale;
         SetStatus(response.mutable_status(), response.kill().code(), response.kill().message(), routeStale,
                   routeStale ? "route-stale" : (ownerUnknown ? "owner-unknown" : ""));
-        KillCleanupObservation cleanup;
+        std::string cleanupOutcome = "not-applicable";
         if (request.kill().signal() == INSTANCE_SNAPSHOT_SIGNAL
             || request.kill().signal() == INSTANCE_SNAPSTART_SIGNAL) {
-            cleanup.outcome = "not-applicable";
+            cleanupOutcome = "not-applicable";
+        } else if (response.kill().code() == common::ERR_NONE && param_.killCleanupProbe) {
+            cleanupOutcome = "observation-scheduled";
+            ObserveKillCleanupAsync(param_, request.context(), request.kill().instanceid());
         } else {
-            cleanup = ObserveKillCleanup(param_, context, request.context().requestid(), request.kill().instanceid(),
-                                         response.kill().code() == common::ERR_NONE);
+            cleanupOutcome = response.kill().code() == common::ERR_NONE ? "probe-not-configured" : "kill-failed";
         }
         LogLifecycleEvent("kill", "terminal", request.context(), param_.nodeID, request.kill().instanceid(),
                           response.kill().code() == common::ERR_NONE ? "success" : "failed", routeStale,
-                          routeStale ? "route-stale" : (ownerUnknown ? "owner-unknown" : ""), cleanup.outcome,
-                          param_.endpointAddress, param_.nodeID, 1, FrontendProxyService::lifecycleTransport,
-                          &cleanup.snapshot);
+                          routeStale ? "route-stale" : (ownerUnknown ? "owner-unknown" : ""), cleanupOutcome,
+                          param_.endpointAddress, param_.nodeID);
         return ::grpc::Status::OK;
     }
     if (param_.enableKillDispatch) {

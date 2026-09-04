@@ -224,6 +224,9 @@ func mustStart(ctx context.Context, client runtimev1.SandboxServiceClient, opts 
 	}
 
 	fmt.Printf("容器已启动: id=%s\n", resp.GetId())
+	if resp.GetSandboxIp() != "" {
+		fmt.Printf("  Sandbox IP: %s\n", resp.GetSandboxIp())
+	}
 	return resp.GetId()
 }
 

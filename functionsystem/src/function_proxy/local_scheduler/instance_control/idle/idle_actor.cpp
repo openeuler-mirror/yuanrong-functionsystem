@@ -16,6 +16,9 @@
 
 #include "idle_actor.h"
 
+#include <cstdlib>
+#include <vector>
+
 #include "async/async.hpp"
 #include "async/asyncafter.hpp"
 #include "common/logs/logging.h"
@@ -40,7 +43,22 @@ bool IsSamePauseGateIdentity(const resources::InstanceInfo &left, const resource
         && left.runtimeaddress() == right.runtimeaddress()
         && left.instancestatus().code() == right.instancestatus().code();
 }
+
 constexpr int64_t SECONDS_TO_MILLISECONDS = 1000;
+
+int64_t PositiveEnvSeconds(const char *name, int64_t fallback)
+{
+    const char *raw = std::getenv(name);
+    if (raw == nullptr) {
+        return fallback;
+    }
+    try {
+        const auto value = std::stoll(raw);
+        return value > 0 ? value : fallback;
+    } catch (...) {
+        return fallback;
+    }
+}
 }  // namespace
 
 IdleActor::IdleActor(const std::string &name,
@@ -49,6 +67,9 @@ IdleActor::IdleActor(const std::string &name,
                      const litebus::AID &facadeAID)
     : BasisActor(name), nodeID_(nodeID), instanceControlView_(instanceControlView), facadeAID_(facadeAID)
 {
+    const char *enabled = std::getenv("YR_COMMAND_RECOVERY_ENABLED");
+    commandActivityEnabled_ = enabled != nullptr && std::string(enabled) != "0" && std::string(enabled) != "false";
+    commandActivityTimeoutSeconds_ = PositiveEnvSeconds("YR_COMMAND_ACTIVITY_TIMEOUT_SECS", 30);
 }
 
 void IdleActor::Init()
@@ -62,6 +83,11 @@ void IdleActor::Finalize()
     }
     idleTimers_.clear();
     pauseGatedInstances_.clear();
+    for (auto &[instanceID, timer] : commandActivityTimers_) {
+        (void)instanceID;
+        litebus::TimerTools::Cancel(timer);
+    }
+    commandActivityTimers_.clear();
 }
 
 void IdleActor::TrafficReport(const std::string &instanceID, const size_t &processingNum)
@@ -78,22 +104,74 @@ void IdleActor::TrafficReport(const std::string &instanceID, const size_t &proce
     }
 
     instanceTrafficIdle_[instanceID] = true;
-    if (pauseGatedInstances_.find(instanceID) != pauseGatedInstances_.end()) {
+    TryStartIdleTimer(instanceID);
+}
+
+void IdleActor::CommandActivityReport(const std::string &instanceID, const size_t &activeCommands)
+{
+    if (!commandActivityEnabled_ || instanceID.empty()) {
         return;
     }
-
-    // Only start idle timer if both traffic idle AND no active sessions
-    bool hasActiveSessions = false;
-    auto it = instanceActiveSessions_.find(instanceID);
-    if (it != instanceActiveSessions_.end()) {
-        hasActiveSessions = it->second;
+    const auto generation = ++commandActivityGenerations_[instanceID];
+    auto timer = commandActivityTimers_.find(instanceID);
+    if (timer != commandActivityTimers_.end()) {
+        litebus::TimerTools::Cancel(timer->second);
     }
-
-    if (!hasActiveSessions) {
-        StartIdleTimer(instanceID);
+    commandActivityTimers_[instanceID] = litebus::AsyncAfter(
+        commandActivityTimeoutSeconds_ * SECONDS_TO_MILLISECONDS, GetAID(),
+        &IdleActor::HandleCommandActivityTimeout, instanceID, generation);
+    instanceCommandCounts_[instanceID] = activeCommands;
+    if (activeCommands > 0) {
+        CancelIdleTimer(instanceID);
     } else {
-        YRLOG_DEBUG("instance({}) is idle but has active exec sessions, skip idle timer", instanceID);
+        TryStartIdleTimer(instanceID);
     }
+}
+
+void IdleActor::HandleCommandActivityTimeout(const std::string &instanceID, uint64_t generation)
+{
+    const auto current = commandActivityGenerations_.find(instanceID);
+    if (current == commandActivityGenerations_.end() || current->second != generation) {
+        return;
+    }
+    commandActivityTimers_.erase(instanceID);
+    instanceCommandCounts_.erase(instanceID);
+    CancelIdleTimer(instanceID);
+    YRLOG_WARN("instance({}) command activity lease expired; pausing idle eviction", instanceID);
+}
+
+void IdleActor::GatewayActivityReconcile(const GatewayActivityCounts &activeStreamCounts)
+{
+    instanceGatewayStreamCounts_ = activeStreamCounts;
+    gatewayActivityUnknown_ = false;
+
+    // Re-evaluate every instance whose traffic source is known. This is
+    // important when the first valid batch arrives after an outage: an
+    // instance may have become traffic-idle while timers were globally paused.
+    for (const auto &[instanceID, trafficIdle] : instanceTrafficIdle_) {
+        (void)trafficIdle;
+        const auto gatewayIt = instanceGatewayStreamCounts_.find(instanceID);
+        if (gatewayIt != instanceGatewayStreamCounts_.end() && gatewayIt->second > 0) {
+            CancelIdleTimer(instanceID);
+        } else {
+            TryStartIdleTimer(instanceID);
+        }
+    }
+}
+
+bool IdleActor::GatewayActivityUnavailable()
+{
+    gatewayActivityUnknown_ = true;
+    std::vector<std::string> instances;
+    instances.reserve(idleTimers_.size());
+    for (const auto &[instanceID, timer] : idleTimers_) {
+        (void)timer;
+        instances.emplace_back(instanceID);
+    }
+    for (const auto &instanceID : instances) {
+        CancelIdleTimer(instanceID);
+    }
+    return true;
 }
 
 void IdleActor::SessionCountDelta(const std::string &instanceID, int delta)
@@ -139,24 +217,7 @@ void IdleActor::SessionAlive(const std::string &instanceID, bool hasActiveSessio
         CancelIdleTimer(instanceID);
     } else {
         instanceActiveSessions_.erase(instanceID);
-        if (pauseGatedInstances_.find(instanceID) != pauseGatedInstances_.end()) {
-            return;
-        }
-        // When sessions become inactive, check traffic idle status before starting timer
-        bool trafficIdle = false;
-        auto trafficIt = instanceTrafficIdle_.find(instanceID);
-        if (trafficIt != instanceTrafficIdle_.end()) {
-            trafficIdle = trafficIt->second;
-        }
-        ASSERT_IF_NULL(instanceControlView_);
-        auto stateMachine = instanceControlView_->GetInstance(instanceID);
-        if (trafficIdle && stateMachine != nullptr) {
-            const auto &instanceInfo = stateMachine->GetInstanceInfo();
-            if (instanceInfo.functionproxyid() == nodeID_ &&
-                instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::RUNNING)) {
-                StartIdleTimer(instanceID);
-            }
-        }
+        TryStartIdleTimer(instanceID);
     }
 }
 
@@ -182,13 +243,39 @@ void IdleActor::OnInstanceRunning(const resources::InstanceInfo &identity)
         }
         pauseGatedInstances_.erase(gate);
     }
-    auto trafficIt = instanceTrafficIdle_.find(instanceID);
+    // A freshly RUNNING sandbox is idle until one of the independent busy
+    // sources says otherwise. The data-plane path bypasses FunctionProxy, so
+    // there may never have been an initial TrafficReport(0) to seed this map.
+    // Preserve an already-observed busy report that raced ahead of RUNNING.
+    instanceTrafficIdle_.try_emplace(instanceID, true);
+    TryStartIdleTimer(instanceID);
+}
+
+void IdleActor::TryStartIdleTimer(const std::string &instanceID)
+{
+    if (pauseGatedInstances_.find(instanceID) != pauseGatedInstances_.end()) {
+        return;
+    }
+    const auto trafficIt = instanceTrafficIdle_.find(instanceID);
     if (trafficIt == instanceTrafficIdle_.end() || !trafficIt->second) {
         return;
     }
-    auto sessionIt = instanceActiveSessions_.find(instanceID);
+    if (gatewayActivityUnknown_) {
+        YRLOG_INFO("instance({}) idle timeout cancelled because gateway activity is unknown", instanceID);
+        return;
+    }
+    if (commandActivityEnabled_) {
+        const auto commandIt = instanceCommandCounts_.find(instanceID);
+        if (commandIt == instanceCommandCounts_.end() || commandIt->second > 0) {
+            return;
+        }
+    }
+    const auto sessionIt = instanceActiveSessions_.find(instanceID);
     if (sessionIt != instanceActiveSessions_.end() && sessionIt->second) {
-        YRLOG_DEBUG("instance({}) is running and idle but has active exec sessions, skip idle timer", instanceID);
+        return;
+    }
+    const auto gatewayIt = instanceGatewayStreamCounts_.find(instanceID);
+    if (gatewayIt != instanceGatewayStreamCounts_.end() && gatewayIt->second > 0) {
         return;
     }
     StartIdleTimer(instanceID);
@@ -218,6 +305,22 @@ void IdleActor::StartIdleTimer(const std::string &instanceID)
     if (it != instanceActiveSessions_.end() && it->second) {
         YRLOG_INFO("skip starting idle timer for instance({}) due to active sessions", instanceID);
         return;
+    }
+    auto gatewayIt = instanceGatewayStreamCounts_.find(instanceID);
+    if (gatewayIt != instanceGatewayStreamCounts_.end() && gatewayIt->second > 0) {
+        YRLOG_INFO("skip starting idle timer for instance({}) due to active gateway streams", instanceID);
+        return;
+    }
+    if (gatewayActivityUnknown_) {
+        YRLOG_INFO("skip starting idle timer for instance({}) because gateway activity is unknown", instanceID);
+        return;
+    }
+    if (commandActivityEnabled_) {
+        const auto commandIt = instanceCommandCounts_.find(instanceID);
+        if (commandIt == instanceCommandCounts_.end() || commandIt->second > 0) {
+            YRLOG_INFO("skip starting idle timer for instance({}) due to unknown or active commands", instanceID);
+            return;
+        }
     }
 
     int64_t idleTimeout = GetIdleTimeout(instanceInfo);
@@ -268,12 +371,35 @@ void IdleActor::HandleIdleTimeout(const std::string &instanceID, uint64_t genera
         return;
     }
 
-    // Double-check: ensure no active sessions before requesting eviction
+    // Double-check every independent busy source before requesting eviction.
+    auto trafficIt = instanceTrafficIdle_.find(instanceID);
+    if (trafficIt == instanceTrafficIdle_.end() || !trafficIt->second) {
+        return;
+    }
     auto it = instanceActiveSessions_.find(instanceID);
     if (it != instanceActiveSessions_.end() && it->second) {
         YRLOG_INFO("{}|instance({}) idle timeout cancelled due to active sessions",
                    stateMachine->GetInstanceInfo().requestid(), instanceID);
         return;
+    }
+    auto gatewayIt = instanceGatewayStreamCounts_.find(instanceID);
+    if (gatewayIt != instanceGatewayStreamCounts_.end() && gatewayIt->second > 0) {
+        YRLOG_INFO("{}|instance({}) idle timeout cancelled due to active gateway streams",
+                   stateMachine->GetInstanceInfo().requestid(), instanceID);
+        return;
+    }
+    if (gatewayActivityUnknown_) {
+        YRLOG_INFO("{}|instance({}) idle timeout cancelled because gateway activity is unknown",
+                   stateMachine->GetInstanceInfo().requestid(), instanceID);
+        return;
+    }
+    if (commandActivityEnabled_) {
+        const auto commandIt = instanceCommandCounts_.find(instanceID);
+        if (commandIt == instanceCommandCounts_.end() || commandIt->second > 0) {
+            YRLOG_INFO("{}|instance({}) idle timeout cancelled due to unknown or active commands",
+                       stateMachine->GetInstanceInfo().requestid(), instanceID);
+            return;
+        }
     }
 
     const auto &instanceInfo = stateMachine->GetInstanceInfo();
@@ -326,13 +452,7 @@ Status IdleActor::SetPauseGated(const resources::InstanceInfo &identity, uint64_
         return Status(StatusCode::ERR_INSTANCE_INFO_INVALID, "idle pause gate token changed");
     }
     pauseGatedInstances_.erase(existing);
-    const auto trafficIt = instanceTrafficIdle_.find(instanceID);
-    const bool trafficIdle = trafficIt != instanceTrafficIdle_.end() && trafficIt->second;
-    const auto sessionIt = instanceActiveSessions_.find(instanceID);
-    const bool hasActiveSessions = sessionIt != instanceActiveSessions_.end() && sessionIt->second;
-    if (trafficIdle && !hasActiveSessions) {
-        StartIdleTimer(instanceID);
-    }
+    TryStartIdleTimer(instanceID);
     return Status::OK();
 }
 

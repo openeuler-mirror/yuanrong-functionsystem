@@ -124,6 +124,15 @@ void InstanceCtrl::BindFunctionAgentMgr(const std::shared_ptr<FunctionAgentMgr> 
     litebus::Async(aid_, &InstanceCtrlActor::BindFunctionAgentMgr, functionAgentMgr);
 }
 
+Status InstanceCtrl::SyncDataPlaneRoutes() const
+{
+    auto result = litebus::Async(aid_, &InstanceCtrlActor::SyncDataPlaneRoutes).Get(5000);
+    if (result.IsNone()) {
+        return Status(StatusCode::FAILED, "timed out synchronizing Node Proxy routes");
+    }
+    return result.Get();
+}
+
 std::unique_ptr<InstanceCtrl> InstanceCtrl::Create(const std::string &nodeID, const InstanceCtrlConfig &config)
 {
     nodeID_ = nodeID;
@@ -394,8 +403,14 @@ litebus::Future<KillResponse> InstanceCtrl::KillFrontend(const std::string &tena
 }
 
 litebus::Future<FrontendKillCleanupSnapshot> InstanceCtrl::ProbeFrontendKillCleanup(
-    const std::string &requestID, const std::string &instanceID)
+    const std::string &requestID, const std::string &instanceID, uint64_t delayMs)
 {
+    if (delayMs > 0) {
+        auto promise = std::make_shared<litebus::Promise<FrontendKillCleanupSnapshot>>();
+        (void)litebus::AsyncAfter(delayMs, aid_, &InstanceCtrlActor::ResolveFrontendKillCleanupProbe,
+                                  requestID, instanceID, promise);
+        return promise->GetFuture();
+    }
     return litebus::Async(aid_, &InstanceCtrlActor::ProbeFrontendKillCleanup, requestID, instanceID);
 }
 

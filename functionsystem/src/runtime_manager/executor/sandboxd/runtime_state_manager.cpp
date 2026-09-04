@@ -74,6 +74,12 @@ std::string RuntimeStateManager::GetSandboxID(const std::string &runtimeID) cons
     return it != sandboxes_.end() ? it->second.sandboxID : std::string{};
 }
 
+std::string RuntimeStateManager::GetSandboxIP(const std::string &runtimeID) const
+{
+    auto it = sandboxes_.find(runtimeID);
+    return it != sandboxes_.end() ? it->second.sandboxIP : std::string{};
+}
+
 std::string RuntimeStateManager::GetCheckpointID(const std::string &runtimeID) const
 {
     auto it = sandboxes_.find(runtimeID);
@@ -140,6 +146,16 @@ void RuntimeStateManager::UpdateSandboxID(const std::string &runtimeID, const st
         return;
     }
     it->second.sandboxID = sandboxID;
+}
+
+void RuntimeStateManager::UpdateNetworkEndpoint(const std::string &runtimeID, const std::string &sandboxIP)
+{
+    auto it = sandboxes_.find(runtimeID);
+    if (it == sandboxes_.end()) {
+        YRLOG_WARN("RuntimeStateManager::UpdateNetworkEndpoint runtimeID({}) not found", runtimeID);
+        return;
+    }
+    it->second.sandboxIP = sandboxIP;
 }
 
 void RuntimeStateManager::UpdateCheckpoint(const std::string &runtimeID, const std::string &checkpointID)

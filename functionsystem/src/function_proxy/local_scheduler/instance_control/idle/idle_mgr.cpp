@@ -47,6 +47,23 @@ void IdleMgr::TrafficReport(const std::string &instanceID, const size_t &process
     litebus::Async(idleActor_->GetAID(), &IdleActor::TrafficReport, instanceID, processingNum);
 }
 
+void IdleMgr::CommandActivityReport(const std::string &instanceID, const size_t &activeCommands)
+{
+    litebus::Async(idleActor_->GetAID(), &IdleActor::CommandActivityReport, instanceID, activeCommands);
+}
+
+void IdleMgr::GatewayActivityReconcile(const GatewayActivityCounts &activeStreamCounts)
+{
+    litebus::Async(idleActor_->GetAID(), &IdleActor::GatewayActivityReconcile, activeStreamCounts);
+}
+
+void IdleMgr::GatewayActivityUnavailable()
+{
+    // Startup readiness depends on UNKNOWN being visible before the activity
+    // service accepts reports, so wait for the actor transition to complete.
+    (void)litebus::Async(idleActor_->GetAID(), &IdleActor::GatewayActivityUnavailable).Get();
+}
+
 void IdleMgr::SessionCountDelta(const std::string &instanceID, int delta)
 {
     litebus::Async(idleActor_->GetAID(), &IdleActor::SessionCountDelta, instanceID, delta);

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +16,7 @@ import (
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
+	networktypes "github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 )
@@ -74,15 +77,10 @@ func (d *DockerRuntime) Create(ctx context.Context, cfg *CreateConfig) (string, 
 		log.Printf("[docker] using local image %s", imageName)
 	}
 
-	// Build command by joining command tokens into a shell command.
-	var shellCmd string
-	if len(cfg.Command) > 0 {
-		shellCmd = strings.Join(cfg.Command, " ")
-	}
-	var cmd []string
-	if shellCmd != "" {
-		cmd = []string{"/bin/sh", "-c", shellCmd}
-	}
+	// StartRequest.command is already a structured argv. Keep every token
+	// literal instead of rebuilding a shell command: Python -c snippets and
+	// user arguments may contain whitespace or shell metacharacters.
+	cmd := cloneCommand(cfg.Command)
 
 	// Build environment variables.
 	envList := make([]string, 0, len(cfg.Envs))
@@ -90,7 +88,7 @@ func (d *DockerRuntime) Create(ctx context.Context, cfg *CreateConfig) (string, 
 		envList = append(envList, k+"="+v)
 	}
 
-	labels := make(map[string]string, len(cfg.Labels)+runtimeLabelSlots)
+	labels := make(map[string]string, len(cfg.Labels)+runtimeLabelSlots+1)
 	for k, v := range cfg.Labels {
 		labels[k] = v
 	}
@@ -154,6 +152,75 @@ func (d *DockerRuntime) Create(ctx context.Context, cfg *CreateConfig) (string, 
 		"[docker] container started: id=%s, image=%s, network=%s",
 		resp.ID[:shortContainerIDLength], imageName, networkMode)
 	return resp.ID, nil
+}
+
+func cloneCommand(command []string) []string {
+	if len(command) == 0 {
+		return nil
+	}
+	return append([]string(nil), command...)
+}
+
+// ResolveEndpoint inspects the running container rather than deriving an
+// address from port bindings. The returned address is reachable only from the
+// node/container network and is therefore suitable for the node proxy's
+// final TCP connect.
+func (d *DockerRuntime) ResolveEndpoint(ctx context.Context, containerID string) (*NetworkEndpoint, error) {
+	inspect, err := d.client.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect container endpoint: %w", err)
+	}
+	if inspect.Config == nil {
+		return nil, fmt.Errorf("container inspect response has no config")
+	}
+	if inspect.NetworkSettings == nil {
+		return nil, fmt.Errorf("container inspect response has no network settings")
+	}
+	networkMode := ""
+	if inspect.HostConfig != nil {
+		networkMode = string(inspect.HostConfig.NetworkMode)
+	}
+	sandboxIP, err := selectNetworkIPAddress(networkMode, inspect.NetworkSettings.Networks)
+	if err != nil {
+		return nil, err
+	}
+	return &NetworkEndpoint{SandboxIP: sandboxIP}, nil
+}
+
+func selectNetworkIPAddress(networkMode string, networks map[string]*networktypes.EndpointSettings) (string, error) {
+	preferred := strings.TrimSpace(networkMode)
+	if preferred == "default" {
+		preferred = "bridge"
+	}
+	if endpoint, ok := networks[preferred]; ok {
+		if ip := normalizedEndpointIP(endpoint); ip != "" {
+			return ip, nil
+		}
+	}
+
+	names := make([]string, 0, len(networks))
+	for name := range networks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if ip := normalizedEndpointIP(networks[name]); ip != "" {
+			return ip, nil
+		}
+	}
+	return "", fmt.Errorf("container has no valid IP address in network mode %q", networkMode)
+}
+
+func normalizedEndpointIP(endpoint *networktypes.EndpointSettings) string {
+	if endpoint == nil {
+		return ""
+	}
+	for _, raw := range []string{endpoint.IPAddress, endpoint.GlobalIPv6Address} {
+		if parsed := net.ParseIP(strings.TrimSpace(raw)); parsed != nil {
+			return parsed.String()
+		}
+	}
+	return ""
 }
 
 func parsePortMappings(mappings []string) (nat.PortSet, nat.PortMap, error) {

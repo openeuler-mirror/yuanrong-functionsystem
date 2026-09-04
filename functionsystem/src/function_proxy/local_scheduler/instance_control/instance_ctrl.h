@@ -217,6 +217,8 @@ public:
         return instanceCtrlActor_->GetInstanceControlView();
     }
 
+    Status SyncDataPlaneRoutes() const;
+
     virtual litebus::Future<Status> RescheduleWithID(const std::string &instanceID);
 
     virtual litebus::Future<Status> RescheduleAfterJudgeRecoverable(const std::string &instanceID,
@@ -258,7 +260,7 @@ public:
     virtual litebus::Future<KillResponse> KillFrontend(const std::string &tenantID,
                                                        const std::shared_ptr<KillRequest> &killReq);
     virtual litebus::Future<FrontendKillCleanupSnapshot> ProbeFrontendKillCleanup(
-        const std::string &requestID, const std::string &instanceID);
+        const std::string &requestID, const std::string &instanceID, uint64_t delayMs = 0);
     virtual void RecordFrontendCreateFailure(const std::string &requestID, int32_t code,
                                              const std::string &message, const std::string &instanceID,
                                              const InstanceInfo &instance);

@@ -79,6 +79,7 @@ cc_library(
         "//functionsystem/src/common:service_json",
         "//functionsystem/src/common:rpc",
         "//functionsystem/src/common:common_flags",
+        "//functionsystem/src/common:datasystem_capability",
         "//functionsystem/src/common:resource_lock",
         "//functionsystem/src/common:lru",
     ],

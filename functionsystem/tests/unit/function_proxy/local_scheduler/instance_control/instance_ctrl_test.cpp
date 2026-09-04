@@ -2579,18 +2579,18 @@ TEST(FrontendKillEvidenceTest, OlderKillResultCannotOverwriteNewerRequestEvidenc
 {
     auto actor = std::make_shared<InstanceCtrlActor>("InstanceCtrlActor", "nodeID", instanceCtrlConfig);
     const std::string instanceID = "concurrent-kill-instance";
-    actor->frontendKillRuntimeEvidence_[instanceID] = { "newer-request", "terminating" };
+    actor->frontendKillRuntimeEvidence_[instanceID] = { "newer-request", "create-request", "terminating" };
     InstanceInfo olderKill;
     olderKill.set_instanceid(instanceID);
     olderKill.set_requestid("older-request");
     messages::KillInstanceResponse response;
     response.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
 
-    auto result = actor->RecordFrontendKillRuntimeResult(olderKill, response);
+    auto result = actor->RecordFrontendKillRuntimeResult(olderKill, "older-request", response);
 
     ASSERT_AWAIT_READY(result);
-    EXPECT_EQ(actor->frontendKillRuntimeEvidence_[instanceID].first, "newer-request");
-    EXPECT_EQ(actor->frontendKillRuntimeEvidence_[instanceID].second, "terminating");
+    EXPECT_EQ(actor->frontendKillRuntimeEvidence_[instanceID].killRequestID, "newer-request");
+    EXPECT_EQ(actor->frontendKillRuntimeEvidence_[instanceID].state, "terminating");
 }
 
 /**

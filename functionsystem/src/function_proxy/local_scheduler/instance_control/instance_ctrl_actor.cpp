@@ -16,6 +16,15 @@
 
 #include "instance_ctrl_actor.h"
 
+#include <limits>
+#include <optional>
+#include <cerrno>
+#include <cstring>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+
 #include <nlohmann/json.hpp>
 
 #include "async/async.hpp"
@@ -81,6 +90,98 @@ static const uint32_t MAX_LABEL_AFFINITY_COUNT = 10;
 static const uint32_t TENANT_ID_MAX_LENGTH = 128;
 static const std::string CREATE_CONFLICT_ARBITRATED_CONTENDER =
     "createConflictArbitratedContender";
+static constexpr uint32_t MAX_ROUTE_CONTROL_FRAME_SIZE = 64 * 1024;
+
+static bool WriteRouteControlBytes(int fd, const void *data, size_t size)
+{
+    const auto *bytes = static_cast<const uint8_t *>(data);
+    while (size > 0) {
+        auto written = send(fd, bytes, size, MSG_NOSIGNAL);
+        if (written <= 0) {
+            return false;
+        }
+        bytes += written;
+        size -= static_cast<size_t>(written);
+    }
+    return true;
+}
+
+static bool ReadRouteControlBytes(int fd, void *data, size_t size)
+{
+    auto *bytes = static_cast<uint8_t *>(data);
+    while (size > 0) {
+        auto received = recv(fd, bytes, size, 0);
+        if (received <= 0) {
+            return false;
+        }
+        bytes += received;
+        size -= static_cast<size_t>(received);
+    }
+    return true;
+}
+
+static Status SendRouteControlRequest(
+    const std::string &udsPath,
+    const data_plane_gateway_activity::DataPlaneGatewaySetRouteRequest &request,
+    data_plane_gateway_activity::DataPlaneGatewaySetRouteResponse &response)
+{
+    if (udsPath.empty() || udsPath.size() >= sizeof(sockaddr_un{}.sun_path)) {
+        return Status(StatusCode::ERR_PARAM_INVALID, "Node Proxy route control UDS path is invalid");
+    }
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) {
+        return Status(StatusCode::FAILED, fmt::format("create route control socket failed: {}", strerror(errno)));
+    }
+    auto closeFd = [&fd]() {
+        if (fd >= 0) {
+            close(fd);
+            fd = -1;
+        }
+    };
+    timeval timeout{ 2, 0 };
+    (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    (void)setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    (void)memcpy(address.sun_path, udsPath.c_str(), udsPath.size() + 1);
+    if (connect(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) != 0) {
+        auto message = fmt::format("connect route control socket failed: {}", strerror(errno));
+        closeFd();
+        return Status(StatusCode::FAILED, message);
+    }
+    std::string payload;
+    if (!request.SerializeToString(&payload) || payload.empty() || payload.size() > MAX_ROUTE_CONTROL_FRAME_SIZE) {
+        closeFd();
+        return Status(StatusCode::FAILED, "serialize route control request failed");
+    }
+    uint32_t size = htonl(static_cast<uint32_t>(payload.size()));
+    if (!WriteRouteControlBytes(fd, &size, sizeof(size))
+        || !WriteRouteControlBytes(fd, payload.data(), payload.size())) {
+        auto message = fmt::format("write route control request failed: {}", strerror(errno));
+        closeFd();
+        return Status(StatusCode::FAILED, message);
+    }
+    uint32_t responseSize = 0;
+    if (!ReadRouteControlBytes(fd, &responseSize, sizeof(responseSize))) {
+        auto message = fmt::format("read route control response failed: {}", strerror(errno));
+        closeFd();
+        return Status(StatusCode::FAILED, message);
+    }
+    responseSize = ntohl(responseSize);
+    if (responseSize > MAX_ROUTE_CONTROL_FRAME_SIZE) {
+        closeFd();
+        return Status(StatusCode::FAILED, "route control response is too large");
+    }
+    std::string responsePayload(responseSize, '\0');
+    if ((responseSize > 0 && !ReadRouteControlBytes(fd, responsePayload.data(), responsePayload.size()))
+        || !response.ParseFromString(responsePayload)) {
+        auto message = fmt::format("decode route control response failed: {}", strerror(errno));
+        closeFd();
+        return Status(StatusCode::FAILED, message);
+    }
+    closeFd();
+    return Status::OK();
+}
 
 static std::string GetCreateResultDstInstance(const InstanceInfo &instanceInfo, const std::string &requestID)
 {
@@ -129,6 +230,25 @@ static size_t ParseRrtActivityProcessingNum(const std::string &payload)
             return 0;
         }
         value = value * DECIMAL_BASE + static_cast<size_t>(c - '0');
+    }
+    return value;
+}
+
+static std::optional<size_t> ParseCommandActivityCount(const std::string &payload)
+{
+    if (payload.empty()) {
+        return std::nullopt;
+    }
+    size_t value = 0;
+    for (char c : payload) {
+        if (c < '0' || c > '9') {
+            return std::nullopt;
+        }
+        const auto digit = static_cast<size_t>(c - '0');
+        if (value > (std::numeric_limits<size_t>::max() - digit) / DECIMAL_BASE) {
+            return std::nullopt;
+        }
+        value = value * DECIMAL_BASE + digit;
     }
     return value;
 }
@@ -243,6 +363,28 @@ void InstanceCtrlActor::Init()
     Receive("CheckInstanceState", &InstanceCtrlActor::CheckInstanceState);
     Receive("CheckInstanceStateResponse", &InstanceCtrlActor::CheckInstanceStateResponse);
     Receive("TenantQuotaExceeded", &InstanceCtrlActor::OnTenantQuotaExceededMsg);
+}
+
+Status InstanceCtrlActor::SyncDataPlaneRoutes()
+{
+    if (config_.nodeProxyRouteControlUds.empty() || instanceControlView_ == nullptr) {
+        return config_.nodeProxyRouteControlUds.empty()
+            ? Status::OK()
+            : Status(StatusCode::FAILED, "Node Proxy route control client is unavailable");
+    }
+    for (const auto &[instanceID, stateMachine] : instanceControlView_->GetInstances()) {
+        (void)instanceID;
+        if (stateMachine == nullptr || stateMachine->GetInstanceState() != InstanceState::RUNNING) {
+            continue;
+        }
+        auto status = SetDataPlaneRoute(
+            stateMachine->GetInstanceInfo(),
+            data_plane_gateway_activity::DATA_PLANE_GATEWAY_ROUTE_STATE_ACTIVE);
+        if (status.IsError()) {
+            return status;
+        }
+    }
+    return Status::OK();
 }
 
 void InstanceCtrlActor::OnTenantQuotaExceededMsg(const litebus::AID &from, std::string &&name, std::string &&msg)
@@ -742,9 +884,20 @@ litebus::Future<KillResponse> InstanceCtrlActor::HandleKillImpl(const std::strin
             // IdleMgr timer; processingNum>0 cancels it. This path does not
             // run the kill flow.
             // See docs/features/sandbox-rrt-idle-report.md.
-            const size_t processingNum = ParseRrtActivityProcessingNum(killReq->payload());
             if (idleMgr_ != nullptr) {
-                idleMgr_->TrafficReport(killReq->instanceid(), processingNum);
+                constexpr const char *COMMAND_PREFIX = "command:";
+                if (killReq->payload().rfind(COMMAND_PREFIX, 0) == 0) {
+                    const auto count = ParseCommandActivityCount(
+                        killReq->payload().substr(std::char_traits<char>::length(COMMAND_PREFIX)));
+                    if (count.has_value()) {
+                        idleMgr_->CommandActivityReport(killReq->instanceid(), count.value());
+                    } else {
+                        YRLOG_WARN("ignore invalid command activity snapshot for instance({})", killReq->instanceid());
+                    }
+                } else {
+                    idleMgr_->TrafficReport(
+                        killReq->instanceid(), ParseRrtActivityProcessingNum(killReq->payload()));
+                }
             }
             KillResponse activityRsp;
             activityRsp.set_code(common::ErrorCode::ERR_NONE);
@@ -1186,11 +1339,18 @@ litebus::Future<KillResponse> InstanceCtrlActor::KillFrontend(const std::string 
         return GenKillResponse(common::ERR_INSTANCE_NOT_FOUND,
                                "frontend proxy is not the owning proxy for this instance");
     }
-    if (tenantID.empty() || tenantID != stateMachine->GetInstanceInfo().tenantid()) {
+    if (tenantID.empty()) {
         return GenKillResponse(common::ERR_AUTHORIZE_FAILED,
                                "frontend proxy kill tenant does not match instance tenant");
     }
-    frontendKillRuntimeEvidence_[killReq->instanceid()] = { killReq->requestid(), "not-started" };
+    const auto instanceInfo = stateMachine->GetInstanceInfo();
+    if (tenantID != instanceInfo.tenantid()) {
+        return GenKillResponse(common::ERR_AUTHORIZE_FAILED,
+                               "frontend proxy kill tenant does not match instance tenant");
+    }
+    frontendKillRuntimeEvidence_[killReq->instanceid()] = {
+        killReq->requestid(), instanceInfo.requestid(), "not-started"
+    };
     (void)litebus::AsyncAfter(FRONTEND_KILL_EVIDENCE_TTL_MS, GetAID(),
                               &InstanceCtrlActor::ExpireFrontendKillRuntimeEvidence, killReq->instanceid(),
                               killReq->requestid());
@@ -1198,7 +1358,7 @@ litebus::Future<KillResponse> InstanceCtrlActor::KillFrontend(const std::string 
 }
 
 FrontendKillCleanupSnapshot InstanceCtrlActor::ProbeFrontendKillCleanup(const std::string &requestID,
-                                                                        const std::string &instanceID)
+                                                                         const std::string &instanceID)
 {
     FrontendKillCleanupSnapshot snapshot;
     snapshot.requestTicketKnown = true;
@@ -1213,8 +1373,9 @@ FrontendKillCleanupSnapshot InstanceCtrlActor::ProbeFrontendKillCleanup(const st
                                             == instanceReadyCallResultCallbackByInstanceID_.end();
 
     auto runtimeEvidence = frontendKillRuntimeEvidence_.find(instanceID);
-    if (runtimeEvidence != frontendKillRuntimeEvidence_.end() && runtimeEvidence->second.first == requestID) {
-        snapshot.runtimeState = runtimeEvidence->second.second;
+    if (runtimeEvidence != frontendKillRuntimeEvidence_.end()
+        && runtimeEvidence->second.killRequestID == requestID) {
+        snapshot.runtimeState = runtimeEvidence->second.state;
     }
     auto stateMachine = instanceControlView_ == nullptr ? nullptr : instanceControlView_->GetInstance(instanceID);
     if (stateMachine == nullptr) {
@@ -1242,11 +1403,18 @@ FrontendKillCleanupSnapshot InstanceCtrlActor::ProbeFrontendKillCleanup(const st
     return snapshot;
 }
 
+void InstanceCtrlActor::ResolveFrontendKillCleanupProbe(
+    const std::string &requestID, const std::string &instanceID,
+    const std::shared_ptr<litebus::Promise<FrontendKillCleanupSnapshot>> &promise)
+{
+    promise->SetValue(ProbeFrontendKillCleanup(requestID, instanceID));
+}
+
 void InstanceCtrlActor::ExpireFrontendKillRuntimeEvidence(const std::string &instanceID,
                                                           const std::string &requestID)
 {
     auto iter = frontendKillRuntimeEvidence_.find(instanceID);
-    if (iter != frontendKillRuntimeEvidence_.end() && iter->second.first == requestID) {
+    if (iter != frontendKillRuntimeEvidence_.end() && iter->second.killRequestID == requestID) {
         (void)frontendKillRuntimeEvidence_.erase(iter);
     }
 }
@@ -1877,6 +2045,41 @@ litebus::Future<Status> InstanceCtrlActor::ShutDownInstance(const InstanceInfo &
         });
 }
 
+Status InstanceCtrlActor::SetDataPlaneRoute(
+    const InstanceInfo &instanceInfo,
+    data_plane_gateway_activity::DataPlaneGatewayRouteState state)
+{
+    if (instanceInfo.nodeproxyaddress().empty() || instanceInfo.sandboxid().empty()) {
+        return Status::OK();
+    }
+    if (config_.nodeProxyRouteControlUds.empty()) {
+        return Status(StatusCode::FAILED, "Node Proxy route control client is unavailable");
+    }
+    if (instanceInfo.instanceid().empty()) {
+        return Status(StatusCode::ERR_PARAM_INVALID, "Node Proxy route identity is incomplete");
+    }
+    if (state == data_plane_gateway_activity::DATA_PLANE_GATEWAY_ROUTE_STATE_ACTIVE
+        && instanceInfo.sandboxip().empty()) {
+        return Status(StatusCode::ERR_PARAM_INVALID, "Node Proxy sandbox IP is empty");
+    }
+
+    data_plane_gateway_activity::DataPlaneGatewaySetRouteRequest request;
+    request.set_instance_id(instanceInfo.instanceid());
+    request.set_workload_id(instanceInfo.sandboxid());
+    request.set_sandbox_ip(instanceInfo.sandboxip());
+    request.set_state(state);
+    data_plane_gateway_activity::DataPlaneGatewaySetRouteResponse response;
+    auto routeStatus = SendRouteControlRequest(config_.nodeProxyRouteControlUds, request, response);
+    if (routeStatus.IsError()) {
+        return Status(StatusCode::FAILED, "Node Proxy route control failed: " + routeStatus.RawMessage());
+    }
+    if (response.code() != 0) {
+        return Status(StatusCode::FAILED,
+                      response.message().empty() ? "Node Proxy rejected route control" : response.message());
+    }
+    return Status::OK();
+}
+
 litebus::Future<Status> InstanceCtrlActor::KillRuntime(const InstanceInfo &instanceInfo, bool isRecovering)
 {
     return KillRuntimeWithSnapshotCleanup(instanceInfo, isRecovering, false);
@@ -1890,6 +2093,11 @@ litebus::Future<Status> InstanceCtrlActor::KillRuntimeForInstanceDelete(const In
 litebus::Future<Status> InstanceCtrlActor::KillRuntimeWithSnapshotCleanup(
     const InstanceInfo &instanceInfo, bool isRecovering, bool deleteInstanceSnapshots)
 {
+    auto routeStatus = SetDataPlaneRoute(
+        instanceInfo, data_plane_gateway_activity::DATA_PLANE_GATEWAY_ROUTE_STATE_RETIRED);
+    if (routeStatus.IsError()) {
+        return litebus::Future<Status>(routeStatus);
+    }
     // stop wait for update status when kill runtime
     auto iter = instanceStatusPromises_.find(instanceInfo.instanceid());
     if (iter != instanceStatusPromises_.end()) {
@@ -1897,28 +2105,35 @@ litebus::Future<Status> InstanceCtrlActor::KillRuntimeWithSnapshotCleanup(
         (void)instanceStatusPromises_.erase(instanceInfo.instanceid());
     }
 
+    std::string frontendKillRequestID;
     auto evidence = frontendKillRuntimeEvidence_.find(instanceInfo.instanceid());
-    if (evidence != frontendKillRuntimeEvidence_.end() && evidence->second.first == instanceInfo.requestid()) {
-        evidence->second.second = "terminating";
+    if (evidence != frontendKillRuntimeEvidence_.end()
+        && evidence->second.instanceRequestID == instanceInfo.requestid()) {
+        evidence->second.state = "terminating";
+        frontendKillRequestID = evidence->second.killRequestID;
     }
     return SendKillRequestToAgent(instanceInfo, isRecovering, false, deleteInstanceSnapshots)
-        .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::RecordFrontendKillRuntimeResult, instanceInfo, _1));
+        .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::RecordFrontendKillRuntimeResult, instanceInfo,
+                             frontendKillRequestID, _1));
 }
 
 litebus::Future<Status> InstanceCtrlActor::RecordFrontendKillRuntimeResult(
-    const InstanceInfo &instanceInfo, const messages::KillInstanceResponse &response)
+    const InstanceInfo &instanceInfo, const std::string &frontendKillRequestID,
+    const messages::KillInstanceResponse &response)
 {
     auto evidence = frontendKillRuntimeEvidence_.find(instanceInfo.instanceid());
     if (response.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
         YRLOG_WARN("{}|kill instance({}), errCode {}", instanceInfo.requestid(), instanceInfo.instanceid(),
                    response.code());
-        if (evidence != frontendKillRuntimeEvidence_.end() && evidence->second.first == instanceInfo.requestid()) {
-            evidence->second.second = "failed-" + std::to_string(response.code());
+        if (!frontendKillRequestID.empty() && evidence != frontendKillRuntimeEvidence_.end()
+            && evidence->second.killRequestID == frontendKillRequestID) {
+            evidence->second.state = "failed-" + std::to_string(response.code());
         }
     } else {
         YRLOG_INFO("{}|succeed to kill instance({})", instanceInfo.requestid(), instanceInfo.instanceid());
-        if (evidence != frontendKillRuntimeEvidence_.end() && evidence->second.first == instanceInfo.requestid()) {
-            evidence->second.second = "terminated";
+        if (!frontendKillRequestID.empty() && evidence != frontendKillRuntimeEvidence_.end()
+            && evidence->second.killRequestID == frontendKillRequestID) {
+            evidence->second.state = "terminated";
         }
     }
     // Preserve legacy kill response semantics; the cleanup snapshot reports the
@@ -3509,11 +3724,19 @@ litebus::Future<Status> InstanceCtrlActor::UpdateInstance(const DeployInstanceRe
     (*request->mutable_instance()->mutable_extensions())[PID] = std::to_string(response.pid());
     request->mutable_instance()->set_containerid(response.containerid());
     request->mutable_instance()->set_containerip(response.containerip());
+    request->mutable_instance()->set_sandboxid(response.sandboxid());
+    request->mutable_instance()->set_sandboxip(response.sandboxip());
     if (!response.portmappings().empty()) {
         (*request->mutable_instance()->mutable_extensions())[PORT_FORWARD_KEY] = response.portmappings();
     }
     // Set proxy gRPC address
     request->mutable_instance()->set_proxygrpcaddress(config_.proxyGrpcAddress);
+    request->mutable_instance()->set_nodeproxyaddress(config_.nodeProxyAddress);
+    auto routeStatus = SetDataPlaneRoute(
+        request->instance(), data_plane_gateway_activity::DATA_PLANE_GATEWAY_ROUTE_STATE_ACTIVE);
+    if (routeStatus.IsError()) {
+        return routeStatus;
+    }
     // Port mappings are stored in extensions["portForward"] as JSON string
     // This will be parsed in RegisterTraefikRoute when registering to Traefik
     if (!response.portmappings().empty() && traefikRegistry_) {

@@ -19,6 +19,7 @@ if [ -n "${BASE_DIR}" ]; then
 fi
 FUNCTION_SYSTEM_DIR=$(readlink -m "${FUNCTION_SYSTEM_DEPLOY_DIR}/..")
 DATA_SYSTEM_DIR=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../datasystem")
+DATA_PLANE_GATEWAY_DIR=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../data_plane")
 # todo(lwy_robb): for sandbox, the start up script path should be assigned by rootfs
 INSTALLED_RUNTIME=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../runtime")
 if [ -z "$RUNTIME_HOME_DIR" ]; then
@@ -212,6 +213,7 @@ function install_function_proxy() {
     --cache_storage_host="${IP_ADDRESS}" --cache_storage_port="${DS_WORKER_PORT}" \
     --enable_print_resource_view="${ENABLE_PRINT_RESOURCE_VIEW}" \
     --enable_server_mode="true" \
+    --advertise_frontend_proxy_create="${ADVERTISE_FRONTEND_PROXY_CREATE:-true}" \
     --schedule_plugins="${LOCAL_SCHEDULE_PLUGINS}" \
     --max_priority="${MAX_PRIORITY}" --enable_preemption="${ENABLE_PREEMPTION}" \
     --min_instance_memory_size=${MIN_INSTANCE_MEMORY_SIZE} --min_instance_cpu_size=${MIN_INSTANCE_CPU_SIZE} \
@@ -344,6 +346,113 @@ function install_collector() {
     log_info "succeed to start collector process, port=${COLLECTOR_PORT} pid=${DASHBOARD_PID}"
     return 0
   fi
+}
+
+function wait_rust_gateway_ready() {
+  local pid="$1"
+  local bind="$2"
+  local component="$3"
+  local host="${bind%:*}"
+  local port="${bind##*:}"
+  [ "${host}" = "0.0.0.0" ] && host="127.0.0.1"
+  local retry=0
+  while [ ${retry} -lt 30 ]; do
+    if ! kill -0 "${pid}" 2>/dev/null; then
+      log_error "${component} exited before becoming ready"
+      return 1
+    fi
+    if curl -fsS --max-time 1 "http://${host}:${port}/readyz" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+    retry=$((retry + 1))
+  done
+  log_error "${component} readiness timed out at ${bind}"
+  kill "${pid}" 2>/dev/null || true
+  return 1
+}
+
+function install_node_proxy() {
+  local bin="${DATA_PLANE_GATEWAY_DIR}/bin/yr-node-proxy"
+  if [ ! -x "${bin}" ]; then
+    log_error "Node Proxy binary is missing or not executable: ${bin}"
+    return 1
+  fi
+  mkdir -p "${NODE_PROXY_ACTIVITY_UDS_DIR}"
+  mkdir -p "${DATA_PLANE_LOG_DIR}"
+  log_info "start Node Proxy, bind=${NODE_PROXY_BIND}, advertise=${NODE_PROXY_ADVERTISE_ADDRESS}..."
+  YR_DATA_PLANE_NODE_PROXY_BIND="${NODE_PROXY_BIND}" \
+  YR_DATA_PLANE_NODE_PROXY_ADVERTISE_ADDRESS="${NODE_PROXY_ADVERTISE_ADDRESS}" \
+  YR_DATA_PLANE_NODE_PROXY_HEALTH_BIND="${NODE_PROXY_HEALTH_BIND}" \
+  YR_DATA_PLANE_ALLOWED_TARGET_CIDRS="${NODE_PROXY_ALLOWED_TARGET_CIDRS}" \
+  YR_DATA_PLANE_ALLOWED_EDGE_CIDRS="${NODE_PROXY_ALLOWED_EDGE_CIDRS}" \
+  YR_DATA_PLANE_NODE_PROXY_ALLOW_ANY_EDGE="${NODE_PROXY_ALLOW_ANY_EDGE}" \
+  YR_DATA_PLANE_EDGE_FRONTEND_NODE_SECURITY_MODE="${NODE_PROXY_SECURITY_MODE}" \
+  YR_DATA_PLANE_NODE_PROXY_TLS_CERT="${NODE_PROXY_TLS_CERT}" \
+  YR_DATA_PLANE_NODE_PROXY_TLS_KEY="${NODE_PROXY_TLS_KEY}" \
+  YR_DATA_PLANE_NODE_PROXY_MTLS_CLIENT_CA="${NODE_PROXY_MTLS_CLIENT_CA}" \
+  YR_DATA_PLANE_NODE_PROXY_ACTIVITY_UDS_DIR="${NODE_PROXY_ACTIVITY_UDS_DIR}" \
+  YR_DATA_PLANE_NODE_PROXY_ACTIVITY_INTERVAL_SEC="${NODE_PROXY_ACTIVITY_INTERVAL_SEC:-30}" \
+  YR_DATA_PLANE_NODE_PROXY_MAX_STREAMS="${NODE_PROXY_MAX_STREAMS:-0}" \
+  YR_DATA_PLANE_LOG_DIR="${DATA_PLANE_LOG_DIR}" \
+  YR_DATA_PLANE_LOG_MAX_SIZE_MB="${DATA_PLANE_LOG_MAX_SIZE_MB}" \
+  YR_DATA_PLANE_LOG_MAX_FILES="${DATA_PLANE_LOG_MAX_FILES}" \
+  YR_DATA_PLANE_LOG_STDOUT="${DATA_PLANE_LOG_STDOUT}" \
+  RUST_LOG="${NODE_PROXY_LOG_LEVEL:-info}" \
+    "${bin}" >>"${FS_LOG_PATH}/${NODE_ID}-node-proxy${STD_LOG_SUFFIX}" 2>&1 &
+  NODE_PROXY_PID=$!
+  wait_rust_gateway_ready "${NODE_PROXY_PID}" "${NODE_PROXY_HEALTH_BIND}" "Node Proxy"
+}
+
+function install_edge_frontend() {
+  local bin="${DATA_PLANE_GATEWAY_DIR}/bin/yr-edge-frontend"
+  if [ ! -x "${bin}" ]; then
+    log_error "Edge Frontend binary is missing or not executable: ${bin}"
+    return 1
+  fi
+  mkdir -p "${DATA_PLANE_LOG_DIR}"
+  local etcd_tls_ca=""
+  local etcd_tls_cert=""
+  local etcd_tls_key=""
+  if [ "${ETCD_AUTH_TYPE}" = "TLS" ]; then
+    etcd_tls_ca="${ETCD_SSL_BASE_PATH}/${ETCD_CA_FILE}"
+    etcd_tls_cert="${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_CERT_FILE}"
+    etcd_tls_key="${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_KEY_FILE}"
+  fi
+  log_info "start Edge Frontend, tls=${EDGE_FRONTEND_TLS_BIND}, plain=${EDGE_FRONTEND_PLAIN_BIND}, frontend=${EDGE_FRONTEND_CONTROL_PLANE_ADDRESS}..."
+  YR_DATA_PLANE_EDGE_FRONTEND_ETCD_ENDPOINTS="${ETCD_ENDPOINTS_ADDR}" \
+  YR_DATA_PLANE_EDGE_FRONTEND_ETCD_TLS_CA="${etcd_tls_ca}" \
+  YR_DATA_PLANE_EDGE_FRONTEND_ETCD_TLS_CERT="${etcd_tls_cert}" \
+  YR_DATA_PLANE_EDGE_FRONTEND_ETCD_TLS_KEY="${etcd_tls_key}" \
+  YR_DATA_PLANE_EDGE_FRONTEND_TLS_BIND="${EDGE_FRONTEND_TLS_BIND}" \
+  YR_DATA_PLANE_EDGE_FRONTEND_PLAIN_BIND="${EDGE_FRONTEND_PLAIN_BIND}" \
+  YR_DATA_PLANE_EDGE_FRONTEND_HEALTH_BIND="${EDGE_FRONTEND_HEALTH_BIND}" \
+  YR_DATA_PLANE_EDGE_FRONTEND_CONTROL_PLANE_ADDRESS="${EDGE_FRONTEND_CONTROL_PLANE_ADDRESS}" \
+  YR_DATA_PLANE_EDGE_FRONTEND_CONTROL_PLANE_ROUTES="${EDGE_FRONTEND_CONTROL_PLANE_ROUTES}" \
+  YR_DATA_PLANE_EDGE_FRONTEND_TLS_CERT="${EDGE_FRONTEND_TLS_CERT}" \
+  YR_DATA_PLANE_EDGE_FRONTEND_TLS_KEY="${EDGE_FRONTEND_TLS_KEY}" \
+  YR_DATA_PLANE_EDGE_FRONTEND_VALIDATE_IAM="${EDGE_FRONTEND_VALIDATE_IAM}" \
+  YR_DATA_PLANE_EDGE_FRONTEND_IAM_ADDRESS="${EDGE_FRONTEND_IAM_ADDRESS}" \
+  YR_DATA_PLANE_EDGE_FRONTEND_ALLOWED_CLIENT_CIDRS="${EDGE_FRONTEND_ALLOWED_CLIENT_CIDRS}" \
+  YR_DATA_PLANE_EDGE_FRONTEND_ALLOW_ANY_CLIENT="${EDGE_FRONTEND_ALLOW_ANY_CLIENT}" \
+  YR_DATA_PLANE_EDGE_FRONTEND_NODE_SECURITY_MODE="${NODE_PROXY_SECURITY_MODE}" \
+  YR_DATA_PLANE_EDGE_FRONTEND_NODE_TLS_CA="${EDGE_FRONTEND_NODE_TLS_CA}" \
+  YR_DATA_PLANE_EDGE_FRONTEND_NODE_TLS_SERVER_NAME="${EDGE_FRONTEND_NODE_TLS_SERVER_NAME}" \
+  YR_DATA_PLANE_EDGE_FRONTEND_NODE_TLS_CLIENT_CERT="${EDGE_FRONTEND_NODE_TLS_CLIENT_CERT}" \
+  YR_DATA_PLANE_EDGE_FRONTEND_NODE_TLS_CLIENT_KEY="${EDGE_FRONTEND_NODE_TLS_CLIENT_KEY}" \
+  YR_DATA_PLANE_LOG_DIR="${DATA_PLANE_LOG_DIR}" \
+  YR_DATA_PLANE_LOG_MAX_SIZE_MB="${DATA_PLANE_LOG_MAX_SIZE_MB}" \
+  YR_DATA_PLANE_LOG_MAX_FILES="${DATA_PLANE_LOG_MAX_FILES}" \
+  YR_DATA_PLANE_LOG_STDOUT="${DATA_PLANE_LOG_STDOUT}" \
+  YR_DATA_PLANE_EDGE_FRONTEND_ACCESS_LOG_ENABLED="${EDGE_FRONTEND_ACCESS_LOG_ENABLED}" \
+  YR_COMMAND_WATCH_MAX_SUBSCRIPTIONS_PER_CONNECTION="${COMMAND_WATCH_MAX_SUBSCRIPTIONS}" \
+  YR_COMMAND_WATCH_QUEUE_CAPACITY="${COMMAND_WATCH_QUEUE_CAPACITY}" \
+  YR_COMMAND_WATCH_MAX_FRAME_BYTES="${COMMAND_WATCH_MAX_FRAME_BYTES}" \
+  YR_COMMAND_WATCH_PING_INTERVAL_SECS="${COMMAND_WATCH_PING_INTERVAL_SECS}" \
+  RUST_LOG="${EDGE_FRONTEND_LOG_LEVEL:-info}" \
+    "${bin}" >>"${FS_LOG_PATH}/${NODE_ID}-edge-frontend${STD_LOG_SUFFIX}" 2>&1 &
+  EDGE_FRONTEND_PID=$!
+  wait_rust_gateway_ready "${EDGE_FRONTEND_PID}" "${EDGE_FRONTEND_HEALTH_BIND}" "Edge Frontend"
 }
 
 function install_faas_frontend() {
@@ -487,6 +596,15 @@ function install_faas_frontend() {
   YR_FRONTEND_SSH_AUTHORIZED_KEYS="${FRONTEND_SSH_AUTHORIZED_KEYS}" \
   YR_FRONTEND_SSH_BACKEND_KEY="${FRONTEND_SSH_BACKEND_KEY}" \
   YR_FRONTEND_SSH_MAX_CONNECTIONS="${FRONTEND_SSH_MAX_CONNECTIONS:-1024}" \
+  YR_RRT_COMMAND_RESULT_TTL_SECS="${RRT_COMMAND_RESULT_TTL_SECS}" \
+  YR_RRT_COMMAND_STDOUT_LIMIT_BYTES="${RRT_COMMAND_STDOUT_LIMIT_BYTES}" \
+  YR_RRT_COMMAND_STDERR_LIMIT_BYTES="${RRT_COMMAND_STDERR_LIMIT_BYTES}" \
+  YR_RRT_COMMAND_REGISTRY_MAX_RECORDS="${RRT_COMMAND_REGISTRY_MAX_RECORDS}" \
+  YR_RRT_COMMAND_REGISTRY_MAX_BYTES="${RRT_COMMAND_REGISTRY_MAX_BYTES}" \
+  YR_RRT_COMMAND_REGISTRY_MEMORY_HIGH_WATERMARK_BYTES="${RRT_COMMAND_REGISTRY_MEMORY_HIGH_WATERMARK_BYTES}" \
+  YR_RRT_COMMAND_ACTIVITY_HEARTBEAT_SECS="${RRT_COMMAND_ACTIVITY_HEARTBEAT_SECS}" \
+  YR_COMMAND_WATCH_MAX_SUBSCRIPTIONS_PER_CONNECTION="${COMMAND_WATCH_MAX_SUBSCRIPTIONS}" \
+  YR_COMMAND_WATCH_MAX_FRAME_BYTES="${COMMAND_WATCH_MAX_FRAME_BYTES}" \
   TRACE_CONFIG="${TRACE_CONFIG}" \
   ${GO_RUNTIME_BIN}/goruntime \
   -jobId=${NODE_ID} \
@@ -1001,6 +1119,12 @@ function install_function_system() {
     ;;
   iam_server)
     install_iam_server
+    ;;
+  node_proxy)
+    install_node_proxy
+    ;;
+  edge_frontend)
+    install_edge_frontend
     ;;
   *)
     log_warning >&2 "Unknown component $1"

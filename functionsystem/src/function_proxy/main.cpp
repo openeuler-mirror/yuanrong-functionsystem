@@ -257,7 +257,10 @@ ProxyServiceMeta BuildProxyServiceMeta(const function_proxy::Flags &flags)
         auto endpoint = ResolveComponentGrpcEndpoint(flags.GetAddress(), flags.GetIP(), flags.GetGrpcListenPort(),
                                                      flags.GetComponentGrpcPort());
         proxyService.grpcAddress = endpoint.Address();
-        proxyService.capabilities = { "faas.create", "faas.invoke", "faas.kill" };
+        proxyService.capabilities = { "faas.invoke", "faas.kill" };
+        if (flags.GetAdvertiseFrontendProxyCreate()) {
+            proxyService.capabilities.emplace_back("faas.create");
+        }
     }
     if (flags.GetEnableTcpTunnel()) {
         proxyService.tcpTunnelAddress = flags.GetIP() + ":" + flags.GetTcpTunnelPort();

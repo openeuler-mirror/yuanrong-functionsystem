@@ -649,7 +649,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartInstance
         return *existing;
     }
 
-    stateManager_.Register(SandboxInfo{runtimeID, {}, {}, {}, info});
+    stateManager_.Register(SandboxInfo{runtimeID, {}, {}, {}, info, {}});
     stateManager_.ClearPendingDelete(runtimeID);
     sandboxLifecycleStates_.erase(runtimeID);
 
@@ -742,6 +742,13 @@ Status SandboxdExecutor::BuildStartCommandArgs(const std::shared_ptr<messages::S
 
     auto [buildStatus, builtCmdArgs] = cmdBuilder_.BuildArgs(ResolveRuntimeLanguage(info), port, *request);
     if (buildStatus.IsOk()) {
+        if (ResolveRuntimeLanguage(info).find(PYTHON_LANGUAGE) != std::string::npos) {
+            const std::string yrServerPath =
+                "import os,sys;"
+                "p=os.path.join(os.path.dirname(__import__('yr').__file__),'main','yr_runtime_main.py');"
+                "os.execv(sys.executable,[sys.executable,'-u',p]+sys.argv[1:])";
+            builtCmdArgs.args.insert(builtCmdArgs.args.begin(), {"-u", "-c", yrServerPath});
+        }
         *cmdArgs = std::move(builtCmdArgs);
         return Status::OK();
     }
@@ -1112,6 +1119,12 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnRestoreDone
         }
     }
     stateManager_.UpdateSandboxID(info.runtimeid(), sandboxID);
+    // A successful Restore returns the same endpoint facts as Start. During
+    // exact-running reconciliation List does not expose those facts, so keep
+    // the endpoint already held by RuntimeStateManager instead of clearing it.
+    if (!result.sandboxIP.empty()) {
+        stateManager_.UpdateNetworkEndpoint(info.runtimeid(), result.sandboxIP);
+    }
     guard->Commit();
     sandboxStatsPollingRuntimes_.insert(info.runtimeid());
     CollectSandboxStats(info.runtimeid(), sandboxID);
@@ -1315,6 +1328,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnStartDone(
 
     const std::string sandboxID = response.id();
     stateManager_.UpdateSandboxID(runtimeID, sandboxID);
+    stateManager_.UpdateNetworkEndpoint(runtimeID, response.sandbox_ip());
     guard->Commit();
 
     sandboxStatsPollingRuntimes_.insert(runtimeID);
@@ -1937,7 +1951,7 @@ void SandboxdExecutor::AddMissingAndConfirmedEntries(const std::shared_ptr<messa
             instanceInfo.set_instanceid(entry.instanceid());
             instanceInfo.set_runtimeid(entry.runtimeid());
             stateManager_.Register(
-                {entry.runtimeid(), entry.containerid(), {}, entry.portmappings(), instanceInfo});
+                {entry.runtimeid(), entry.containerid(), {}, entry.portmappings(), instanceInfo, {}});
             stateManager_.MarkStartDone(entry.runtimeid());
             DoWaitWithRetry(entry.containerid(), entry.runtimeid(), 0);
         } else {
@@ -2313,10 +2327,8 @@ litebus::Future<SandboxdRestoreResult> SandboxdExecutor::DoStartFromCheckpoint(
                                    : resp->message()),
                         {}, {}};
             }
-            const std::vector<std::string> ports = resp->ports().empty()
-                ? std::vector<std::string>(startReq->ports().begin(), startReq->ports().end())
-                : std::vector<std::string>(resp->ports().begin(), resp->ports().end());
-            return { Status::OK(), resp->id(), ports };
+            const std::vector<std::string> ports(startReq->ports().begin(), startReq->ports().end());
+            return {Status::OK(), resp->id(), ports, resp->sandbox_ip()};
         });
 }
 
@@ -2670,6 +2682,8 @@ messages::StartInstanceResponse SandboxdExecutor::MakeSuccessStartResponse(
     auto *ir = rsp.mutable_startruntimeinstanceresponse();
     ir->set_runtimeid(info.runtimeid());
     ir->set_containerid(sandboxID);
+    ir->set_sandboxid(sandboxID);
+    ir->set_sandboxip(stateManager_.GetSandboxIP(info.runtimeid()));
     ir->set_pid(0);
 
     if (auto portJson = stateManager_.GetPortMappingsJson(info.runtimeid()); !portJson.empty()) {

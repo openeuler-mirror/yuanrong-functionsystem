@@ -48,6 +48,10 @@ func (p *PodmanRuntime) Create(ctx context.Context, cfg *CreateConfig) (string, 
 	return p.inner.Create(ctx, cfg)
 }
 
+func (p *PodmanRuntime) ResolveEndpoint(ctx context.Context, containerID string) (*NetworkEndpoint, error) {
+	return p.inner.ResolveEndpoint(ctx, containerID)
+}
+
 func (p *PodmanRuntime) Wait(ctx context.Context, containerID string) (*ContainerStatus, error) {
 	return p.inner.Wait(ctx, containerID)
 }

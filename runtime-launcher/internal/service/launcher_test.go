@@ -17,6 +17,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -37,22 +38,46 @@ const (
 	portsFieldNumber        protoreflect.FieldNumber = 15
 	labelsFieldNumber       protoreflect.FieldNumber = 16
 	metricLabelsFieldNumber protoreflect.FieldNumber = 17
+	sandboxIPFieldNumber    protoreflect.FieldNumber = 4
 	waitExitCode                                     = 7
 )
 
 type fakeRuntime struct {
-	listInfos []*runtime.ContainerInfo
-	listErr   error
+	listInfos    []*runtime.ContainerInfo
+	listErr      error
+	createID     string
+	createErr    error
+	createdCfg   *runtime.CreateConfig
+	endpoint     *runtime.NetworkEndpoint
+	endpointErr  error
+	resolveCalls int
+	deletedIDs   []string
+	deleteErr    error
 }
 
 func (f *fakeRuntime) Name() string { return "fake" }
-func (f *fakeRuntime) Create(context.Context, *runtime.CreateConfig) (string, error) {
-	return "", errors.New("not implemented")
+func (f *fakeRuntime) Create(_ context.Context, cfg *runtime.CreateConfig) (string, error) {
+	if cfg != nil {
+		copyCfg := *cfg
+		f.createdCfg = &copyCfg
+	}
+	return f.createID, f.createErr
+}
+func (f *fakeRuntime) ResolveEndpoint(context.Context, string) (*runtime.NetworkEndpoint, error) {
+	f.resolveCalls++
+	if f.endpoint == nil {
+		return nil, f.endpointErr
+	}
+	endpoint := *f.endpoint
+	return &endpoint, f.endpointErr
 }
 func (f *fakeRuntime) Wait(context.Context, string) (*runtime.ContainerStatus, error) {
-	return nil, errors.New("not implemented")
+	return &runtime.ContainerStatus{}, nil
 }
-func (f *fakeRuntime) Delete(context.Context, string, int64) error { return nil }
+func (f *fakeRuntime) Delete(_ context.Context, id string, _ int64) error {
+	f.deletedIDs = append(f.deletedIDs, id)
+	return f.deleteErr
+}
 func (f *fakeRuntime) Stats(context.Context, string) (*runtime.ContainerStats, error) {
 	return nil, errors.New("not implemented")
 }
@@ -73,14 +98,120 @@ func TestStartRequestFieldNumbersMatchSandboxAPI(t *testing.T) {
 	assertFieldNumber(t, fields, "metric_labels", metricLabelsFieldNumber)
 }
 
+func TestStartResponseEndpointFieldNumbersMatchSandboxAPI(t *testing.T) {
+	fields := (&runtimev1.StartResponse{}).ProtoReflect().Descriptor().Fields()
+	assertFieldNumber(t, fields, "sandbox_ip", sandboxIPFieldNumber)
+}
+
+func TestStartReturnsBackendSandboxEndpoint(t *testing.T) {
+	fake := &fakeRuntime{createID: "container-bridge"}
+	svc := NewLauncherService(fake, state.NewManager())
+
+	fake.endpoint = &runtime.NetworkEndpoint{SandboxIP: "172.18.0.23"}
+
+	response, err := svc.startWithConfig(context.Background(), &runtime.CreateConfig{
+		ID:      "runtime-bridge",
+		Network: "bridge",
+	})
+	if err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	if response.GetCode() != 0 || response.GetId() != "container-bridge" {
+		t.Fatalf("Start response = %#v, want successful container", response)
+	}
+	if response.GetSandboxIp() != "172.18.0.23" {
+		t.Fatalf("Start endpoint = %s, want sandbox IP", response.GetSandboxIp())
+	}
+}
+
+func TestStartCleansUpContainerWhenEndpointResolveFails(t *testing.T) {
+	fake := &fakeRuntime{
+		createID:    "container-unresolved",
+		endpointErr: errors.New("inspect failed"),
+	}
+	stateMgr := state.NewManager()
+	svc := NewLauncherService(fake, stateMgr)
+
+	response, err := svc.startWithConfig(context.Background(), &runtime.CreateConfig{
+		ID:      "runtime-unresolved",
+		Network: "bridge",
+	})
+	if err != nil {
+		t.Fatalf("Start returned transport error: %v", err)
+	}
+	if response.GetCode() == 0 || !strings.Contains(response.GetMessage(), "resolve sandbox endpoint failed") {
+		t.Fatalf("Start response = %#v, want endpoint failure", response)
+	}
+	if len(fake.deletedIDs) != 1 || fake.deletedIDs[0] != "container-unresolved" {
+		t.Fatalf("deleted IDs = %#v, want failed container cleanup", fake.deletedIDs)
+	}
+	if _, ok := stateMgr.GetContainer("container-unresolved"); ok {
+		t.Fatal("failed container was added to state manager")
+	}
+}
+
+func TestStartRejectsNilEndpointResult(t *testing.T) {
+	fake := &fakeRuntime{createID: "container-no-endpoint"}
+	svc := NewLauncherService(fake, state.NewManager())
+
+	response, err := svc.startWithConfig(context.Background(), &runtime.CreateConfig{
+		ID:      "runtime-no-endpoint",
+		Network: "bridge",
+	})
+	if err != nil {
+		t.Fatalf("Start returned transport error: %v", err)
+	}
+	if response.GetCode() == 0 || !strings.Contains(response.GetMessage(), "no sandbox endpoint") {
+		t.Fatalf("Start response = %#v, want missing endpoint failure", response)
+	}
+	if len(fake.deletedIDs) != 1 || fake.deletedIDs[0] != "container-no-endpoint" {
+		t.Fatalf("deleted IDs = %#v, want failed container cleanup", fake.deletedIDs)
+	}
+}
+
+func TestStartHostNetworkDoesNotPublishSandboxEndpoint(t *testing.T) {
+	fake := &fakeRuntime{createID: "container-host"}
+	svc := NewLauncherService(fake, state.NewManager())
+
+	response, err := svc.startWithConfig(context.Background(), &runtime.CreateConfig{
+		ID:      "runtime-host",
+		Network: "host",
+	})
+	if err != nil || response.GetCode() != 0 {
+		t.Fatalf("Start host response=%#v err=%v, want success", response, err)
+	}
+	if response.GetSandboxIp() != "" {
+		t.Fatalf("host endpoint = %s, want empty", response.GetSandboxIp())
+	}
+	if fake.resolveCalls != 0 {
+		t.Fatalf("host resolve calls=%d, want zero", fake.resolveCalls)
+	}
+}
+
+func TestNetworkHasIsolatedEndpoint(t *testing.T) {
+	tests := map[string]bool{
+		"bridge":       true,
+		"yr-sandboxes": true,
+		"default":      true,
+		"host":         false,
+		"none":         false,
+		"container:x":  false,
+	}
+	for network, want := range tests {
+		if got := networkHasIsolatedEndpoint(network); got != want {
+			t.Errorf("networkHasIsolatedEndpoint(%q) = %v, want %v", network, got, want)
+		}
+	}
+}
+
 func assertFieldNumber(t *testing.T, fields protoreflect.FieldDescriptors, name string, want protoreflect.FieldNumber) {
 	t.Helper()
 	field := fields.ByName(protoreflect.Name(name))
 	if field == nil {
-		t.Fatalf("StartRequest missing field %q", name)
+		t.Fatalf("protobuf message missing field %q", name)
 	}
 	if got := field.Number(); got != want {
-		t.Fatalf("StartRequest.%s field number = %d, want %d", name, got, want)
+		t.Fatalf("protobuf field %s number = %d, want %d", name, got, want)
 	}
 }
 

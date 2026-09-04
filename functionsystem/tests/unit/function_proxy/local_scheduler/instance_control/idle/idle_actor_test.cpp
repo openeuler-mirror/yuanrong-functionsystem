@@ -19,6 +19,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <thread>
 
 #include <gmock/gmock.h>
@@ -159,6 +160,36 @@ TEST_F(IdleActorTest, RunningTransition_ReconcilesLostInitialIdleReport)
     ASSERT_AWAIT_TRUE([&]() { return callCount > 0; });
 }
 
+/** A newly RUNNING sandbox starts idle even when FunctionProxy saw no traffic. */
+TEST_F(IdleActorTest, RunningTransition_WithoutTrafficReport_StartsTimer)
+{
+    auto sm = MakeRunningInstance(1);
+    EXPECT_CALL(*idleViewMock_, GetInstance(INST_ID)).WillRepeatedly(Return(sm));
+
+    std::atomic<int> callCount{ 0 };
+    EXPECT_CALL(*facadeViewMock_, GetInstance(INST_ID)).WillOnce(Invoke([&](const std::string &) {
+        callCount++;
+        return nullptr;
+    }));
+
+    litebus::Async(idleActor_->GetAID(), &IdleActor::OnInstanceRunning, std::string(INST_ID));
+
+    ASSERT_AWAIT_TRUE([&]() { return callCount > 0; });
+}
+
+/** A busy report racing ahead of RUNNING must not be overwritten as idle. */
+TEST_F(IdleActorTest, RunningTransition_PreservesEarlierBusyReport)
+{
+    auto sm = MakeRunningInstance(1);
+    EXPECT_CALL(*idleViewMock_, GetInstance(INST_ID)).WillRepeatedly(Return(sm));
+    EXPECT_CALL(*facadeViewMock_, GetInstance(INST_ID)).Times(0);
+
+    litebus::Async(idleActor_->GetAID(), &IdleActor::TrafficReport, std::string(INST_ID), static_cast<size_t>(1));
+    litebus::Async(idleActor_->GetAID(), &IdleActor::OnInstanceRunning, std::string(INST_ID));
+
+    std::this_thread::sleep_for(std::chrono::seconds(3));
+}
+
 /**
  * Feature: busy traffic cancels the pending idle timer — no eviction.
  * Steps:
@@ -178,6 +209,128 @@ TEST_F(IdleActorTest, TrafficBusy_CancelsTimer)
     litebus::Async(idleActor_->GetAID(), &IdleActor::TrafficReport, std::string(INST_ID), static_cast<size_t>(1));
 
     std::this_thread::sleep_for(std::chrono::seconds(3));
+}
+
+/** Active gateway streams are an independent busy source and cancel idle. */
+TEST_F(IdleActorTest, GatewayStream_CancelsTimer)
+{
+    auto sm = MakeRunningInstance(1);
+    EXPECT_CALL(*idleViewMock_, GetInstance(INST_ID)).WillRepeatedly(Return(sm));
+    EXPECT_CALL(*facadeViewMock_, GetInstance(INST_ID)).Times(0);
+
+    litebus::Async(idleActor_->GetAID(), &IdleActor::TrafficReport, std::string(INST_ID), static_cast<size_t>(0));
+    IdleActor::GatewayActivityCounts active{ { INST_ID, 1 } };
+    litebus::Async(idleActor_->GetAID(), &IdleActor::GatewayActivityReconcile, active);
+
+    std::this_thread::sleep_for(std::chrono::seconds(3));
+}
+
+/** When gateway streams return to zero, already-idle traffic starts the timer. */
+TEST_F(IdleActorTest, GatewayStreamZero_WithTrafficIdle_StartsTimer)
+{
+    auto sm = MakeRunningInstance(1);
+    EXPECT_CALL(*idleViewMock_, GetInstance(INST_ID)).WillRepeatedly(Return(sm));
+
+    std::atomic<int> callCount{ 0 };
+    EXPECT_CALL(*facadeViewMock_, GetInstance(INST_ID)).WillOnce(Invoke([&](const std::string &) {
+        callCount++;
+        return nullptr;
+    }));
+
+    litebus::Async(idleActor_->GetAID(), &IdleActor::TrafficReport, std::string(INST_ID), static_cast<size_t>(0));
+    IdleActor::GatewayActivityCounts active{ { INST_ID, 1 } };
+    litebus::Async(idleActor_->GetAID(), &IdleActor::GatewayActivityReconcile, active);
+    IdleActor::GatewayActivityCounts idle;
+    litebus::Async(idleActor_->GetAID(), &IdleActor::GatewayActivityReconcile, idle);
+
+    ASSERT_AWAIT_TRUE([&]() { return callCount > 0; });
+}
+
+/** A missing gateway snapshot pauses reclamation instead of treating activity as zero. */
+TEST_F(IdleActorTest, GatewayActivityUnavailable_PausesIdleReclamation)
+{
+    auto sm = MakeRunningInstance(1);
+    EXPECT_CALL(*idleViewMock_, GetInstance(INST_ID)).WillRepeatedly(Return(sm));
+    EXPECT_CALL(*facadeViewMock_, GetInstance(INST_ID)).Times(0);
+
+    litebus::Async(idleActor_->GetAID(), &IdleActor::TrafficReport, std::string(INST_ID), static_cast<size_t>(0));
+    litebus::Async(idleActor_->GetAID(), &IdleActor::GatewayActivityUnavailable);
+    std::this_thread::sleep_for(std::chrono::seconds(3));
+}
+
+/** Disabled command recovery leaves the existing idle lifecycle unchanged. */
+TEST_F(IdleActorTest, CommandActivityDisabled_DoesNotChangeIdleLifecycle)
+{
+    litebus::Terminate(idleActor_->GetAID());
+    litebus::Await(idleActor_->GetAID());
+    unsetenv("YR_COMMAND_RECOVERY_ENABLED");
+    idleActor_ = std::make_shared<IdleActor>("idle-command-disabled", NODE_ID, idleViewMock_,
+                                            facadeActor_->GetAID());
+    litebus::Spawn(idleActor_);
+    auto sm = MakeRunningInstance(1);
+    EXPECT_CALL(*idleViewMock_, GetInstance(INST_ID)).WillRepeatedly(Return(sm));
+    std::atomic<int> callCount{ 0 };
+    EXPECT_CALL(*facadeViewMock_, GetInstance(INST_ID)).WillOnce(Invoke([&](const std::string &) {
+        callCount++;
+        return nullptr;
+    }));
+
+    litebus::Async(idleActor_->GetAID(), &IdleActor::CommandActivityReport,
+                   std::string(INST_ID), static_cast<size_t>(1));
+    litebus::Async(idleActor_->GetAID(), &IdleActor::OnInstanceRunning, std::string(INST_ID));
+    ASSERT_AWAIT_TRUE([&]() { return callCount > 0; });
+}
+
+/** Background command activity is isolated from traffic and gateway streams. */
+TEST_F(IdleActorTest, CommandActivityEnabled_BlocksUntilAuthoritativeZero)
+{
+    litebus::Terminate(idleActor_->GetAID());
+    litebus::Await(idleActor_->GetAID());
+    ASSERT_EQ(setenv("YR_COMMAND_RECOVERY_ENABLED", "true", 1), 0);
+    idleActor_ = std::make_shared<IdleActor>("idle-command", NODE_ID, idleViewMock_, facadeActor_->GetAID());
+    litebus::Spawn(idleActor_);
+
+    auto sm = MakeRunningInstance(1);
+    EXPECT_CALL(*idleViewMock_, GetInstance(INST_ID)).WillRepeatedly(Return(sm));
+    std::atomic<int> callCount{ 0 };
+    EXPECT_CALL(*facadeViewMock_, GetInstance(INST_ID)).WillOnce(Invoke([&](const std::string &) {
+        callCount++;
+        return nullptr;
+    }));
+
+    litebus::Async(idleActor_->GetAID(), &IdleActor::OnInstanceRunning, std::string(INST_ID));
+    litebus::Async(idleActor_->GetAID(), &IdleActor::CommandActivityReport,
+                   std::string(INST_ID), static_cast<size_t>(1));
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    EXPECT_EQ(callCount.load(), 0);
+
+    litebus::Async(idleActor_->GetAID(), &IdleActor::CommandActivityReport,
+                   std::string(INST_ID), static_cast<size_t>(0));
+    ASSERT_AWAIT_TRUE([&]() { return callCount > 0; });
+    unsetenv("YR_COMMAND_RECOVERY_ENABLED");
+}
+
+/** A lost RRT activity channel turns the command source UNKNOWN and fails safe. */
+TEST_F(IdleActorTest, CommandActivityLeaseExpired_PausesIdleReclamation)
+{
+    litebus::Terminate(idleActor_->GetAID());
+    litebus::Await(idleActor_->GetAID());
+    ASSERT_EQ(setenv("YR_COMMAND_RECOVERY_ENABLED", "true", 1), 0);
+    ASSERT_EQ(setenv("YR_COMMAND_ACTIVITY_TIMEOUT_SECS", "1", 1), 0);
+    idleActor_ = std::make_shared<IdleActor>("idle-command-lease", NODE_ID, idleViewMock_, facadeActor_->GetAID());
+    litebus::Spawn(idleActor_);
+
+    auto sm = MakeRunningInstance(3);
+    EXPECT_CALL(*idleViewMock_, GetInstance(INST_ID)).WillRepeatedly(Return(sm));
+    EXPECT_CALL(*facadeViewMock_, GetInstance(INST_ID)).Times(0);
+
+    litebus::Async(idleActor_->GetAID(), &IdleActor::OnInstanceRunning, std::string(INST_ID));
+    litebus::Async(idleActor_->GetAID(), &IdleActor::CommandActivityReport,
+                   std::string(INST_ID), static_cast<size_t>(0));
+    std::this_thread::sleep_for(std::chrono::seconds(4));
+
+    unsetenv("YR_COMMAND_ACTIVITY_TIMEOUT_SECS");
+    unsetenv("YR_COMMAND_RECOVERY_ENABLED");
 }
 
 /**
