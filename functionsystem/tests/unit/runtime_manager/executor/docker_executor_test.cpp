@@ -492,8 +492,8 @@ TEST_F(DockerExecutorTest, BuildShellCmdLine_QuotedArgvAndTolerantRedirect)
 
     std::string cmdLine = executor_->TestBuildShellCmdLine("python3", startReq);
 
-    // Tolerant redirect skeleton, closed with ; fi.
-    EXPECT_THAT(cmdLine, testing::StartsWith("if ( >"));
+    // Tolerant redirect skeleton, closed with ; fi; append mode for copytruncate.
+    EXPECT_THAT(cmdLine, testing::StartsWith("if ( >>"));
     EXPECT_THAT(cmdLine, testing::HasSubstr(") 2>/dev/null; then exec "));
     EXPECT_THAT(cmdLine, testing::HasSubstr("; else exec "));
     EXPECT_THAT(cmdLine, testing::EndsWith("; fi"));
@@ -504,8 +504,8 @@ TEST_F(DockerExecutorTest, BuildShellCmdLine_QuotedArgvAndTolerantRedirect)
     // single quote inside payload escaped via '\'' rather than closing the wrapper.
     EXPECT_THAT(cmdLine, testing::HasSubstr("'print('\\''hello"));
     EXPECT_THAT(cmdLine, testing::HasSubstr("; rm -rf /'\\''"));
-    // redirect paths quoted too (space + single quote survived).
-    EXPECT_THAT(cmdLine, testing::HasSubstr(">'/tmp/log dir/a'\\''b.out'"));
+    // redirect paths quoted too (space + single quote survived); append mode.
+    EXPECT_THAT(cmdLine, testing::HasSubstr(">>'/tmp/log dir/a'\\''b.out'"));
     // stderr merged into stdout via 2>&1
     EXPECT_THAT(cmdLine, testing::HasSubstr("2>&1"));
     // The ';' vector's bare sequence "; rm -rf /')" (the ' sitting right before ')' in the payload)
@@ -537,6 +537,7 @@ TEST_F(DockerExecutorTest, BuildShellCmdLine_EmptyPathsSkipsRedirect)
     EXPECT_EQ(cmdLine, "exec 'python3' '-m' 'http.server'");
     EXPECT_THAT(cmdLine, testing::Not(testing::HasSubstr("if (")));
     EXPECT_THAT(cmdLine, testing::Not(testing::HasSubstr(" >")));
+    EXPECT_THAT(cmdLine, testing::Not(testing::HasSubstr(">>")));
     EXPECT_THAT(cmdLine, testing::Not(testing::HasSubstr(" 2>")));
 }
 
@@ -553,8 +554,8 @@ TEST_F(DockerExecutorTest, BuildShellCmdLine_EmptyArgv)
     std::string cmdLine = executor_->TestBuildShellCmdLine("", startReq);
 
     // Tolerant skeleton fully closed: then-branch (exec with redirect), else-branch (bare exec), ; fi tail.
-    EXPECT_THAT(cmdLine, testing::StartsWith("if ( >"));
-    EXPECT_THAT(cmdLine, testing::HasSubstr("then exec  >"));   // empty argv: exec followed by the redirect
+    EXPECT_THAT(cmdLine, testing::StartsWith("if ( >>"));
+    EXPECT_THAT(cmdLine, testing::HasSubstr("then exec  >>"));  // empty argv: exec followed by the redirect
     EXPECT_THAT(cmdLine, testing::HasSubstr(" 2>&1"));          // stderr merged into stdout
     EXPECT_THAT(cmdLine, testing::HasSubstr("; else exec ;"));  // else branch present and closed
     EXPECT_THAT(cmdLine, testing::EndsWith("; fi"));

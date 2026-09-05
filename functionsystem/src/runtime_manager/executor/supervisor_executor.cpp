@@ -594,7 +594,9 @@ nlohmann::json SupervisorExecutor::BuildCommand(const std::shared_ptr<runtime::v
     // (which also mkdir/chmod it), instead of re-deriving the log layout here.
     // Quote it too: runtimeID/path may contain spaces or shell metacharacters.
     // stdout and stderr share one path (ConfigRuntimeRedirectLog); 2>&1 merges them into it.
-    cmdLine += " >" + ShellQuote(start->stdout()) + " 2>&1";
+    // >> (O_APPEND) keeps the writer offset following EOF, in step with the
+    // logrotate copytruncate rotation done by LogManagerActor.
+    cmdLine += " >>" + ShellQuote(start->stdout()) + " 2>&1";
 
     command.push_back("sh");
     command.push_back("-c");

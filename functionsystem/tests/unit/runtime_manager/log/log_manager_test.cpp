@@ -19,8 +19,10 @@
 #include <fcntl.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <sys/stat.h>
 #include <utime.h>
 
+#include <algorithm>
 #include <atomic>
 #include <fstream>
 #include <regex>
@@ -41,6 +43,24 @@ const std::string LOG_NAME = "dggphis151702";
 const std::string EXCEPTION_LOG_DIR = "/tmp/snuser/log/exception/";
 const std::string STD_LOG_DIR = "/tmp/snuser/log/instances/";
 }  // namespace
+
+// Restores the process umask on scope exit, so a failed assertion between
+// set/restore cannot leak the test umask into later tests.
+class UmaskGuard {
+public:
+    explicit UmaskGuard(mode_t newMask) : oldMask_(umask(newMask))
+    {
+    }
+    ~UmaskGuard()
+    {
+        (void)umask(oldMask_);
+    }
+    UmaskGuard(const UmaskGuard &) = delete;
+    UmaskGuard &operator=(const UmaskGuard &) = delete;
+
+private:
+    mode_t oldMask_;
+};
 
 class LogManagerActorHelper : public runtime_manager::LogManagerActor {
 public:
@@ -445,6 +465,290 @@ TEST_F(LogManagerTest, SeparatedRuntimeStdLogParsing)
     for (const auto &file : invalidLogFiles) {
         EXPECT_TRUE(helper_->GetRuntimeIDFromLogFileName(file, "").empty()) << file;
     }
+}
+
+TEST_F(LogManagerTest, BootstrapCmdStdLogParsing)
+{
+    const std::string uuidRuntimeID = "runtime-12345678-1234-4abc-8def-123456789abc";
+    const std::string namedRuntimeID = "runtime-named-instance-alpha-001";
+
+    // agent-dx bootstrap cmd log: {runtimeID}.std plus its logrotate archives
+    EXPECT_EQ(helper_->GetRuntimeIDFromLogFileName(uuidRuntimeID + ".std", ""), uuidRuntimeID);
+    EXPECT_EQ(helper_->GetRuntimeIDFromLogFileName(namedRuntimeID + ".std", ""), namedRuntimeID);
+    EXPECT_EQ(helper_->GetRuntimeIDFromLogFileName(namedRuntimeID + ".std.1", ""), namedRuntimeID);
+    EXPECT_EQ(helper_->GetRuntimeIDFromLogFileName(namedRuntimeID + ".std.4", ""), namedRuntimeID);
+
+    const std::vector<std::string> invalidStdLogFiles = {
+        "runtime-.std",
+        "runtime-invalid_name.std",
+        "not-runtime-named-instance-alpha-001.std",
+        namedRuntimeID + ".std.log",
+    };
+    for (const auto &file : invalidStdLogFiles) {
+        EXPECT_TRUE(helper_->GetRuntimeIDFromLogFileName(file, "").empty()) << file;
+    }
+}
+
+TEST_F(LogManagerTest, RotateOversizeLogsWithCopytruncate)
+{
+    const std::string runtimeID = "runtime-12345678-1234-4abc-8def-123456789abc";
+    const std::string namedRuntimeID = "runtime-named-instance-alpha-001";
+    MockCreateSeparatedRuntimeStdLog(runtimeID, ".std", std::time(nullptr));
+    MockCreateSeparatedRuntimeStdLog(namedRuntimeID, ".std", std::time(nullptr));
+    // pad both logs past the rotate threshold
+    for (const auto &id : { runtimeID, namedRuntimeID }) {
+        auto logFile = litebus::os::Join(LOG_BASE_DIR, id + ".std");
+        std::ofstream outfile(logFile, std::ios::app);
+        outfile << std::string(6 * 1024 * 1024, 'x');
+        outfile.close();
+    }
+
+    const char *argv[] = { "./runtime-manager", "--runtime_logs_dir=/tmp/snuser/log",
+                           "--runtime_log_rotate_enable=true", "--runtime_log_rotate_max_size_mb=5",
+                           "--runtime_log_rotate_max_files=2" };
+    runtime_manager::Flags flags;
+    flags.ParseFlags(std::size(argv), argv);
+    helper_->SetConfig(flags);
+
+    helper_->ScanLogsRegularly();
+
+    EXPECT_AWAIT_TRUE_FOR([=]() -> bool {
+        auto filesOption = litebus::os::Ls(LOG_BASE_DIR);
+        if (filesOption.IsNone()) {
+            return false;
+        }
+        auto files = filesOption.Get();
+        // Each oversize active log must gain .1 (copytruncate keeps the active
+        // file, truncated to 0); a small log must not rotate.
+        bool uuidRotated = false;
+        bool namedRotated = false;
+        for (const auto &file : files) {
+            if (file == runtimeID + ".std.1") {
+                uuidRotated = true;
+            }
+            if (file == namedRuntimeID + ".std.1") {
+                namedRotated = true;
+            }
+        }
+        return uuidRotated && namedRotated;
+    }, 10000);
+
+
+    // Active files must be truncated to 0 by copytruncate.
+    for (const auto &id : { runtimeID, namedRuntimeID }) {
+        auto logFile = litebus::os::Join(LOG_BASE_DIR, id + ".std");
+        auto fileInfo = GetFileInfo(logFile);
+        ASSERT_TRUE(fileInfo.IsSome());
+        EXPECT_EQ(fileInfo.Get().st_size, 0) << logFile;
+    }
+}
+
+TEST_F(LogManagerTest, RotateOversizeStdOutLog)
+{
+    const std::string runtimeID = "runtime-12345678-1234-4abc-8def-123456789abc";
+    // RuntimeExecutor redirects stdout/stderr to {runtimeID}.out/.err; the
+    // active .out must rotate just like .log/.std.
+    MockCreateSeparatedRuntimeStdLog(runtimeID, ".out", std::time(nullptr));
+    auto logFile = litebus::os::Join(LOG_BASE_DIR, runtimeID + ".out");
+    std::ofstream outfile(logFile, std::ios::app);
+    outfile << std::string(6 * 1024 * 1024, 'x');
+    outfile.close();
+
+    const char *argv[] = { "./runtime-manager", "--runtime_logs_dir=/tmp/snuser/log",
+                           "--runtime_log_rotate_enable=true", "--runtime_log_rotate_max_size_mb=5",
+                           "--runtime_log_rotate_max_files=2" };
+    runtime_manager::Flags flags;
+    flags.ParseFlags(std::size(argv), argv);
+    helper_->SetConfig(flags);
+
+    helper_->ScanLogsRegularly();
+
+    EXPECT_AWAIT_TRUE_FOR([=]() -> bool {
+        auto filesOption = litebus::os::Ls(LOG_BASE_DIR);
+        if (filesOption.IsNone()) {
+            return false;
+        }
+        for (const auto &file : filesOption.Get()) {
+            if (file == runtimeID + ".out.1") {
+                return true;
+            }
+        }
+        return false;
+    }, 10000);
+
+    // Active file must be truncated to 0 by copytruncate.
+    auto fileInfo = GetFileInfo(logFile);
+    ASSERT_TRUE(fileInfo.IsSome());
+    EXPECT_EQ(fileInfo.Get().st_size, 0) << logFile;
+}
+
+TEST_F(LogManagerTest, RotateOversizeLogUnderDaemonUmask)
+{
+    const std::string runtimeID = "runtime-12345678-1234-4abc-8def-123456789abc";
+    // Daemon runs with umask 0000; logrotate ignores a group/world-writable conf.
+    const UmaskGuard umaskGuard(0000);
+    MockCreateSeparatedRuntimeStdLog(runtimeID, ".std", std::time(nullptr));
+    auto logFile = litebus::os::Join(LOG_BASE_DIR, runtimeID + ".std");
+    std::ofstream outfile(logFile, std::ios::app);
+    outfile << std::string(6 * 1024 * 1024, 'x');
+    outfile.close();
+
+    const char *argv[] = { "./runtime-manager", "--runtime_logs_dir=/tmp/snuser/log",
+                           "--runtime_log_rotate_enable=true", "--runtime_log_rotate_max_size_mb=5",
+                           "--runtime_log_rotate_max_files=2" };
+    runtime_manager::Flags flags;
+    flags.ParseFlags(std::size(argv), argv);
+    helper_->SetConfig(flags);
+
+    helper_->ScanLogsRegularly();
+
+    EXPECT_AWAIT_TRUE_FOR([=]() -> bool {
+        auto filesOption = litebus::os::Ls(LOG_BASE_DIR);
+        if (filesOption.IsNone()) {
+            return false;
+        }
+        for (const auto &file : filesOption.Get()) {
+            if (file == runtimeID + ".std.1") {
+                return true;
+            }
+        }
+        return false;
+    }, 10000);
+
+    // Active file must be truncated to 0 by copytruncate.
+    auto fileInfo = GetFileInfo(logFile);
+    ASSERT_TRUE(fileInfo.IsSome());
+    EXPECT_EQ(fileInfo.Get().st_size, 0) << logFile;
+}
+
+TEST_F(LogManagerTest, RotateSkipsUndersizeLogs)
+{
+    const std::string runtimeID = "runtime-12345678-1234-4abc-8def-123456789abc";
+    MockCreateSeparatedRuntimeStdLog(runtimeID, ".std", std::time(nullptr));
+
+    const char *argv[] = { "./runtime-manager", "--runtime_logs_dir=/tmp/snuser/log",
+                           "--runtime_log_rotate_enable=true", "--runtime_log_rotate_max_size_mb=5",
+                           "--runtime_log_rotate_max_files=2" };
+    runtime_manager::Flags flags;
+    flags.ParseFlags(std::size(argv), argv);
+    helper_->SetConfig(flags);
+
+    helper_->ScanLogsRegularly();
+
+    // ScanLogsRegularly runs inline (no mailbox hop), so the decision is final
+    // when it returns; the wait just burns the window in which a future async
+    // refactor could still spawn logrotate. An undersize log must gain no
+    // archive during that window.
+    EXPECT_AWAIT_TRUE_FOR([=]() -> bool {
+        auto filesOption = litebus::os::Ls(LOG_BASE_DIR);
+        if (filesOption.IsNone()) {
+            return false;
+        }
+        for (const auto &file : filesOption.Get()) {
+            if (file == runtimeID + ".std.1") {
+                return false;
+            }
+        }
+        return true;
+    }, 2000);
+
+    // Termination check: exactly the active log remains, no archive, no
+    // conf/state residue.
+    auto files = litebus::os::Ls(LOG_BASE_DIR);
+    ASSERT_TRUE(files.IsSome());
+    EXPECT_EQ(files.Get().size(), static_cast<size_t>(1));
+    EXPECT_EQ(files.Get().front(), runtimeID + ".std");
+}
+
+TEST_F(LogManagerTest, RotateIgnoresArchiveFiles)
+{
+    // Archives of every naming scheme, under a dedicated runtimeID, must never
+    // be classified as active logs and fed into the rotate conf (a
+    // misclassification would let logrotate clobber the existing archive
+    // chain). They are padded oversize so a misclassification actually
+    // triggers rotation of them.
+    (void)litebus::os::Mkdir("/tmp/snuser");
+    (void)litebus::os::Mkdir(LOG_BASE_DIR);
+    const std::string archiveRuntimeID = "runtime-12345678-1234-4abc-8def-123456789abc";
+    const std::string dateSuffix = "-20260907120000";
+    const std::vector<std::string> archiveFiles = {
+        archiveRuntimeID + ".log.1",              // logrotate default chain
+        archiveRuntimeID + ".log.2",
+        archiveRuntimeID + ".log.gz",             // compressed archive
+        archiveRuntimeID + ".log.gz.1",
+        archiveRuntimeID + dateSuffix + ".log",   // date-stamped inactive log
+        archiveRuntimeID + ".log.20260907120000",
+        archiveRuntimeID + ".std.1",
+        archiveRuntimeID + ".out.1",
+        archiveRuntimeID + ".err.1",
+    };
+    for (const auto &file : archiveFiles) {
+        auto logFile = litebus::os::Join(LOG_BASE_DIR, file);
+        std::ofstream outfile(logFile, std::ios::app);
+        ASSERT_TRUE(outfile.good()) << "cannot create archive " << logFile;
+        outfile << std::string(6 * 1024 * 1024, 'x');
+        outfile.close();
+    }
+
+    // One genuinely active oversize log under a different runtimeID: must
+    // rotate despite the archives above.
+    const std::string activeRuntimeID = "runtime-87654321-4321-4cba-9fed-abcdefabcdef";
+    MockCreateSeparatedRuntimeStdLog(activeRuntimeID, ".log", std::time(nullptr));
+    auto activeLog = litebus::os::Join(LOG_BASE_DIR, activeRuntimeID + ".log");
+    std::ofstream outfile(activeLog, std::ios::app);
+    outfile << std::string(6 * 1024 * 1024, 'x');
+    outfile.close();
+
+    const char *argv[] = { "./runtime-manager", "--runtime_logs_dir=/tmp/snuser/log",
+                           "--runtime_log_rotate_enable=true", "--runtime_log_rotate_max_size_mb=5",
+                           "--runtime_log_rotate_max_files=2" };
+    runtime_manager::Flags flags;
+    flags.ParseFlags(std::size(argv), argv);
+    helper_->SetConfig(flags);
+
+    helper_->ScanLogsRegularly();
+
+    // Final listing must be exactly: every pre-existing archive unchanged, the
+    // active log still present (copytruncate keeps it, truncated to 0), rotated
+    // to .log.1, the conf cleaned up. The fixed state file is DESIGNED to
+    // persist (logrotate archive-chain bookkeeping), so it is expected too.
+    const std::vector<std::string> expectedFiles = archiveFiles;
+    EXPECT_AWAIT_TRUE_FOR([=]() -> bool {
+        auto filesOption = litebus::os::Ls(LOG_BASE_DIR);
+        if (filesOption.IsNone()) {
+            return false;
+        }
+        auto files = filesOption.Get();
+        bool activeRotated = false;
+        for (const auto &file : files) {
+            if (file == activeRuntimeID + ".log.1") {
+                activeRotated = true;
+            }
+            // conf must be cleaned up by the time rotation finished
+            if (file == "runtime-log-rotate.conf") {
+                return false;
+            }
+        }
+        if (!activeRotated) {
+            return false;
+        }
+        // No archive may have been shifted or re-rotated (e.g. .log.1 -> .log.2)
+        // Listing = archives + active log + new .log.1 + persistent state file.
+        return files.size() == expectedFiles.size() + 3;
+    }, 10000);
+
+    auto files = litebus::os::Ls(LOG_BASE_DIR);
+    ASSERT_TRUE(files.IsSome());
+    for (const auto &name : expectedFiles) {
+        EXPECT_TRUE(std::find(files.Get().begin(), files.Get().end(), name) != files.Get().end())
+            << "archive missing or renamed after rotation: " << name;
+    }
+    EXPECT_TRUE(std::find(files.Get().begin(), files.Get().end(), activeRuntimeID + ".log") != files.Get().end())
+        << "active log must remain (copytruncate)";
+    EXPECT_TRUE(std::find(files.Get().begin(), files.Get().end(), std::string("runtime-log-rotate.state")) !=
+                files.Get().end())
+        << "fixed state file must persist for archive-chain bookkeeping";
+    EXPECT_EQ(files.Get().size(), expectedFiles.size() + 3);  // + active log, new .log.1, state file
 }
 
 TEST_F(LogManagerTest, ExpiredUuidRuntimeStdLogsAreRecycled)
