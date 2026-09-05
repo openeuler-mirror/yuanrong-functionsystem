@@ -18,6 +18,7 @@
 #include "common/logs/logging.h"
 #include "common/proto/pb/posix/message.pb.h"
 #include "common/utils/files.h"
+#include "common/utils/exec_utils.h"
 #include "manager/runtime_manager.h"
 #include "async/asyncafter.hpp"
 #include "async/defer.hpp"
@@ -25,8 +26,14 @@
 
 #include <ctime>
 #include <cstring>
+#include <cerrno>
+#include <cstdio>
 #include <regex>
 #include <sstream>
+#include <csignal>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 namespace functionsystem::runtime_manager {
 
@@ -49,6 +56,11 @@ const std::regex LIB_RUNTIME_LOG_REGEX_PATTERN_REGEX(LIB_RUNTIME_LOG_REGEX_PATTE
 const std::string STD_OUTPUT_LOG_REGEX_PATTERN =
     "^(" + RUNTIME_UUID_PREFIX + "[A-Za-z0-9-]+)\\.(out|err)$";
 const std::regex STD_OUTPUT_LOG_REGEX_PATTERN_REGEX(STD_OUTPUT_LOG_REGEX_PATTERN);
+// Bootstrap command log of agent-dx: {runtimeID}.std, and its logrotate
+// archives {runtimeID}.std.1 .. {runtimeID}.std.N
+const std::string STD_BOOTSTRAP_LOG_REGEX_PATTERN =
+    "^(" + RUNTIME_UUID_PREFIX + "[A-Za-z0-9-]+)\\.std(\\.\\d+)?$";
+const std::regex STD_BOOTSTRAP_LOG_REGEX_PATTERN_REGEX(STD_BOOTSTRAP_LOG_REGEX_PATTERN);
 const std::string DS_CLIENT_LOG_REGEX_PATTERN =
     R"(ds_client_(?:access_)?(\d+)(?:\.(?:INFO|DEBUG|ERROR|WARNING))?(?:\.log)?)";
 const std::regex DS_CLIENT_LOG_REGEX_PATTERN_REGEX(DS_CLIENT_LOG_REGEX_PATTERN);
@@ -59,6 +71,16 @@ const std::regex REUSE_LOG_PREFIX_WITH_GZ_REGEX(R"(^((YR_\d+_\d{6})).*\.log\.gz(
 const int MAX_COUNTER = 999999;
 const int MAX_COUNTER_DIGIT = 6;
 const size_t MAX_DELETE_FILE_NUM = 50;
+
+// logrotate one-shot invocation limits
+const int ROTATE_PROCESS_TIMEOUT_MS = 30 * MILLISECONDS_PRE_SECOND;
+const int ROTATE_STOP_GRACE_MS = 5 * MILLISECONDS_PRE_SECOND;  // SIGTERM-to-SIGKILL grace window
+const size_t ROTATE_STDERR_MAX_LEN = 4 * 1024;
+const int ROTATE_SIGNAL_EXIT_CODE_BASE = 128;  // shell convention: 128 + signal number
+const off_t BYTES_PER_MB = 1024 * 1024;
+const char ROTATE_BINARY[] = "/usr/sbin/logrotate";
+const char ROTATE_CONF_SUFFIX[] = ".conf";
+const char ROTATE_STATE_SUFFIX[] = ".state";
 
 }  // namespace
 
@@ -250,12 +272,15 @@ void LogManagerActor::SetConfig(const Flags &flags)
         .cleanupInterval = flags.GetLogExpirationCleanupInterval(),
         .timeThreshold = flags.GetLogExpirationTimeThreshold(),
         .maxFileCount = flags.GetLogExpirationMaxFileCount()};
+    logRotateConfig_ = {.enable = flags.GetLogRotateEnable(),
+        .maxSizeMb = flags.GetLogRotateMaxSizeMb(),
+        .maxFiles = flags.GetLogRotateMaxFiles()};
 }
 
 void LogManagerActor::StopScanLogs()
 {
-    if (!logExpirationConfig_.enable) {
-        YRLOG_DEBUG("runtime expired log manage disabled");
+    if (!logExpirationConfig_.enable && !logRotateConfig_.enable) {
+        YRLOG_DEBUG("runtime log manage disabled");
         return;
     }
     (void)litebus::TimerTools::Cancel(scanLogsTimer_);
@@ -296,6 +321,12 @@ std::string LogManagerActor::GetRuntimeIDFromLogFileName(const std::string &file
         if (matchResult.size() > 1) {
             runtimeID = matchResult[1].str();
             YRLOG_DEBUG("Extracted std output/error runtimeId: {}", runtimeID);
+        }
+    } else if (std::regex_match(file, matchResult, STD_BOOTSTRAP_LOG_REGEX_PATTERN_REGEX)) {
+        YRLOG_DEBUG("Processing bootstrap cmd runtime log file {}", filePath);
+        if (matchResult.size() > 1) {
+            runtimeID = matchResult[1].str();
+            YRLOG_DEBUG("Extracted bootstrap cmd runtimeId: {}", runtimeID);
         }
     } else if (std::regex_match(file, matchResult, CPP_RUNTIME_LOG_REGEX_PATTERN_REGEX)) { // last match
         YRLOG_DEBUG("Processing cpp runtime log file {}", filePath);
@@ -356,8 +387,9 @@ litebus::Future<bool> LogManagerActor::CollectAddFilesFuture(const std::list<lit
 
 void LogManagerActor::ScanLogsRegularly()
 {
-    if (!logExpirationConfig_.enable) {
-        YRLOG_DEBUG("runtime expired log manage disabled");
+    // Rotation and expiration have independent enable gates.
+    if (!logExpirationConfig_.enable && !logRotateConfig_.enable) {
+        YRLOG_DEBUG("runtime log manage disabled");
         return;
     }
 
@@ -371,6 +403,25 @@ void LogManagerActor::ScanLogsRegularly()
     if (filesOption.IsNone() || filesOption.Get().empty()) {
         YRLOG_WARN("no log file in {}", runtimeLogsPath_);
         return;
+    }
+
+    if (logRotateConfig_.enable) {
+        RotateOversizeLogs(filesOption.Get());
+    }
+
+    if (!logExpirationConfig_.enable) {
+        StartScanLogs();
+        return;
+    }
+
+    // Rotation may rename/truncate files, so the expiration pass re-lists the
+    // dir when rotation ran; otherwise reuse the listing above.
+    if (logRotateConfig_.enable) {
+        filesOption = litebus::os::Ls(runtimeLogsPath_);
+        if (filesOption.IsNone() || filesOption.Get().empty()) {
+            StartScanLogs();
+            return;
+        }
     }
 
     if (logReuse_) {
@@ -541,6 +592,141 @@ void LogManagerActor::StartScanLogs()
 {
     scanLogsTimer_ = litebus::AsyncAfter(logExpirationConfig_.cleanupInterval * MILLISECONDS_PRE_SECOND, GetAID(),
                                          &LogManagerActor::ScanLogsRegularly);
+}
+
+bool LogManagerActor::WriteRotateConf(const std::vector<std::string> &rotateTargets, const std::string &confPath)
+{
+    // Explicit per-file blocks, never a glob, so each log keeps its own .N
+    // archive chain. "su" is required under root (root-run logrotate skips
+    // logs in the 01777 log dir without it) and forbidden under non-root.
+    const bool runAsRoot = (geteuid() == 0);
+    std::ostringstream conf;
+    conf << "# generated by runtime-manager, do not edit\n";
+    for (const auto &file : rotateTargets) {
+        conf << litebus::os::Join(runtimeLogsPath_, file, '/') << " {\n"
+             << "    size " << logRotateConfig_.maxSizeMb << "M\n"
+             << "    rotate " << logRotateConfig_.maxFiles << "\n"
+             << "    copytruncate\n"
+             << "    missingok\n"
+             << "    notifempty\n"
+             << "    nocreate\n";
+        if (runAsRoot) {
+            conf << "    su root root\n";
+        }
+        conf << "}\n";
+    }
+
+    // Direct write is safe: the actor serializes scans and logrotate runs only after this returns.
+    if (!Write(confPath, conf.str())) {
+        YRLOG_WARN("failed to write rotate conf {}", confPath);
+        return false;
+    }
+    // Non-fatal: if logrotate then rejects the conf, it shows up in the stderr logged below.
+    constexpr mode_t rotateConfMode = 0644;  // logrotate ignores a group/world-writable conf
+    if (chmod(confPath.c_str(), rotateConfMode) != 0) {
+        YRLOG_WARN("failed to chmod rotate conf {}, msg: {}", confPath, litebus::os::Strerror(errno));
+    }
+    return true;
+}
+
+int LogManagerActor::RunLogrotate(const std::string &confPath, const std::string &statePath, int rotateTimeoutMs,
+                                  std::string &stderrOut)
+{
+    // One-shot spawn; the actor mailbox keeps invocations serial. enableReap
+    // must be true: GetStatus() only reports the real waitpid status when the
+    // child is reaped by ReapInActor; with false it resolves immediately with
+    // a fake 0 and the exit code is lost.
+    auto process = litebus::Exec::CreateExec(ROTATE_BINARY,
+        {ROTATE_BINARY, "--force", "-s", statePath, confPath}, litebus::None(),
+        litebus::ExecIO::CreateFileIO("/dev/null"), litebus::ExecIO::CreateFileIO("/dev/null"),
+        litebus::ExecIO::CreatePipeIO(), {}, {}, true);
+    if (process == nullptr) {
+        return -1;
+    }
+    auto errorFuture = litebus::os::ReadPipeAsync(process->GetErr().Get());
+
+    // ReapInActor notifies the raw waitpid status as Option<int>; None means
+    // timeout (kill) or reap error.
+    int exitCode = -1;
+    auto statusFuture = process->GetStatus();
+    auto statusOption = statusFuture.Get(static_cast<uint64_t>(rotateTimeoutMs));
+    if (statusOption.IsNone()) {
+        // G.STD.17: ask the child to stop first (SIGTERM is logrotate's stop
+        // signal); force-kill only if it is still alive after the grace window.
+        (void)kill(process->GetPid(), SIGTERM);
+        statusOption = statusFuture.Get(ROTATE_STOP_GRACE_MS);
+        if (statusOption.IsNone()) {
+            (void)kill(process->GetPid(), SIGKILL);
+            statusOption = statusFuture.Get(ROTATE_STOP_GRACE_MS);
+        }
+    }
+    if (statusOption.IsSome()) {
+        const int waitStatus = statusOption.Get().Get();
+        if (WIFEXITED(waitStatus)) {
+            exitCode = WEXITSTATUS(waitStatus);
+        } else if (WIFSIGNALED(waitStatus)) {
+            exitCode = ROTATE_SIGNAL_EXIT_CODE_BASE + WTERMSIG(waitStatus);
+        }
+    }
+    stderrOut = errorFuture.Get();
+    if (stderrOut.size() > ROTATE_STDERR_MAX_LEN) {
+        stderrOut.resize(ROTATE_STDERR_MAX_LEN);
+    }
+    return exitCode;
+}
+
+void LogManagerActor::RotateOversizeLogs(const std::vector<std::string> &files)
+{
+    const off_t maxSizeBytes = static_cast<off_t>(logRotateConfig_.maxSizeMb) * BYTES_PER_MB;
+    std::vector<std::string> oversizeTargets;
+    for (const auto &file : files) {
+        // Only active logs rotate; archives (.log.N / .std.N / .out.N) never
+        // enter the conf. PYTHON pattern group indices: RUNTIME_LOG_REGEX_PATTERN
+        // nests one group, so 1=runtimeID, 3=(-\d{14})?, 4=(\.\d*)?, 5=(\.gz)?,
+        // 6=(\.\d+)?; a plain active "{rid}.log" has 3..6 empty.
+        // STD_OUTPUT has no archive group, so any match is an active .out/.err
+        // (RuntimeExecutor redirect; litebus CreateFileIO opens O_APPEND, so
+        // copytruncate is safe).
+        std::smatch matchResult;
+        bool isActiveLog =
+            (std::regex_match(file, matchResult, PYTHON_RUNTIME_LOG_REGEX_PATTERN_REGEX) &&
+             matchResult[3].str().empty() && matchResult[4].str().empty() && matchResult[5].str().empty() &&
+             matchResult[6].str().empty()) ||
+            (std::regex_match(file, matchResult, STD_BOOTSTRAP_LOG_REGEX_PATTERN_REGEX) &&
+             matchResult[2].str().empty()) ||
+            std::regex_match(file, matchResult, STD_OUTPUT_LOG_REGEX_PATTERN_REGEX);
+        if (!isActiveLog) {
+            continue;
+        }
+        auto fileInfoOption = GetFileInfo(litebus::os::Join(runtimeLogsPath_, file, '/'));
+        if (fileInfoOption.IsSome() && fileInfoOption.Get().st_size >= maxSizeBytes) {
+            oversizeTargets.emplace_back(file);
+        }
+    }
+    if (oversizeTargets.empty()) {
+        return;
+    }
+
+    // Archives use logrotate's default {file}.N rename chain; no dateext
+    // (intra-day collision), no compression.
+    std::ostringstream confName;
+    confName << "runtime-log-rotate." << getpid() << ROTATE_CONF_SUFFIX;
+    auto confPath = litebus::os::Join(runtimeLogsPath_, confName.str(), '/');
+    auto statePath = confPath.substr(0, confPath.size() - strlen(ROTATE_CONF_SUFFIX)) + ROTATE_STATE_SUFFIX;
+    if (!WriteRotateConf(oversizeTargets, confPath)) {
+        return;
+    }
+
+    std::string stderrOut;
+    auto rc = RunLogrotate(confPath, statePath, ROTATE_PROCESS_TIMEOUT_MS, stderrOut);
+    if (rc != 0) {
+        // One WARN line with the captured stderr; the next scan retries.
+        YRLOG_WARN("logrotate failed rc={} stderr={}", rc, stderrOut);
+    } else if (!stderrOut.empty()) {
+        // logrotate reports "skipping ..." style notices on stderr with rc 0.
+        YRLOG_INFO("logrotate done with notices: {}", stderrOut);
+    }
+    (void)litebus::os::Rm(confPath);
 }
 
 litebus::Future<bool> LogManagerActor::RecycleReuseLog(const bool &isActive, const std::string &runtimeID,

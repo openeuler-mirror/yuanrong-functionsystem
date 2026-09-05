@@ -38,6 +38,18 @@ struct LogExpiratioinConfig {
     int maxFileCount;
 };
 
+// RuntimeLogRotateConfig drives one-shot logrotate invocations spawned by
+// LogManagerActor: each active runtime log ({runtimeID}.log / {runtimeID}.std /
+// {runtimeID}.out / {runtimeID}.err) that reaches maxSizeMb is
+// copytruncate-rotated, keeping up to maxFiles archives ({runtimeID}.log.1..N,
+// {runtimeID}.std.1..N, {runtimeID}.out.1..N, {runtimeID}.err.1..N). Global
+// file count stays under the logExpiration LRU cleanup in this actor.
+struct RuntimeLogRotateConfig {
+    bool enable = false;
+    int maxSizeMb = 0;
+    int maxFiles = 0;
+};
+
 // RuntimeLogFile represents a unique runtime log
 // - Java's runtime log, Java runtime log dir is named in the format of "runtimeId", and there are 3 files below.
 // - C++ runtime log, named in the format of "jobId-runtimeId.log", and rolling files "jobId-runtimeId.1.log",
@@ -156,8 +168,13 @@ protected:
     void Init() override;
     void Finalize() override;
 
+    // One-shot logrotate rotation of active logs that reached maxSizeMb;
+    // independent of logExpirationConfig_.enable.
+    void RotateOversizeLogs(const std::vector<std::string> &files);
+
 private:
     LogExpiratioinConfig logExpirationConfig_;
+    RuntimeLogRotateConfig logRotateConfig_;
     litebus::Timer scanLogsTimer_;
     std::shared_ptr<ExpiredLogQueue> expiredLogQueue_;
     std::string runtimeLogsPath_;
@@ -171,6 +188,16 @@ private:
     pid_t GetDsClientPidFromLogFileName(const std::string &file, const std::string &filePath);
 
     litebus::Future<bool> CollectAddFilesFuture(const std::list<litebus::Future<bool>> &adds);
+
+    // Writes the logrotate conf for the given logs, mode pinned to 0644.
+    bool WriteRotateConf(const std::vector<std::string> &rotateTargets, const std::string &confPath);
+
+    // Spawns one-shot "logrotate -s <state> <conf>" via litebus::Exec, waits up
+    // to rotateTimeoutMs; on timeout stops the child SIGTERM-first and escalates
+    // to SIGKILL only after a grace window. Returns the exit code, or -1 on
+    // spawn error/timeout; captured stderr goes into stderrOut.
+    static int RunLogrotate(const std::string &confPath, const std::string &statePath, int rotateTimeoutMs,
+                            std::string &stderrOut);
 
     // for reuse logPrefix
     std::unordered_map<std::string, std::string> logPrefix2RuntimeID_;

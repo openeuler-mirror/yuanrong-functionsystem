@@ -234,8 +234,10 @@ protected:
     virtual void Finalize();
 
     // Resolve per-runtime stdout/stderr redirect paths under runtimeLogPath/runtimeStdLogDir;
-    // mkdir the dir and chmod it 1777 so the container's sh -c ">/out 2>/err" creates the files
-    // itself (owner = sh's euid). Shared by docker and supervisor.
+    // mkdir the dir and chmod it 1777 so the container's sh -c ">>/out 2>&1" creates the files
+    // itself (owner = sh's euid). The 1777 dir requires the logrotate conf to carry a "su"
+    // directive (root-run logrotate otherwise skips world-writable dirs). Shared by docker
+    // and supervisor.
     void ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr, const std::string &runtimeID);
 
     RuntimeConfig config_{};

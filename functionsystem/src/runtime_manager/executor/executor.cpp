@@ -173,7 +173,8 @@ void Executor::ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr
     }
 
     // 目录放权：rwxrwxrwt（sticky bit，等同 /tmp），任意 uid 可建文件但仅可删自己的。
-    // 容器内 sh -c ">log 2>&1" 以容器运行用户身份 open(O_CREAT) 日志文件，属主天然是该 uid。
+    // 容器内 sh -c ">>log 2>&1" 以容器运行用户身份 open(O_CREAT|O_APPEND) 日志文件，属主天然是该 uid。
+    // 01777 目录还要求 logrotate conf 携带 su 指令（root 身份的 logrotate 会跳过全局可写目录）。
     constexpr mode_t logDirMode = 01777;  // rwxrwxrwt + sticky bit
     if (::chmod(path.c_str(), logDirMode) != 0) {
         YRLOG_WARN("{}|failed to chmod log dir {} to 1777, msg: {}; log redirect skipped, "

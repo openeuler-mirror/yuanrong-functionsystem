@@ -46,6 +46,9 @@ const int MAX_DISK_LIMIT = 1024 * 1024;
 const int DEFAULT_MAX_LOG_SIZE_MB = 40;
 const int DEFAULT_MAX_LOG_FILE_NUM = 20;
 
+const int DEFAULT_LOG_ROTATE_MAX_SIZE_MB = 5;
+const int DEFAULT_LOG_ROTATE_MAX_FILES = 4;
+
 const int32_t DEFAULT_USER_LOG_AUTO_FLUSH_INTERVAL_MS = 10000;
 const int32_t DEFAULT_USER_LOG_BUFFER_FLUSH_THRESHOLD = 1024 * 1024;
 const unsigned long DEFAULT_USER_LOG_MAX_ROLLING_FILE_SIZE_MB = 100;
@@ -171,6 +174,14 @@ Flags::Flags()
     AddFlag(&Flags::logExpirationMaxFileCount_, "log_expiration_max_file_count",
             "The maximum number of expired log files to be retained, in units of pieces",
             DEFAULT_LOG_EXPIRATION_MAX_FILE_COUNT, NumCheck(0, INT_MAX));
+    AddFlag(&Flags::logRotateEnable_, "runtime_log_rotate_enable",
+            "enable logrotate based runtime log rotation (copytruncate)", false);
+    AddFlag(&Flags::logRotateMaxSizeMb_, "runtime_log_rotate_max_size_mb",
+            "rotate a runtime log file when it reaches this size, unit in MB",
+            DEFAULT_LOG_ROTATE_MAX_SIZE_MB, NumCheck(1, INT_MAX));
+    AddFlag(&Flags::logRotateMaxFiles_, "runtime_log_rotate_max_files",
+            "max archived log files kept per runtime log file",
+            DEFAULT_LOG_ROTATE_MAX_FILES, NumCheck(1, INT_MAX));
     AddFlag(&Flags::customResources_, "custom_resources",
             "Json format for custom defined resource. etc: \'{\"CustomResource\": 4, \"CustomResource2\": 8}\'", "");
     AddFlag(&Flags::separatedRedirectRuntimeStd_, "enable_separated_redirect_runtime_std",
