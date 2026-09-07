@@ -30,6 +30,7 @@
 #include <grpcpp/create_channel.h>
 #include <grpcpp/server_builder.h>
 
+#include "common/metadata/metadata.h"
 #include "common/proto/pb/posix_pb.h"
 #include "function_proxy/busproxy/invocation_handler/invocation_handler.h"
 #include "mocks/mock_instance_proxy_wrapper.h"
@@ -470,6 +471,73 @@ TEST(FrontendProxyServiceTest, CreateReadyTerminalSuccessCarriesOwningRoute)
     EXPECT_EQ(response.create().instanceid(), "created-instance");
     EXPECT_EQ(response.routeaddress(), "final-owner-proxy");
 }
+
+class FrontendProxyCreateRouteTest : public ::testing::TestWithParam<bool> {
+protected:
+    void SetUp() override
+    {
+        previous_ = IsForceLowReliabilityInstanceEnabled();
+        SetForceLowReliabilityInstance(GetParam());
+    }
+
+    void TearDown() override
+    {
+        SetForceLowReliabilityInstance(previous_);
+    }
+
+private:
+    bool previous_ = false;
+};
+
+TEST_P(FrontendProxyCreateRouteTest, ScheduleOnlyResponseUsesEntryRouteForAsyncCreate)
+{
+    FrontendProxyServiceParam param;
+    param.nodeID = "proxy-node-a";
+    param.enableCreateDispatch = true;
+    param.createReadyDispatcher = [](const ::frontend_proxy::CreateInstanceRequest &) {
+        ::frontend_proxy::CreateInstanceResponse response;
+        response.mutable_create()->set_code(common::ERR_NONE);
+        response.mutable_create()->set_instanceid("creating-instance");
+        return litebus::Future<::frontend_proxy::CreateInstanceResponse>(response);
+    };
+    FrontendProxyService service(std::move(param));
+    ::frontend_proxy::CreateInstanceRequest request;
+    request.mutable_context()->set_frontendclientid("frontend-a");
+    request.mutable_context()->set_requestid("create-async-no-callresult");
+    request.mutable_context()->set_tenantid("tenant-a");
+    request.mutable_create()->set_function("0/tenant-a/faas/function");
+    (*request.mutable_create()->mutable_createoptions())["source"] = "frontend";
+    ::frontend_proxy::CreateInstanceResponse response;
+
+    EXPECT_TRUE(service.CreateInstance(nullptr, &request, &response).ok());
+    EXPECT_EQ(response.status().code(), GetParam() ? common::ERR_INNER_SYSTEM_ERROR : common::ERR_NONE);
+    EXPECT_EQ(response.create().instanceid(), "creating-instance");
+    EXPECT_FALSE(response.has_callresult());
+    EXPECT_EQ(response.routeaddress(), GetParam() ? "" : "proxy-node-a");
+}
+
+TEST_P(FrontendProxyCreateRouteTest, ReadyResponseRequiresFinalOwner)
+{
+    FrontendProxyServiceParam param;
+    param.nodeID = "proxy-node-a";
+    FrontendProxyService service(std::move(param));
+    ::frontend_proxy::CreateInstanceRequest request;
+    ::frontend_proxy::CreateInstanceResponse response;
+    response.mutable_create()->set_code(common::ERR_NONE);
+    response.mutable_create()->set_instanceid("created-instance");
+    response.mutable_callresult()->set_code(common::ERR_NONE);
+
+    EXPECT_TRUE(service.FinalizeCreateResponse(request, response).ok());
+    EXPECT_EQ(response.status().code(), common::ERR_INNER_SYSTEM_ERROR);
+    EXPECT_TRUE(response.routeaddress().empty());
+
+    response.mutable_callresult()->mutable_runtimeinfo()->set_proxyid("final-owner-proxy");
+    EXPECT_TRUE(service.FinalizeCreateResponse(request, response).ok());
+    EXPECT_EQ(response.status().code(), common::ERR_NONE);
+    EXPECT_EQ(response.routeaddress(), "final-owner-proxy");
+}
+
+INSTANTIATE_TEST_SUITE_P(ReliabilityModes, FrontendProxyCreateRouteTest, ::testing::Bool());
 
 TEST(FrontendProxyServiceTest, DuplicateRequestIDDoesNotReplaceExistingWaiter)
 {
