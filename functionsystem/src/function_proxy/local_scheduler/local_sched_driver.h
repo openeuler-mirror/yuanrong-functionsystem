@@ -87,8 +87,8 @@ struct LocalSchedStartParam {
     uint16_t maxPriority;
     std::string aggregatedStrategy_;
     bool enablePreemption;
-    bool enableUnitScheduler{ false };
-    std::string schedulePlacementPolicy{ "spread" };
+    bool enableUnitScheduler{ true };
+    std::string schedulePlacementPolicy{ "binpack" };
     bool isPartialWatchInstances;
     std::shared_ptr<DSCacheClientImpl> distributedCacheClient;
     bool runtimeInstanceDebugEnable;

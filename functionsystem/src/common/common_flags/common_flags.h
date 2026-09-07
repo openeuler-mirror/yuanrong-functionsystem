@@ -328,8 +328,8 @@ protected:
     uint16_t maxPriority_;
 
     std::string aggregatedStrategy_;
-    bool enableUnitScheduler_{ false };
-    std::string schedulePlacementPolicy_{ "spread" };
+    bool enableUnitScheduler_{ true };
+    std::string schedulePlacementPolicy_{ "binpack" };
 
     std::string clusterId_;
 

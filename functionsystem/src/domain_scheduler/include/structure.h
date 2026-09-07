@@ -31,15 +31,15 @@ struct DomainSchedulerParam {
     bool isScheduleTolerateAbnormal;
     uint16_t maxPriority = 0;
     bool enablePreemption = false;
-    int32_t relaxed = -1;
+    int32_t relaxed = 128;
     bool enableMetrics = true;
     bool enablePrintResourceView = false;
     std::string schedulePlugins = "";
-    std::string aggregatedStrategy{"no_aggregate"}; // three options : no_aggregate, strictly, relaxed
+    std::string aggregatedStrategy{"relaxed"}; // three options : no_aggregate, strictly, relaxed
     std::string componentName = "";
     bool enableHorizontalScale = false;
-    bool enableUnitScheduler = false;
-    std::string schedulePlacementPolicy{ "spread" };
+    bool enableUnitScheduler = true;
+    std::string schedulePlacementPolicy{ "binpack" };
 };
 }  // namespace functionsystem::domain_scheduler
 #endif  // DOMAIN_SCHEDULER_STRUCTURE_H

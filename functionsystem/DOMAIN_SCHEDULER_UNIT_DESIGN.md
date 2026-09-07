@@ -13,6 +13,12 @@
 | `false` | `PriorityScheduler + ResourceViewInfo` | `PriorityScheduler + ResourceViewInfo` |
 | `true` | `UnitScheduler + immutable ScheduleSnapshot` | `UnitScheduler + ResourceViewInfo mailbox` |
 
+默认启动配置为 `enable_unit_scheduler=true`、`schedule_placement_policy=binpack`、
+`aggregated_strategy=relaxed`、`schedule_relaxed=128`。Domain 默认启用语义聚合，
+候选扫描阈值为 128；Local 使用 UnitScheduler，但保持不聚合。
+可通过显式启动参数覆盖这些默认值；`enable_unit_scheduler=false` 切换到 Legacy，
+`aggregated_strategy=no_aggregate` 关闭聚合，`schedule_relaxed=-1` 扫描全部候选。
+
 Domain 是读多写少、候选规模大的场景，使用不可变快照消除调度 Actor 对 ResourceViewActor mailbox 和整棵资源树复制的依赖。Local 每次成功调度都会写入实例和资源状态，继续使用 mailbox 提供的顺序一致性屏障；它复用 UnitScheduler、队列、插件和有效资源缓存，但不构造调度快照，也不做聚合。
 
 Primary 和 Virtual 始终是两条独立 scheduling lane。每条 lane 独立持有 ResourceView、ScheduleQueueActor、调度器、队列、上下文和快照存储，不共享运行时资源状态。

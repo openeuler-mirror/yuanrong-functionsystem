@@ -43,7 +43,7 @@ public:
     struct StartOptions {
         std::string aggregatedStrategy{ "no_aggregate" };
         uint16_t maxPriority{ 0 };
-        bool enableUnitScheduler{ false };
+        bool enableUnitScheduler{ true };
     };
 
     explicit InstanceCtrl(const std::shared_ptr<InstanceCtrlActor> &instanceCtrlActor);

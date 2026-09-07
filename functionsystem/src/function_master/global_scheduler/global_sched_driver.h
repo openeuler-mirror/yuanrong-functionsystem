@@ -95,16 +95,16 @@ private:
     uint32_t domainHeartbeatTimeoutMs_{ DEFAULT_DOMAIN_HEARTBEAT_TIMEOUT };
     uint64_t pullResourceInterval_{ DEFAULT_PULL_RESOURCE_INTERVAL };
     uint16_t maxPriority_{ 0 };
-    std::string aggregatedStrategy_ {"no_aggregate"};
+    std::string aggregatedStrategy_ {"relaxed"};
 
     bool enableMetrics_{ false };
     bool enablePrintResourceView_{ false };
-    int32_t relaxed_ = -1;
+    int32_t relaxed_ = 128;
     bool enablePreemption_{ false };
     std::string componentName_{};
     bool enableHorizontalScale_{ false };
-    bool enableUnitScheduler_{ false };
-    std::string schedulePlacementPolicy_{ "spread" };
+    bool enableUnitScheduler_{ true };
+    std::string schedulePlacementPolicy_{ "binpack" };
 
     std::shared_ptr<TraefikRouteCache> traefikRouteCache_;
     std::shared_ptr<TraefikApiRouterRegister> traefikApiRouteRegister_;

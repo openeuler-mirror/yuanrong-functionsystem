@@ -36,19 +36,26 @@ TEST_F(CommonFlagsTest, DomainSchedulerFlagsOK)
     EXPECT_EQ(flags.GetLitebusThreadNum(), 50);  // 50: thread num
 }
 
-TEST_F(CommonFlagsTest, UnitSchedulerFlagsDefaultToLegacyAndParsePlacementPolicy)
+TEST_F(CommonFlagsTest, UnitSchedulerFlagsDefaultsAndExplicitOverrides)
 {
+    const char *defaultArgv[] = { "./domain_scheduler" };
     CommonFlags defaults;
-    EXPECT_FALSE(defaults.GetEnableUnitScheduler());
-    EXPECT_EQ(defaults.GetSchedulePlacementPolicy(), "spread");
+    ASSERT_TRUE(defaults.ParseFlags(1, defaultArgv).IsNone());
+    EXPECT_TRUE(defaults.GetEnableUnitScheduler());
+    EXPECT_EQ(defaults.GetSchedulePlacementPolicy(), "binpack");
+    EXPECT_EQ(defaults.GetAggregatedStrategy(), "relaxed");
+    EXPECT_EQ(defaults.GetScheduleRelaxed(), 128);
 
-    const char *argv[] = { "./domain_scheduler", "--enable_unit_scheduler=true",
-                           "--schedule_placement_policy=binpack" };
+    const char *argv[] = { "./domain_scheduler", "--enable_unit_scheduler=false",
+                          "--schedule_placement_policy=spread", "--aggregated_strategy=no_aggregate",
+                          "--schedule_relaxed=-1" };
     CommonFlags configured;
-    auto parse = configured.ParseFlags(3, argv);
+    auto parse = configured.ParseFlags(5, argv);
     ASSERT_TRUE(parse.IsNone());
-    EXPECT_TRUE(configured.GetEnableUnitScheduler());
-    EXPECT_EQ(configured.GetSchedulePlacementPolicy(), "binpack");
+    EXPECT_FALSE(configured.GetEnableUnitScheduler());
+    EXPECT_EQ(configured.GetSchedulePlacementPolicy(), "spread");
+    EXPECT_EQ(configured.GetAggregatedStrategy(), "no_aggregate");
+    EXPECT_EQ(configured.GetScheduleRelaxed(), -1);
 }
 
 TEST_F(CommonFlagsTest, UnitSchedulerPlacementPolicyRejectsUnknownValue)

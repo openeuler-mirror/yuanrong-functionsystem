@@ -89,6 +89,7 @@ TEST_F(DomainSchedulerDriverTest, StartUpWithPrioritySchedulerTest)
     auto identity = "node123-127.0.0.1:8080";
     domain_scheduler::DomainSchedulerParam param{ identity, "127.0.0.1:8080" };
     param.maxPriority = 10;
+    param.enableUnitScheduler = false;
     domain_scheduler::DomainSchedulerDriver driver(param);
     ASSERT_EQ(driver.Start(), Status::OK());
     ASSERT_EQ(driver.Start(), Status::OK());
@@ -104,7 +105,10 @@ TEST_F(DomainSchedulerDriverTest, StartUpWithUnitSchedulerAndSnapshotViewsTest)
     litebus::Spawn(global);
     auto identity = "node123-127.0.0.1:8080";
     domain_scheduler::DomainSchedulerParam param{ identity, "127.0.0.1:8080" };
-    param.enableUnitScheduler = true;
+    EXPECT_TRUE(param.enableUnitScheduler);
+    EXPECT_EQ(param.schedulePlacementPolicy, "binpack");
+    EXPECT_EQ(param.aggregatedStrategy, "relaxed");
+    EXPECT_EQ(param.relaxed, 128);
     domain_scheduler::DomainSchedulerDriver driver(param);
     ASSERT_EQ(driver.Start(), Status::OK());
     ASSERT_EQ(driver.Stop(), Status::OK());
