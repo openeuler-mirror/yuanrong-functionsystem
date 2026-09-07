@@ -44,6 +44,11 @@ public:
     virtual litebus::Future<ScheduleResult> ScheduleDecision(const std::shared_ptr<messages::ScheduleRequest> &req,
                                                              const litebus::Future<std::string> &cancelTag);
 
+    virtual litebus::Future<ScheduleResult> RetryScheduleDecision(
+        const std::shared_ptr<messages::ScheduleRequest> &req,
+        const litebus::Future<std::string> &cancelTag,
+        const std::string &conflictedUnitID);
+
     virtual litebus::Future<Status> ScheduleConfirm(
         const std::shared_ptr<messages::ScheduleResponse> &rsp, const resource_view::InstanceInfo &ins,
         const ScheduleResult &schedResult);

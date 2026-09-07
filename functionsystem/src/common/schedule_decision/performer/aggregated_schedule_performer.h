@@ -35,10 +35,18 @@ public:
     virtual std::shared_ptr<std::deque<ScheduleResult>> DoSchedule(
         const std::shared_ptr<schedule_framework::PreAllocatedContext> &context,
         const resource_view::ResourceViewInfo &resourceInfo, const std::shared_ptr<AggregatedItem> &aggregatedItem);
+    virtual std::shared_ptr<std::deque<ScheduleResult>> DoSchedule(
+        const std::shared_ptr<schedule_framework::PreAllocatedContext> &context,
+        const resource_view::ScheduleResourceView &resourceView,
+        const std::shared_ptr<AggregatedItem> &aggregatedItem);
 
     std::shared_ptr<std::deque<ScheduleResult>> DoMultiSchedule(
         const std::shared_ptr<schedule_framework::PreAllocatedContext> &context,
         const resource_view::ResourceViewInfo &resourceInfo,
+        const std::shared_ptr<std::deque<std::shared_ptr<InstanceItem>>> &items);
+    std::shared_ptr<std::deque<ScheduleResult>> DoMultiSchedule(
+        const std::shared_ptr<schedule_framework::PreAllocatedContext> &context,
+        const resource_view::ScheduleResourceView &resourceView,
         const std::shared_ptr<std::deque<std::shared_ptr<InstanceItem>>> &items);
 };
 }  // namespace functionsystem::schedule_decision

@@ -23,6 +23,7 @@
 #include "common/resource_view/resource_tool.h"
 #include "common/schedule_plugin/common/constants.h"
 #include "common/schedule_plugin/common/plugin_register.h"
+#include "common/schedule_plugin/common/round_allocation_context.h"
 #include "common/utils/numa_utils.h"
 #include "common/proto/pb/posix/common.pb.h"
 
@@ -326,10 +327,7 @@ schedule_framework::NodeScore NUMAAffinityScorer::Score(
         return nodeScore;
     }
 
-    resource_view::Resources effectiveAllocatable = resourceUnit.allocatable();
-    if (auto iter = preContext->allocated.find(resourceUnit.id()); iter != preContext->allocated.end()) {
-        effectiveAllocatable = resourceUnit.allocatable() - iter->second.resource;
-    }
+    const auto &effectiveAllocatable = preContext->EffectiveAllocatable(resourceUnit);
 
     const auto& extension = instance.scheduleoption().extension();
     auto bindResourceIter = extension.find("bind_resource");
@@ -349,6 +347,20 @@ schedule_framework::NodeScore NUMAAffinityScorer::Score(
         ApplyNUMAAllocation(ApplyNUMAAllocationContext{
             instance, resourceUnit, strategy, requiredCPUMillicores,
             effectiveAllocatable, selectedNodes, extension, nodeScore});
+        if (std::dynamic_pointer_cast<schedule_framework::RoundAllocationContext>(ctx) != nullptr) {
+            const auto available =
+                utils::NUMAUtils::GetNUMANodeCPUsFromAllocatable(effectiveAllocatable, resourceUnit.id());
+            double selectedAvailable = 0;
+            for (const auto node : selectedNodes) {
+                if (node >= 0 && static_cast<size_t>(node) < available.size()) {
+                    selectedAvailable += available[node];
+                }
+            }
+            if (selectedAvailable > 0) {
+                nodeScore.score = std::min<double>(DEFAULT_SCORE,
+                                                   requiredCPUMillicores / selectedAvailable * DEFAULT_SCORE);
+            }
+        }
     }
     return nodeScore;
 }

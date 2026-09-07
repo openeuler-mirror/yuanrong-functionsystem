@@ -108,6 +108,26 @@ GroupScheduleResult GroupSchedulePerformer::DoSchedule(
     return Schedule(context, resourceInfo, scheduleItem);
 }
 
+GroupScheduleResult GroupSchedulePerformer::DoSchedule(
+    const std::shared_ptr<schedule_framework::PreAllocatedContext> &context,
+    const resource_view::ScheduleResourceView &resourceView,
+    const std::shared_ptr<schedule_decision::GroupItem> &scheduleItem)
+{
+    if (!resourceView.IsSnapshot()) {
+        const auto *legacy = resourceView.GetLegacyResourceUnit();
+        if (legacy == nullptr) {
+            return GroupScheduleResult{ static_cast<int32_t>(StatusCode::ERR_INNER_SYSTEM_ERROR),
+                                        "invalid schedule resource view", {} };
+        }
+        resource_view::ResourceViewInfo info{ *legacy, resourceView.GetSchedulerLevel(),
+                                              resourceView.GetRequestPlacements(), resourceView.GetOwnerLabels() };
+        return DoSchedule(context, info, scheduleItem);
+    }
+    resource_view::ResourceViewInfo info{ resourceView.MaterializeResourceView(), resourceView.GetSchedulerLevel(),
+                                          resourceView.GetRequestPlacements(), resourceView.GetOwnerLabels() };
+    return DoSchedule(context, info, scheduleItem);
+}
+
 GroupScheduleResult GroupSchedulePerformer::Schedule(
     const std::shared_ptr<schedule_framework::PreAllocatedContext> &context,
     const resource_view::ResourceViewInfo &resourceInfo,
@@ -173,7 +193,7 @@ GroupScheduleResult GroupSchedulePerformer::Schedule(
         for (auto &ins : preemptRes.preemptedInstances) {
             PrePreemptFromResourceView(ins, cachedForPreemption->resourceUnit);
         }
-        DoPreAllocated(instanceItem->scheduleReq->instance(), context, preemptRes.unitID, result);
+        DoPreAllocated(instanceItem->scheduleReq->instance(), reqID, context, preemptRes.unitID, result);
         // preempt success, continue to schedule
         successCount++;
     }
@@ -241,15 +261,17 @@ GroupScheduleResult GroupSchedulePerformer::DoCollectGroupResult(
     YRLOG_WARN("DoCollectGroupResult stepCount {} reserved {}.", stepCount, reserved);
     GroupScheduleResult groupResult;
     groupResult.code = static_cast<int32_t>(StatusCode::SUCCESS);
-    int32_t index = 0;
-    for (auto result : results) {
-        index++;
+    const auto retained = static_cast<size_t>(reserved);
+    size_t index = 0;
+    for (const auto &result : results) {
         // unnecessary scheduling results need to be rolled back.
-        if (index > reserved) {
+        if (index >= retained) {
             RollBackAllocated(context, result.unitID, scheduleItem->groupReqs[index]->scheduleReq->instance(), nullptr);
+            ++index;
             continue;
         }
         groupResult.results.emplace_back(result);
+        ++index;
     }
     return groupResult;
 }

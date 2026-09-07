@@ -17,6 +17,9 @@
 #ifndef DOMAIN_DECISION_FAIRNESS_SCHEDULER_H
 #define DOMAIN_DECISION_FAIRNESS_SCHEDULER_H
 
+#include <atomic>
+#include <cstdint>
+
 #include "common/resource_view/resource_type.h"
 #include "common/schedule_decision/performer/group_schedule_performer.h"
 #include "common/schedule_decision/performer/instance_schedule_performer.h"
@@ -28,6 +31,14 @@
 #include "common/scheduler_framework/framework/framework_impl.h"
 
 namespace functionsystem::schedule_decision {
+struct ConsumeDiagnostics {
+    uint64_t calls{ 0 };
+    uint64_t requests{ 0 };
+    uint64_t totalNanos{ 0 };
+    uint64_t maxNanos{ 0 };
+    uint64_t maxRequests{ 0 };
+};
+
 class PriorityScheduler : public ScheduleStrategy {
 public:
     explicit PriorityScheduler(const std::shared_ptr<ScheduleRecorder> &recorder = nullptr, uint16_t maxPriority = 0,
@@ -41,13 +52,25 @@ public:
     bool CheckIsPendingQueueEmpty() override;
     ScheduleType GetScheduleType() override;
     void ConsumeRunningQueue() override;
+    size_t ConsumeRunningQueue(size_t maxRequests) override;
     void HandleResourceInfoUpdate(const resource_view::ResourceViewInfo &resourceInfo) override;
     void ActivatePendingRequests() override;
+    void HandleScheduleConflict(const std::string &requestID, const resource_view::InstanceInfo &instance,
+                                const std::string &unitID) override;
 
     void RegistPriorityPolicy(PriorityPolicyType priorityPolicyType);
+    void EnableConsumeDiagnostics(bool enabled);
+    ConsumeDiagnostics GetConsumeDiagnostics() const;
 
-private:
-    void DoConsume();
+protected:
+    std::shared_ptr<ScheduleQueue> CreateQueue() const;
+
+    size_t DoConsume(size_t maxRequests);
+    size_t ConsumeInstanceItem(const std::shared_ptr<QueueItem> &item);
+    size_t ConsumeGroupItem(const std::shared_ptr<QueueItem> &item);
+    size_t ConsumeAggregatedItem(const std::shared_ptr<QueueItem> &item, size_t maxRequests);
+    static size_t DiscardCanceledRequests(
+        const std::shared_ptr<std::deque<std::shared_ptr<InstanceItem>>> &items, size_t maxRequests);
 
     void OnScheduleDone(const litebus::Future<ScheduleResult> &future, const std::shared_ptr<InstanceItem> &instance);
 
@@ -60,8 +83,22 @@ private:
     std::shared_ptr<ScheduleQueue> pendingQueue_;
     std::shared_ptr<schedule_framework::PreAllocatedContext> preContext_;
     resource_view::ResourceViewInfo resourceInfo_;
+    // Used only by UnitScheduler's immutable-snapshot path. PriorityScheduler
+    // continues to call the legacy ResourceViewInfo performer overloads.
+    std::shared_ptr<resource_view::ScheduleResourceView> scheduleResourceView_;
     std::shared_ptr<ScheduleRecorder> recorder_;
     int maxPriority_;
+    std::string aggregatedStrategy_;
+    bool semanticAggregation_{ false };
+    bool aggregationAllowed_{ true };
+    bool consumeDiagnosticsEnabled_{ false };
+
+private:
+    std::atomic<uint64_t> consumeCalls_{ 0 };
+    std::atomic<uint64_t> consumedRequests_{ 0 };
+    std::atomic<uint64_t> consumeTotalNanos_{ 0 };
+    std::atomic<uint64_t> consumeMaxNanos_{ 0 };
+    std::atomic<uint64_t> consumeMaxRequests_{ 0 };
 };
 }  // namespace functionsystem::schedule_decision
 #endif  // DOMAIN_DECISION_FAIRNESS_SCHEDULER_H

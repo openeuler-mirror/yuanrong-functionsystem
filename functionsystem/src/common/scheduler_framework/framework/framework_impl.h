@@ -16,6 +16,7 @@
 #ifndef SCHEDULER_FRAMEWORK_IMPL_H
 #define SCHEDULER_FRAMEWORK_IMPL_H
 
+#include <optional>
 #include <string>
 #include <unordered_map>
 
@@ -36,7 +37,38 @@ public:
     ScheduleResults SelectFeasible(const std::shared_ptr<ScheduleContext> &ctx,
                                    const resource_view::InstanceInfo &instance,
                                    const resource_view::ResourceUnit &resourceUnit, uint32_t expectedFeasible) override;
+    ScheduleResults SelectFeasible(const std::shared_ptr<ScheduleContext> &ctx,
+                                   const resource_view::InstanceInfo &instance,
+                                   const resource_view::ScheduleResourceView &resourceView,
+                                   uint32_t expectedFeasible) override;
+    bool SupportsScheduleSnapshot() const override;
+    bool SupportsSemanticAggregation() const override;
+    CandidateEvaluation EvaluateUnit(const std::shared_ptr<ScheduleContext> &ctx,
+                                     const resource_view::InstanceInfo &instance,
+                                     const resource_view::ScheduleResourceView &resourceView,
+                                     const std::string &unitID) override;
 private:
+    struct SnapshotCandidateRange;
+    struct SnapshotSelectionState;
+
+    ScheduleResults SelectFeasibleFromSnapshot(const std::shared_ptr<ScheduleContext> &ctx,
+                                               const resource_view::InstanceInfo &instance,
+                                               const resource_view::ScheduleSnapshotPtr &snapshot,
+                                               uint32_t expectedFeasible);
+    SnapshotCandidateRange PrepareSnapshotCandidateRange(
+        const resource_view::InstanceInfo &instance, const resource_view::ScheduleSnapshotPtr &snapshot) const;
+    size_t FindSnapshotStart(const resource_view::ScheduleSnapshotPtr &snapshot,
+                             const SnapshotCandidateRange &range) const;
+    ScheduleResults ScanSnapshotCandidates(const std::shared_ptr<ScheduleContext> &ctx,
+                                           const resource_view::InstanceInfo &instance,
+                                           const resource_view::ScheduleSnapshotPtr &snapshot,
+                                           const SnapshotCandidateRange &range);
+    std::optional<ScheduleResults> EvaluateSnapshotCandidate(
+        const std::shared_ptr<ScheduleContext> &ctx, const resource_view::InstanceInfo &instance,
+        const resource_view::ResourceUnit &unit, SnapshotSelectionState &state);
+    bool IsReachAggregateCapacity(const std::priority_queue<NodeScore> &feasible, int64_t aggregateCapacity,
+                                  bool hasUnboundedCandidate, uint32_t expectedFeasible) const;
+
     std::shared_ptr<PreFilterResult> PreFilter(const std::shared_ptr<ScheduleContext> &ctx,
                                                const resource_view::InstanceInfo &instance,
                                                const resource_view::ResourceUnit &resourceUnit);

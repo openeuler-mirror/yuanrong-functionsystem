@@ -35,6 +35,12 @@ using PreemptInstancesFunc =
 
 class SchedulePerformer {
 public:
+    struct CandidateSelection {
+        std::priority_queue<schedule_framework::NodeScore> &candidateNode;
+        std::unordered_map<std::string, int32_t> &preAllocatedSelected;
+        bool refreshSelectedUnit{ false };
+    };
+
     explicit SchedulePerformer(const AllocateType &type)
         : type_(type), preemptController_(std::make_shared<PreemptionController>())
     {
@@ -62,6 +68,11 @@ public:
         framework_ = framework;
     }
 
+    void SetPlacementPolicy(const std::string &policy)
+    {
+        placementPolicy_ = policy;
+    }
+
     template <typename T, typename V>
     T DoSchedule(const std::shared_ptr<schedule_framework::PreAllocatedContext> &,
                  const resource_view::ResourceViewInfo &, const std::shared_ptr<V> &) const
@@ -78,15 +89,17 @@ public:
                       const std::shared_ptr<schedule_framework::PreAllocatedContext> &context,
                       const std::string &requestID, const std::string &traceID, ScheduleResult &result);
 
-    void DoPreAllocated(const resource_view::InstanceInfo &ins,
+    void DoPreAllocated(const resource_view::InstanceInfo &ins, const std::string &requestID,
                         const std::shared_ptr<schedule_framework::PreAllocatedContext> &context,
                         const std::string &selected, ScheduleResult &result);
 
     void Allocate(const std::shared_ptr<schedule_framework::PreAllocatedContext> &context, const std::string &selected,
-                  const resource_view::InstanceInfo &ins, ScheduleResult &schedResult);
+                  const std::string &requestID, resource_view::InstanceInfo ins, ScheduleResult &schedResult);
 
     std::string GetAlreadyScheduledResult(const std::string &requestID,
                                           const resource_view::ResourceViewInfo &resourceInfo) const;
+    std::string GetAlreadyScheduledResult(const std::string &requestID,
+                                          const resource_view::ScheduleResourceView &resourceView) const;
 
     void RollBackAllocated(const std::shared_ptr<schedule_framework::PreAllocatedContext> &context,
                            const std::string &selected, const resource_view::InstanceInfo &ins,
@@ -100,6 +113,9 @@ public:
     ScheduleResult DoSelectOne(const std::shared_ptr<schedule_framework::PreAllocatedContext> &context,
                                const resource_view::ResourceViewInfo &resourceInfo,
                                const std::shared_ptr<InstanceItem> &instanceItem);
+    ScheduleResult DoSelectOne(const std::shared_ptr<schedule_framework::PreAllocatedContext> &context,
+                               const resource_view::ScheduleResourceView &resourceView,
+                               const std::shared_ptr<InstanceItem> &instanceItem);
 
     bool IsScheduleResultNeedPreempt(const ScheduleResult &result);
 
@@ -112,20 +128,39 @@ public:
                      const resource_view::ResourceViewInfo &resourceInfo,
                      const std::shared_ptr<InstanceItem> &instanceItem, ScheduleResult &result,
                      std::unordered_map<std::string, int32_t> &preAllocatedSelected);
+    bool IsScheduled(const std::shared_ptr<schedule_framework::PreAllocatedContext> &context,
+                     const resource_view::ScheduleResourceView &resourceView,
+                     const std::shared_ptr<InstanceItem> &instanceItem, ScheduleResult &result,
+                     std::unordered_map<std::string, int32_t> &preAllocatedSelected);
 
     ScheduleResult SelectFromResults(const std::shared_ptr<schedule_framework::PreAllocatedContext> &context,
                                      const resource_view::ResourceViewInfo &resourceInfo,
                                      const std::shared_ptr<InstanceItem> &instanceItem,
                                      std::priority_queue<schedule_framework::NodeScore> &candidateNode,
                                      std::unordered_map<std::string, int32_t> &preAllocatedSelected);
+    ScheduleResult SelectFromResults(const std::shared_ptr<schedule_framework::PreAllocatedContext> &context,
+                                     const resource_view::ScheduleResourceView &resourceView,
+                                     const std::shared_ptr<InstanceItem> &instanceItem,
+                                     CandidateSelection selection);
 
 protected:
+    static bool PrepareCandidate(CandidateSelection &selection, schedule_framework::NodeScore &nodeScore);
+    void RefreshCandidate(const std::shared_ptr<schedule_framework::PreAllocatedContext> &context,
+                          const resource_view::ScheduleResourceView &resourceView,
+                          const std::shared_ptr<InstanceItem> &instanceItem,
+                          const schedule_framework::NodeScore &nodeScore, CandidateSelection &selection);
+    ScheduleResult CommitCandidate(const std::shared_ptr<schedule_framework::PreAllocatedContext> &context,
+                                   const resource_view::ScheduleResourceView &resourceView,
+                                   const std::shared_ptr<InstanceItem> &instanceItem,
+                                   schedule_framework::NodeScore &nodeScore, CandidateSelection &selection);
+
     AllocateType type_;
     bool enablePrintResourceView_ = false;
     std::shared_ptr<resource_view::ResourceView> resourceView_;
     std::shared_ptr<schedule_framework::Framework> framework_;
     std::shared_ptr<PreemptionController> preemptController_;
     PreemptInstancesFunc preemptInstanceCallback_;
+    std::string placementPolicy_{ "binpack" };
 };
 
 }
