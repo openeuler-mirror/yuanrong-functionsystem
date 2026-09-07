@@ -20,7 +20,7 @@
 #include <gtest/gtest.h>
 
 #include "common/resource_view/view_utils.h"
-#include "common/schedule_plugin/common/preallocated_context.h"
+#include "common/schedule_plugin/common/round_allocation_context.h"
 
 namespace functionsystem::test {
 using namespace ::testing;
@@ -88,6 +88,22 @@ TEST(DiskScorerTest, ScoreWithFloatDiskReq) {
     for (size_t i = 0; i< expectAlloc.size(); i++) {
         EXPECT_EQ(expectAlloc[i], valuesAlloc.values(i));
     }
+}
+
+TEST(DiskScorerTest, UnitRoundUsesTightestFeasibleDiskWhileLegacyKeepsExistingChoice)
+{
+    DiskScorer scorer;
+    auto instance = view_utils::Get1DInstanceWithDiskResource(100);
+    auto unit = view_utils::Get1DResourceUnitWithDisk({ 100, 200 }, DEFAULT_NODE_ID);
+
+    auto legacy = scorer.Score(std::make_shared<PreAllocatedContext>(), instance, unit);
+    ASSERT_EQ(legacy.vectorAllocations.size(), size_t{1});
+    EXPECT_EQ(legacy.vectorAllocations[0].selectedIndices[0], 1);
+
+    auto compact = scorer.Score(std::make_shared<RoundAllocationContext>(), instance, unit);
+    ASSERT_EQ(compact.vectorAllocations.size(), size_t{1});
+    EXPECT_EQ(compact.vectorAllocations[0].selectedIndices[0], 0);
+    EXPECT_GT(compact.score, legacy.score);
 }
 
 // abnormal scenario: Tests disk scoring with insufficient disk resource

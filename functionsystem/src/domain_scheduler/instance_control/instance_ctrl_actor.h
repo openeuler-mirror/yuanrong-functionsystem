@@ -18,6 +18,7 @@
 #define DOMAIN_INSTANCE_CTRL_H
 
 #include <async/future.hpp>
+#include <chrono>
 #include <litebus.hpp>
 #include <vector>
 
@@ -140,6 +141,9 @@ protected:
     void Init() override;
 
 private:
+    litebus::Future<std::shared_ptr<messages::ScheduleResponse>> ScheduleDecisionInternal(
+        const std::shared_ptr<messages::ScheduleRequest> &req, const std::string &conflictedUnitID);
+
     litebus::Future<std::shared_ptr<messages::ScheduleResponse>> DispatchSchedule(
         const litebus::Future<schedule_decision::ScheduleResult> &result,
         const std::shared_ptr<messages::ScheduleRequest> &req, uint32_t dispatchTimes);
@@ -154,7 +158,8 @@ private:
                                const std::shared_ptr<messages::ScheduleRequest> &req, uint32_t dispatchTimes);
 
     litebus::Future<std::shared_ptr<messages::ScheduleResponse>> CheckReSchedulingIsRequired(
-        const std::shared_ptr<messages::ScheduleResponse> &rsp, const std::shared_ptr<messages::ScheduleRequest> &req);
+        const std::shared_ptr<messages::ScheduleResponse> &rsp, const std::shared_ptr<messages::ScheduleRequest> &req,
+        const schedule_decision::ScheduleResult &schedResult);
 
     litebus::Future<std::shared_ptr<messages::CreateAgentResponse>> CreateAgent(
         const std::shared_ptr<messages::ScheduleRequest> &req);
@@ -170,7 +175,16 @@ private:
         const schedule_decision::ScheduleResult &result, const std::shared_ptr<messages::ScheduleRequest> &req);
 
     void RetrySchedule(const std::shared_ptr<messages::ScheduleRequest> &req,
-                       const litebus::Promise<std::shared_ptr<messages::ScheduleResponse>> &promise);
+                       const litebus::Promise<std::shared_ptr<messages::ScheduleResponse>> &promise,
+                       const std::shared_ptr<messages::ScheduleResponse> &lastResponse);
+
+    uint64_t RemainingScheduleTime(const std::shared_ptr<messages::ScheduleRequest> &req) const;
+
+    bool IsScheduleTimedOut(const std::shared_ptr<messages::ScheduleRequest> &req) const;
+
+    void FinishSchedule(const litebus::Future<std::shared_ptr<messages::ScheduleResponse>> &rsp,
+                        const std::string &requestID,
+                        const litebus::Promise<std::shared_ptr<messages::ScheduleResponse>> &promise);
 
     std::shared_ptr<litebus::Promise<std::string>> GetCancelTag(const std::string &requestId);
 
@@ -183,6 +197,8 @@ private:
 
     uint32_t maxSchedReTryTimes_;
     std::unordered_map<std::string, uint32_t> requestTrySchedTimes_;
+    // Owned by the outermost Schedule call; nested retries must not reset or erase this budget.
+    std::unordered_map<std::string, std::chrono::steady_clock::time_point> scheduleStartTimes_;
     std::unordered_map<std::string, uint32_t> waitAgentCreatRetryTimes_;
     std::unordered_map<std::string, litebus::Promise<std::shared_ptr<messages::CreateAgentResponse>>>
         createAgentPromises_;

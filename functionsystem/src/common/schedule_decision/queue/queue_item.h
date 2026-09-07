@@ -120,6 +120,10 @@ public:
     }
     std::shared_ptr<messages::ScheduleRequest> scheduleReq;
     std::shared_ptr<litebus::Promise<ScheduleResult>> schedulePromise;
+    // Set only for an internal retry after the previous Local rejected the
+    // Domain placement. Such a request is deliberately not aggregated and
+    // excludes the failed Unit for this one retry.
+    std::string conflictedUnitID;
 };
 
 class GroupItem : public QueueItem {

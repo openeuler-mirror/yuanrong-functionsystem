@@ -188,6 +188,15 @@ TEST_F(IdleActorTest, RunningTransition_PreservesEarlierBusyReport)
     litebus::Async(idleActor_->GetAID(), &IdleActor::OnInstanceRunning, sm->GetInstanceInfo());
 
     std::this_thread::sleep_for(std::chrono::seconds(3));
+    ASSERT_TRUE(Mock::VerifyAndClearExpectations(facadeViewMock_.get()));
+
+    std::atomic<int> callCount{ 0 };
+    EXPECT_CALL(*facadeViewMock_, GetInstance(INST_ID)).WillOnce(Invoke([&](const std::string &) {
+        callCount++;
+        return nullptr;
+    }));
+    litebus::Async(idleActor_->GetAID(), &IdleActor::TrafficReport, std::string(INST_ID), static_cast<size_t>(0));
+    ASSERT_AWAIT_TRUE([&]() { return callCount > 0; });
 }
 
 /**

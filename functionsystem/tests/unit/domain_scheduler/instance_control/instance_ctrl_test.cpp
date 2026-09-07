@@ -325,7 +325,10 @@ TEST_F(DomainInstanceCtrlTest, ReSchedulingAfterConflict)
 
     std::string mockSelectedName = "selected";
     ScheduleResult result{ mockSelectedName, 0, "" };
-    EXPECT_CALL(*mockScheduler_, ScheduleDecision(_, _)).WillRepeatedly(Return(AsyncReturn(result)));
+    result.unitID = "selected-unit";
+    EXPECT_CALL(*mockScheduler_, ScheduleDecision(_, _)).WillOnce(Return(AsyncReturn(result)));
+    EXPECT_CALL(*mockScheduler_, RetryScheduleDecision(_, _, result.unitID))
+        .WillRepeatedly(Return(AsyncReturn(result)));
 
     auto mockSchedRsp = std::make_shared<messages::ScheduleResponse>();
     mockSchedRsp->set_code(StatusCode::RESOURCE_NOT_ENOUGH);
@@ -377,7 +380,10 @@ TEST_F(DomainInstanceCtrlTest, ReSchedulingFailedAfterConflict)
 
     std::string mockSelectedName = "selected";
     ScheduleResult result{ mockSelectedName, 0, "" };
-    EXPECT_CALL(*mockScheduler_, ScheduleDecision(_, _)).WillRepeatedly(Return(AsyncReturn(result)));
+    result.unitID = "selected-unit";
+    EXPECT_CALL(*mockScheduler_, ScheduleDecision(_, _)).WillOnce(Return(AsyncReturn(result)));
+    EXPECT_CALL(*mockScheduler_, RetryScheduleDecision(_, _, result.unitID))
+        .WillRepeatedly(Return(AsyncReturn(result)));
 
     auto mockSchedRsp = std::make_shared<messages::ScheduleResponse>();
     mockSchedRsp->set_code(StatusCode::RESOURCE_NOT_ENOUGH);
@@ -1006,5 +1012,193 @@ TEST_F(DomainInstanceCtrlTest, ScheduleTimeoutCancel)
     EXPECT_EQ(rsp->code(), StatusCode::ERR_SCHEDULE_CANCELED);
     EXPECT_EQ(rsp->requestid(), "req");
     EXPECT_TRUE(instanceCtrl_->cancelTag_.find(rsp->requestid())==instanceCtrl_->cancelTag_.end());
+    EXPECT_TRUE(instanceCtrl_->scheduleStartTimes_.empty());
+}
+
+TEST_F(DomainInstanceCtrlTest, ConflictsShareScheduleTimeoutBudget)
+{
+    domain_scheduler::InstanceCtrl instanceCtrl(instanceCtrl_->GetAID());
+    auto req = std::make_shared<messages::ScheduleRequest>();
+    req->set_requestid("conflict-budget");
+    req->mutable_instance()->mutable_scheduleoption()->set_scheduletimeoutms(30000);
+    ScheduleResult selected{"selected", 0, ""};
+    // Advance elapsed time on the actor thread, avoiding a real 30-second wait.
+    EXPECT_CALL(*mockScheduler_, ScheduleDecision(_, _))
+        .WillOnce(testing::Invoke([this, selected](const auto &request, const auto &) {
+            instanceCtrl_->scheduleStartTimes_[request->requestid()] =
+                std::chrono::steady_clock::now() - std::chrono::milliseconds(29000);
+            return AsyncReturn(selected);
+        }))
+        .WillOnce(testing::Invoke([this, selected](const auto &request, const auto &) {
+            instanceCtrl_->scheduleStartTimes_[request->requestid()] -= std::chrono::milliseconds(800);
+            return AsyncReturn(selected);
+        }))
+        .WillOnce(testing::Invoke([this](const auto &request, const auto &) {
+            instanceCtrl_->recorder_->RecordScheduleErr(request->requestid(),
+                Status(StatusCode::RESOURCE_NOT_ENOUGH, "no available resources"));
+            return litebus::Future<ScheduleResult>();
+        }));
+    EXPECT_CALL(*primary_, GetUnitSnapshotInfo(_)).Times(2)
+        .WillRepeatedly(Return(litebus::Future<resource_view::PullResourceRequest>{resource_view::PullResourceRequest{}}));
+    EXPECT_CALL(*mockUnderlayerScheMgr_, DispatchSchedule("selected", _)).Times(2)
+        .WillRepeatedly(testing::Invoke([](const auto &, const auto &request) {
+            auto rsp = std::make_shared<messages::ScheduleResponse>();
+            rsp->set_requestid(request->requestid());
+            rsp->set_code(StatusCode::RESOURCE_NOT_ENOUGH);
+            return AsyncReturn(rsp);
+        }));
+
+    auto future = instanceCtrl.Schedule(req);
+    ASSERT_AWAIT_READY_FOR(future, 2000);
+    EXPECT_EQ(future.Get()->code(), StatusCode::ERR_RESOURCE_NOT_ENOUGH);
+    EXPECT_EQ(future.Get()->requestid(), req->requestid());
+    EXPECT_EQ(req->instance().scheduleoption().scheduletimeoutms(), 30000u);
+    EXPECT_TRUE(instanceCtrl_->scheduleStartTimes_.empty());
+    EXPECT_TRUE(instanceCtrl_->cancelTag_.empty());
+}
+
+TEST_F(DomainInstanceCtrlTest, ConflictAfterDeadlineReturnsResourceFailure)
+{
+    domain_scheduler::InstanceCtrl instanceCtrl(instanceCtrl_->GetAID());
+    auto req = std::make_shared<messages::ScheduleRequest>();
+    req->set_requestid("expired-conflict");
+    req->mutable_instance()->mutable_scheduleoption()->set_scheduletimeoutms(30000);
+    EXPECT_CALL(*mockScheduler_, ScheduleDecision(_, _))
+        .WillOnce(testing::Invoke([this](const auto &request, const auto &) {
+            instanceCtrl_->scheduleStartTimes_[request->requestid()] -= std::chrono::seconds(31);
+            return AsyncReturn(ScheduleResult{"selected", 0, ""});
+        }));
+    EXPECT_CALL(*primary_, GetUnitSnapshotInfo(_))
+        .WillOnce(Return(litebus::Future<resource_view::PullResourceRequest>{resource_view::PullResourceRequest{}}));
+    auto failure = std::make_shared<messages::ScheduleResponse>();
+    failure->set_requestid(req->requestid());
+    failure->set_code(StatusCode::RESOURCE_NOT_ENOUGH);
+    failure->set_message("lower scheduler has no resources");
+    EXPECT_CALL(*mockUnderlayerScheMgr_, DispatchSchedule("selected", _)).WillOnce(Return(AsyncReturn(failure)));
+
+    auto future = instanceCtrl.Schedule(req);
+    ASSERT_AWAIT_READY_FOR(future, 1000);
+    EXPECT_EQ(future.Get()->code(), StatusCode::ERR_RESOURCE_NOT_ENOUGH);
+    EXPECT_NE(future.Get()->message().find("lower scheduler has no resources"), std::string::npos);
+    EXPECT_TRUE(instanceCtrl_->scheduleStartTimes_.empty());
+}
+
+TEST_F(DomainInstanceCtrlTest, DelayedRetryUsesRemainingScheduleBudget)
+{
+    instanceCtrl_->SetDomainLevel(true);
+    instanceCtrl_->SetRetryScheduleIntervals({5000});
+    domain_scheduler::InstanceCtrl instanceCtrl(instanceCtrl_->GetAID());
+    auto req = std::make_shared<messages::ScheduleRequest>();
+    req->set_requestid("delayed-budget");
+    req->mutable_instance()->mutable_scheduleoption()->set_scheduletimeoutms(30000);
+    EXPECT_CALL(*mockScheduler_, ScheduleDecision(_, _))
+        .WillOnce(testing::Invoke([this](const auto &request, const auto &) {
+            instanceCtrl_->scheduleStartTimes_[request->requestid()] -= std::chrono::milliseconds(29800);
+            return AsyncReturn(ScheduleResult{"", static_cast<int32_t>(StatusCode::RESOURCE_NOT_ENOUGH),
+                "no available resources"});
+        }));
+    EXPECT_CALL(*mockUnderlayerScheMgr_, DispatchSchedule(_, _)).Times(0);
+
+    auto future = instanceCtrl.Schedule(req);
+    ASSERT_AWAIT_READY_FOR(future, 2000);
+    EXPECT_EQ(future.Get()->code(), StatusCode::ERR_RESOURCE_NOT_ENOUGH);
+    EXPECT_TRUE(instanceCtrl_->scheduleStartTimes_.empty());
+    EXPECT_TRUE(instanceCtrl_->requestTrySchedTimes_.empty());
+    EXPECT_TRUE(instanceCtrl_->cancelTag_.empty());
+}
+
+TEST_F(DomainInstanceCtrlTest, DelayedRetryDoesNotResetScheduleBudget)
+{
+    instanceCtrl_->SetDomainLevel(true);
+    instanceCtrl_->SetRetryScheduleIntervals({50});
+    domain_scheduler::InstanceCtrl instanceCtrl(instanceCtrl_->GetAID());
+    auto req = std::make_shared<messages::ScheduleRequest>();
+    req->set_requestid("retry-entry-budget");
+    req->mutable_instance()->mutable_scheduleoption()->set_scheduletimeoutms(30000);
+    EXPECT_CALL(*mockScheduler_, ScheduleDecision(_, _))
+        .WillOnce(testing::Invoke([this](const auto &request, const auto &) {
+            instanceCtrl_->scheduleStartTimes_[request->requestid()] -= std::chrono::milliseconds(29500);
+            return AsyncReturn(ScheduleResult{"", static_cast<int32_t>(StatusCode::RESOURCE_NOT_ENOUGH), "full"});
+        }))
+        .WillOnce(testing::Invoke([this](const auto &request, const auto &) {
+            instanceCtrl_->recorder_->RecordScheduleErr(request->requestid(),
+                Status(StatusCode::RESOURCE_NOT_ENOUGH, "still full"));
+            return litebus::Future<ScheduleResult>();
+        }));
+    auto future = instanceCtrl.Schedule(req);
+    ASSERT_AWAIT_READY_FOR(future, 2000);
+    EXPECT_EQ(future.Get()->code(), StatusCode::ERR_RESOURCE_NOT_ENOUGH);
+    EXPECT_TRUE(instanceCtrl_->scheduleStartTimes_.empty());
+    EXPECT_TRUE(instanceCtrl_->requestTrySchedTimes_.empty());
+}
+
+TEST_F(DomainInstanceCtrlTest, WaitForAgentUsesRemainingScheduleBudget)
+{
+    instanceCtrl_->SetDomainLevel(true);
+    instanceCtrl_->SetCreateAgentAwaitRetryInterval(5000);
+    domain_scheduler::InstanceCtrl instanceCtrl(instanceCtrl_->GetAID());
+    auto req = std::make_shared<messages::ScheduleRequest>();
+    req->set_requestid("agent-wait-budget");
+    req->mutable_instance()->mutable_scheduleoption()->set_scheduletimeoutms(30000);
+    (*req->mutable_instance()->mutable_createoptions())[AFFINITY_POOL_ID] = "pool";
+    EXPECT_CALL(*mockScheduler_, ScheduleDecision(_, _))
+        .WillOnce(testing::Invoke([this](const auto &request, const auto &) {
+            instanceCtrl_->scheduleStartTimes_[request->requestid()] -= std::chrono::milliseconds(29800);
+            instanceCtrl_->waitAgentCreatRetryTimes_[request->requestid()] = 0;
+            return AsyncReturn(ScheduleResult{"", static_cast<int32_t>(StatusCode::RESOURCE_NOT_ENOUGH), "full"});
+        }));
+    auto future = instanceCtrl.Schedule(req);
+    ASSERT_AWAIT_READY_FOR(future, 2000);
+    EXPECT_EQ(future.Get()->code(), StatusCode::ERR_RESOURCE_NOT_ENOUGH);
+    EXPECT_TRUE(instanceCtrl_->scheduleStartTimes_.empty());
+    EXPECT_TRUE(instanceCtrl_->waitAgentCreatRetryTimes_.empty());
+}
+
+TEST_F(DomainInstanceCtrlTest, FailedFutureCleansScheduleBudget)
+{
+    domain_scheduler::InstanceCtrl instanceCtrl(instanceCtrl_->GetAID());
+    auto req = std::make_shared<messages::ScheduleRequest>();
+    req->set_requestid("failed-future-budget");
+    req->mutable_instance()->mutable_scheduleoption()->set_scheduletimeoutms(30000);
+    litebus::Promise<ScheduleResult> failed;
+    failed.SetFailed(StatusCode::FAILED);
+    EXPECT_CALL(*mockScheduler_, ScheduleDecision(_, _)).WillOnce(Return(failed.GetFuture()));
+
+    auto future = instanceCtrl.Schedule(req);
+    ASSERT_AWAIT_SET_FOR(future, 1000);
+    EXPECT_TRUE(future.IsError());
+    EXPECT_EQ(future.GetErrorCode(), StatusCode::FAILED);
+    EXPECT_TRUE(instanceCtrl_->scheduleStartTimes_.empty());
+    EXPECT_TRUE(instanceCtrl_->requestTrySchedTimes_.empty());
+    EXPECT_TRUE(instanceCtrl_->cancelTag_.empty());
+}
+
+TEST_F(DomainInstanceCtrlTest, CompletedRequestDoesNotRetainScheduleBudget)
+{
+    domain_scheduler::InstanceCtrl instanceCtrl(instanceCtrl_->GetAID());
+    auto req = std::make_shared<messages::ScheduleRequest>();
+    req->set_requestid("reused-request-id");
+    req->mutable_instance()->mutable_scheduleoption()->set_scheduletimeoutms(30000);
+    EXPECT_CALL(*mockScheduler_, ScheduleDecision(_, _))
+        .WillOnce(testing::Invoke([this](const auto &request, const auto &) {
+            instanceCtrl_->scheduleStartTimes_[request->requestid()] -= std::chrono::seconds(31);
+            return AsyncReturn(ScheduleResult{"", static_cast<int32_t>(StatusCode::RESOURCE_NOT_ENOUGH), "full"});
+        }))
+        .WillOnce(Return(AsyncReturn(ScheduleResult{"selected", 0, ""})));
+    EXPECT_CALL(*primary_, GetUnitSnapshotInfo(_))
+        .WillOnce(Return(litebus::Future<resource_view::PullResourceRequest>{resource_view::PullResourceRequest{}}));
+    auto success = std::make_shared<messages::ScheduleResponse>();
+    success->set_requestid(req->requestid());
+    success->set_code(0);
+    EXPECT_CALL(*mockUnderlayerScheMgr_, DispatchSchedule("selected", _)).WillOnce(Return(AsyncReturn(success)));
+
+    auto first = instanceCtrl.Schedule(req);
+    ASSERT_AWAIT_READY_FOR(first, 1000);
+    EXPECT_EQ(first.Get()->code(), StatusCode::ERR_RESOURCE_NOT_ENOUGH);
+    EXPECT_TRUE(instanceCtrl_->scheduleStartTimes_.empty());
+    auto second = instanceCtrl.Schedule(req);
+    ASSERT_AWAIT_READY_FOR(second, 1000);
+    EXPECT_EQ(second.Get()->code(), 0);
+    EXPECT_TRUE(instanceCtrl_->scheduleStartTimes_.empty());
 }
 }  // namespace functionsystem::test

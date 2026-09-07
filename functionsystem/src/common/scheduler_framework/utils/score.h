@@ -56,6 +56,7 @@ struct NodeScore {
     // resource is allowed.
     // is assigned by framework. if returned by scored plugin, the value would be ignored.
     int32_t availableForRequest = 0;
+    uint32_t placementCount = 0;
 
     // Resource's name: Value.Vectors
     std::map<std::string, ::resources::Value_Vectors> allocatedVectors;
@@ -64,7 +65,13 @@ struct NodeScore {
 
     bool operator<(const NodeScore& a) const
     {
-        return score < a.score;
+        if (score != a.score) {
+            return score < a.score;
+        }
+        if (placementCount != a.placementCount) {
+            return placementCount > a.placementCount;
+        }
+        return false;
     }
 
     NodeScore& operator+=(const NodeScore& a)

@@ -15,6 +15,8 @@
  */
 #include "instance_ctrl_actor.h"
 
+#include <algorithm>
+
 #include "async/async.hpp"
 #include "async/asyncafter.hpp"
 #include "async/defer.hpp"
@@ -77,15 +79,63 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
     ASSERT_IF_NULL(recorder_);
     recorder_->RecordScheduleRequest(req);
 
-    return ScheduleDecision(req);
+    const bool firstAttempt = scheduleStartTimes_.emplace(req->requestid(), std::chrono::steady_clock::now()).second;
+    auto future = ScheduleDecision(req);
+    if (!firstAttempt) {
+        return future;
+    }
+    litebus::Promise<std::shared_ptr<messages::ScheduleResponse>> promise;
+    future.OnComplete(litebus::Defer(GetAID(), &InstanceCtrlActor::FinishSchedule, std::placeholders::_1,
+                                     req->requestid(), promise));
+    return promise.GetFuture();
+}
+
+uint64_t InstanceCtrlActor::RemainingScheduleTime(const std::shared_ptr<messages::ScheduleRequest> &req) const
+{
+    const uint64_t timeout = req->instance().scheduleoption().scheduletimeoutms();
+    auto iter = scheduleStartTimes_.find(req->requestid());
+    if (timeout == 0 || iter == scheduleStartTimes_.end()) {
+        return timeout;
+    }
+    const auto elapsed = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - iter->second).count());
+    return elapsed >= timeout ? 0 : timeout - elapsed;
+}
+
+bool InstanceCtrlActor::IsScheduleTimedOut(const std::shared_ptr<messages::ScheduleRequest> &req) const
+{
+    return req->instance().scheduleoption().scheduletimeoutms() > 0 && RemainingScheduleTime(req) == 0;
+}
+
+void InstanceCtrlActor::FinishSchedule(
+    const litebus::Future<std::shared_ptr<messages::ScheduleResponse>> &rsp, const std::string &requestID,
+    const litebus::Promise<std::shared_ptr<messages::ScheduleResponse>> &promise)
+{
+    (void)scheduleStartTimes_.erase(requestID);
+    (void)requestTrySchedTimes_.erase(requestID);
+    (void)waitAgentCreatRetryTimes_.erase(requestID);
+    (void)cancelTag_.erase(requestID);
+    recorder_->EraseScheduleRequest(requestID);
+    promise.Associate(rsp);
 }
 
 litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::ScheduleDecision(
     const std::shared_ptr<messages::ScheduleRequest> &req)
 {
+    return ScheduleDecisionInternal(req, "");
+}
+
+litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::ScheduleDecisionInternal(
+    const std::shared_ptr<messages::ScheduleRequest> &req, const std::string &conflictedUnitID)
+{
     ASSERT_IF_NULL(scheduler_);
     auto requestID = req->requestid();
     uint64_t timeout = req->instance().scheduleoption().scheduletimeoutms();
+    const uint64_t remaining = RemainingScheduleTime(req);
+    if (timeout > 0 && remaining == 0) {
+        return BuildErrorScheduleRsp(ScheduleResult{"", static_cast<int32_t>(StatusCode::RESOURCE_NOT_ENOUGH),
+            "the scheduling timeout budget is exhausted", {}, "", {}, {}}, req);
+    }
     if (enableHorizontalScale_) {
         auto createOpts = req->mutable_instance()->mutable_createoptions();
         (*createOpts)[ENABLE_HORIZONTAL_SCALE_KEY] = "true";
@@ -96,11 +146,13 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
     YRLOG_INFO("instance(req={}, priority={}, timeout={}, enableHorizontalScale={}) schedule decision",
                requestID, req->instance().scheduleoption().priority(), timeout, enableHorizontalScale_);
     auto cancelPromise = GetCancelTag(requestID);
-    auto future = scheduler_->ScheduleDecision(req, cancelPromise->GetFuture());
+    auto future = conflictedUnitID.empty()
+                      ? scheduler_->ScheduleDecision(req, cancelPromise->GetFuture())
+                      : scheduler_->RetryScheduleDecision(req, cancelPromise->GetFuture(), conflictedUnitID);
     if (timeout > 0) {
         ASSERT_IF_NULL(recorder_);
         future = future.After(
-            timeout,
+            remaining,
             [requestID, recorder(recorder_), cancelPromise,
              timeout](const litebus::Future<ScheduleResult> &_1) -> litebus::Future<ScheduleResult> {
                 std::string value = "\nthe instance cannot be scheduled within " + std::to_string(timeout) + " ms. ";
@@ -184,6 +236,10 @@ void InstanceCtrlActor::CheckIsNeedReDispatch(
 {
     // Attempt to retry when the scheduling request fails util the under layer heartbeat lost
     if (rspFuture.IsError()) {
+        if (IsScheduleTimedOut(req)) {
+            promise.Associate(rspFuture);
+            return;
+        }
         YRLOG_WARN("{}|request {} scheduler to {} failed {} times. code {} ", req->traceid(), req->requestid(),
                    schedResult.id, dispatchTimes, rspFuture.GetErrorCode());
         promise.Associate(
@@ -200,20 +256,30 @@ void InstanceCtrlActor::CheckIsNeedReDispatch(
         rsp->code() == static_cast<int32_t>(StatusCode::ERR_RESOURCE_NOT_ENOUGH)) {
         rsp->set_code(static_cast<int32_t>(StatusCode::SCHEDULE_CONFLICTED));
     }
-    promise.Associate(CheckReSchedulingIsRequired(rsp, req));
+    promise.Associate(CheckReSchedulingIsRequired(rsp, req, schedResult));
 }
 
 litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::CheckReSchedulingIsRequired(
     const std::shared_ptr<messages::ScheduleResponse> &rsp,
-    const std::shared_ptr<messages::ScheduleRequest> &req)
+    const std::shared_ptr<messages::ScheduleRequest> &req, const ScheduleResult &schedResult)
 {
     // Retry is required when a scheduling conflict occurs or the scheduler is unavailable while under layer abnormal
     // can be tolerated.
     if ((rsp->code() == static_cast<int32_t>(StatusCode::SCHEDULE_CONFLICTED) ||
          (isTolerateUnderlayerAbnormal_ &&
           rsp->code() == static_cast<int32_t>(StatusCode::DOMAIN_SCHEDULER_UNAVAILABLE_SCHEDULER)))) {
+        if (IsScheduleTimedOut(req)) {
+            // Preserve the resource failure instead of starting another full timeout window.
+            if (rsp->code() == static_cast<int32_t>(StatusCode::SCHEDULE_CONFLICTED)) {
+                return BuildErrorScheduleRsp(ScheduleResult{"", static_cast<int32_t>(StatusCode::RESOURCE_NOT_ENOUGH),
+                    rsp->message(), {}, "", {}, {}}, req);
+            }
+            return rsp;
+        }
         // schedule conflict don't count as a retry
-        return ScheduleDecision(req);
+        return rsp->code() == static_cast<int32_t>(StatusCode::SCHEDULE_CONFLICTED)
+                   ? ScheduleDecisionInternal(req, schedResult.unitID)
+                   : ScheduleDecision(req);
     }
     (void)cancelTag_.erase(req->requestid());
     // SCHEDULE_CONFLICTED indicates that resources are insufficient.
@@ -305,6 +371,9 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
         return rsp;
     }
     auto scheduleRsp = rsp.Get();
+    if (IsScheduleTimedOut(req)) {
+        return rsp;
+    }
     if (scheduleRsp->code() != static_cast<int32_t>(StatusCode::ERR_RESOURCE_CONFIG_ERROR) &&
         scheduleRsp->code() != static_cast<int32_t>(StatusCode::ERR_RESOURCE_NOT_ENOUGH) &&
         scheduleRsp->code() != static_cast<int32_t>(StatusCode::AFFINITY_SCHEDULE_FAILED)) {
@@ -335,8 +404,10 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
             YRLOG_WARN("{}|{}|could not find a suitable scheduler, new agent is creating, try again", req->traceid(),
                        req->requestid());
             auto promise = litebus::Promise<std::shared_ptr<messages::ScheduleResponse>>();
-            (void)litebus::AsyncAfter(createAgentAwaitRetryInterval_, GetAID(), &InstanceCtrlActor::RetrySchedule, req,
-                                      promise);
+            auto delay = req->instance().scheduleoption().scheduletimeoutms() > 0
+                ? std::min<uint64_t>(createAgentAwaitRetryInterval_, RemainingScheduleTime(req))
+                : createAgentAwaitRetryInterval_;
+            (void)litebus::AsyncAfter(delay, GetAID(), &InstanceCtrlActor::RetrySchedule, req, promise, scheduleRsp);
             return promise.GetFuture();
         }
         YRLOG_ERROR("{}|{}|timeout to find a suitable scheduler", req->traceid(), req->requestid());
@@ -350,8 +421,11 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
         requestTrySchedTimes_[req->requestid()] >= 1) {
         req->set_scheduleround(req->scheduleround() >= UINT32_MAX ? 0 : req->scheduleround() + 1);
         auto promise = litebus::Promise<std::shared_ptr<messages::ScheduleResponse>>();
-        (void)litebus::AsyncAfter(retryScheduleIntervals_[requestTrySchedTimes_[req->requestid()] - 1], GetAID(),
-                                  &InstanceCtrlActor::RetrySchedule, req, promise);
+        uint64_t delay = retryScheduleIntervals_[requestTrySchedTimes_[req->requestid()] - 1];
+        if (req->instance().scheduleoption().scheduletimeoutms() > 0) {
+            delay = std::min(delay, RemainingScheduleTime(req));
+        }
+        (void)litebus::AsyncAfter(delay, GetAID(), &InstanceCtrlActor::RetrySchedule, req, promise, scheduleRsp);
         YRLOG_WARN("{}|{}|could not find a suitable scheduler, pod may be creating, retry times({}), try again",
                    req->traceid(), req->requestid(), requestTrySchedTimes_[req->requestid()]);
         return promise.GetFuture();
@@ -381,8 +455,13 @@ void InstanceCtrlActor::CheckUUID(const std::shared_ptr<messages::ScheduleReques
 }
 
 void InstanceCtrlActor::RetrySchedule(const std::shared_ptr<messages::ScheduleRequest> &req,
-                                      const litebus::Promise<std::shared_ptr<messages::ScheduleResponse>> &promise)
+                                      const litebus::Promise<std::shared_ptr<messages::ScheduleResponse>> &promise,
+                                      const std::shared_ptr<messages::ScheduleResponse> &lastResponse)
 {
+    if (IsScheduleTimedOut(req)) {
+        promise.SetValue(lastResponse);
+        return;
+    }
     YRLOG_DEBUG("{}|{}|retry schedule", req->traceid(), req->requestid());
     if (waitAgentCreatRetryTimes_.find(req->requestid()) != waitAgentCreatRetryTimes_.end()) {
         ++waitAgentCreatRetryTimes_[req->requestid()];

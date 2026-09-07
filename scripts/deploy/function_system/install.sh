@@ -215,6 +215,10 @@ function install_function_proxy() {
     --enable_server_mode="true" \
     --advertise_frontend_proxy_create="${ADVERTISE_FRONTEND_PROXY_CREATE:-true}" \
     --schedule_plugins="${LOCAL_SCHEDULE_PLUGINS}" \
+    --enable_unit_scheduler="${ENABLE_UNIT_SCHEDULER:-true}" \
+    --schedule_placement_policy="${SCHEDULE_PLACEMENT_POLICY:-binpack}" \
+    --aggregated_strategy="no_aggregate" \
+    --schedule_relaxed="${SCHEDULE_RELAXED:-128}" \
     --max_priority="${MAX_PRIORITY}" --enable_preemption="${ENABLE_PREEMPTION}" \
     --min_instance_memory_size=${MIN_INSTANCE_MEMORY_SIZE} --min_instance_cpu_size=${MIN_INSTANCE_CPU_SIZE} \
     --max_instance_memory_size=${MAX_INSTANCE_MEMORY_SIZE} --max_instance_cpu_size=${MAX_INSTANCE_CPU_SIZE} \
@@ -870,6 +874,9 @@ function install_function_master() {
       --is_schedule_tolerate_abnormal="${IS_SCHEDULE_TOLERATE_ABNORMAL}" \
       --enable_print_resource_view="${ENABLE_PRINT_RESOURCE_VIEW}" \
       --schedule_plugins="${DOMAIN_SCHEDULE_PLUGINS}" \
+      --enable_unit_scheduler="${ENABLE_UNIT_SCHEDULER:-true}" \
+      --schedule_placement_policy="${SCHEDULE_PLACEMENT_POLICY:-binpack}" \
+      --aggregated_strategy="${AGGREGATED_STRATEGY:-relaxed}" \
       --schedule_relaxed="${SCHEDULE_RELAXED}" \
       --max_priority="${MAX_PRIORITY}" --enable_preemption="${ENABLE_PREEMPTION}" \
       --enable_meta_store="${ENABLE_META_STORE}" \

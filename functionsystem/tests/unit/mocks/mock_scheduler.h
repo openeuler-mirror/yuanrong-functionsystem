@@ -32,6 +32,12 @@ public:
                 (const std::shared_ptr<messages::ScheduleRequest> &req),
                 (override));
 
+    MOCK_METHOD(litebus::Future<schedule_decision::ScheduleResult>, RetryScheduleDecision,
+                (const std::shared_ptr<messages::ScheduleRequest> &req,
+                 const litebus::Future<std::string> &cancelTag,
+                 const std::string &conflictedUnitID),
+                (override));
+
     MOCK_METHOD(litebus::Future<schedule_decision::ScheduleResult>, ScheduleDecision,
                 (const std::shared_ptr<messages::ScheduleRequest> &req, const litebus::Future<std::string> &cancelTag),
                 (override));

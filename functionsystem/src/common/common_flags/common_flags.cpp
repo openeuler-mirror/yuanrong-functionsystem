@@ -27,6 +27,7 @@ const uint64_t MAX_PULL_INTERVAL = 60 * 60 * 1000;
 const uint64_t MIN_VALUE = 0;
 const uint64_t MAX_VALUE = 1024 * 1024 * 1024;
 const uint16_t MAX_PRIORITY_VALUE = 65535;
+const int32_t DEFAULT_SCHEDULE_RELAXED = 128;
 const uint32_t MIN_TOLERATE_META_STORE_FAILED_TIMES = 1;
 const uint32_t MAX_TOLERATE_META_STORE_FAILED_TIMES = 1000;
 const uint32_t DEFAULT_TOLERATE_META_STORE_FAILED_TIMES = 60;
@@ -77,8 +78,13 @@ CommonFlags::CommonFlags()
     AddFlag(&CommonFlags::enablePreemption_, "enable_preemption",
             "enable schedule preemption while higher priority, only valid while max_priority > 0", false);
     AddFlag(&CommonFlags::aggregatedStrategy_, "aggregated_strategy",
-            "req aggregate strategy, eg: no_aggregate, strictly, relaxed", std::string("no_aggregate"),
+            "req aggregate strategy, eg: no_aggregate, strictly, relaxed", std::string("relaxed"),
             WhiteListCheck({ "no_aggregate", "strictly", "relaxed" }));
+    AddFlag(&CommonFlags::enableUnitScheduler_, "enable_unit_scheduler",
+            "enable immutable Unit snapshot scheduling", true);
+    AddFlag(&CommonFlags::schedulePlacementPolicy_, "schedule_placement_policy",
+            "cluster placement policy for Unit scheduler, eg: binpack, spread", std::string("binpack"),
+            WhiteListCheck({ "binpack", "spread" }));
     AddFlag(&CommonFlags::clusterId_, "cluster_id", "cluster id", "");
     AddFlag(&CommonFlags::systemAuthMode_, "system_auth_mode", "authentication mode between yuanrong components", "");
     AddFlag(&CommonFlags::decryptAlgorithm_, "decrypt_algorithm", "decrypt algorithm, eg: GCM, CBC, STS",
@@ -86,8 +92,8 @@ CommonFlags::CommonFlags()
     AddFlag(&CommonFlags::resourcePath_, "resource_path", "resource path to read secret key files", "/");
     AddFlag(&CommonFlags::scheduleRelaxed_, "schedule_relaxed",
             "enable the relaxed scheduling policy. When the relaxed number of available nodes or pods is selected, the "
-            "scheduling progress exits without traversing all nodes or pods.(default -1)",
-            -1);
+            "scheduling progress exits without traversing all nodes or pods.(default 128)",
+            DEFAULT_SCHEDULE_RELAXED);
     AddFlag(&CommonFlags::enableFakeSuspendResume_, "enable_fake_suspend_resume",
             "enable fake suspend resume: resume by sending to original owner proxy instead of rescheduling", false);
     InitMetaHealthyCheckFlag();

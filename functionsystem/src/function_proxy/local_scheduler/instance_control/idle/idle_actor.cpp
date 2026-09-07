@@ -98,7 +98,7 @@ void IdleActor::TrafficReport(const std::string &instanceID, const size_t &proce
     bool isIdle = (processingNum == 0);
     ASSERT_IF_NULL(instanceControlView_);
     if (!isIdle) {
-        instanceTrafficIdle_.erase(instanceID);
+        instanceTrafficIdle_[instanceID] = false;
         if (pauseGatedInstances_.find(instanceID) == pauseGatedInstances_.end()) {
             CancelIdleTimer(instanceID);
         }

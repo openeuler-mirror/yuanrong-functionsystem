@@ -36,6 +36,35 @@ TEST_F(CommonFlagsTest, DomainSchedulerFlagsOK)
     EXPECT_EQ(flags.GetLitebusThreadNum(), 50);  // 50: thread num
 }
 
+TEST_F(CommonFlagsTest, UnitSchedulerFlagsDefaultsAndExplicitOverrides)
+{
+    const char *defaultArgv[] = { "./domain_scheduler" };
+    CommonFlags defaults;
+    ASSERT_TRUE(defaults.ParseFlags(1, defaultArgv).IsNone());
+    EXPECT_TRUE(defaults.GetEnableUnitScheduler());
+    EXPECT_EQ(defaults.GetSchedulePlacementPolicy(), "binpack");
+    EXPECT_EQ(defaults.GetAggregatedStrategy(), "relaxed");
+    EXPECT_EQ(defaults.GetScheduleRelaxed(), 128);
+
+    const char *argv[] = { "./domain_scheduler", "--enable_unit_scheduler=false",
+                          "--schedule_placement_policy=spread", "--aggregated_strategy=no_aggregate",
+                          "--schedule_relaxed=-1" };
+    CommonFlags configured;
+    auto parse = configured.ParseFlags(5, argv);
+    ASSERT_TRUE(parse.IsNone());
+    EXPECT_FALSE(configured.GetEnableUnitScheduler());
+    EXPECT_EQ(configured.GetSchedulePlacementPolicy(), "spread");
+    EXPECT_EQ(configured.GetAggregatedStrategy(), "no_aggregate");
+    EXPECT_EQ(configured.GetScheduleRelaxed(), -1);
+}
+
+TEST_F(CommonFlagsTest, UnitSchedulerPlacementPolicyRejectsUnknownValue)
+{
+    const char *argv[] = { "./domain_scheduler", "--schedule_placement_policy=unknown" };
+    CommonFlags flags;
+    EXPECT_TRUE(flags.ParseFlags(2, argv).IsSome());
+}
+
 TEST_F(CommonFlagsTest, ETCDAuthTypeFlags)
 {
     const char *argv[] = { "./function_master", "--etcd_auth_type=TLS" };
