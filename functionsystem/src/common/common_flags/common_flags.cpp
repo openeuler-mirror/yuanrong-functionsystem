@@ -27,6 +27,7 @@ const uint64_t MAX_PULL_INTERVAL = 60 * 60 * 1000;
 const uint64_t MIN_VALUE = 0;
 const uint64_t MAX_VALUE = 1024 * 1024 * 1024;
 const uint16_t MAX_PRIORITY_VALUE = 65535;
+const int32_t DEFAULT_SCHEDULE_RELAXED = 128;
 const uint32_t MIN_TOLERATE_META_STORE_FAILED_TIMES = 1;
 const uint32_t MAX_TOLERATE_META_STORE_FAILED_TIMES = 1000;
 const uint32_t DEFAULT_TOLERATE_META_STORE_FAILED_TIMES = 60;
@@ -92,7 +93,7 @@ CommonFlags::CommonFlags()
     AddFlag(&CommonFlags::scheduleRelaxed_, "schedule_relaxed",
             "enable the relaxed scheduling policy. When the relaxed number of available nodes or pods is selected, the "
             "scheduling progress exits without traversing all nodes or pods.(default 128)",
-            128);
+            DEFAULT_SCHEDULE_RELAXED);
     AddFlag(&CommonFlags::enableFakeSuspendResume_, "enable_fake_suspend_resume",
             "enable fake suspend resume: resume by sending to original owner proxy instead of rescheduling", false);
     InitMetaHealthyCheckFlag();
