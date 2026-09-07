@@ -438,6 +438,13 @@ cc_library(
     visibility = ["//visibility:public"],
 )
 
+# --- datasystem_capability ---
+cc_library(
+    name = "datasystem_capability",
+    hdrs = ["datasystem_capability.h"],
+    visibility = ["//visibility:public"],
+)
+
 # --- snapshot_storage ---
 cc_library(
     name = "snapshot_storage",
