@@ -172,7 +172,7 @@ TEST_F(IdleActorTest, RunningTransition_WithoutTrafficReport_StartsTimer)
         return nullptr;
     }));
 
-    litebus::Async(idleActor_->GetAID(), &IdleActor::OnInstanceRunning, std::string(INST_ID));
+    litebus::Async(idleActor_->GetAID(), &IdleActor::OnInstanceRunning, sm->GetInstanceInfo());
 
     ASSERT_AWAIT_TRUE([&]() { return callCount > 0; });
 }
@@ -185,7 +185,7 @@ TEST_F(IdleActorTest, RunningTransition_PreservesEarlierBusyReport)
     EXPECT_CALL(*facadeViewMock_, GetInstance(INST_ID)).Times(0);
 
     litebus::Async(idleActor_->GetAID(), &IdleActor::TrafficReport, std::string(INST_ID), static_cast<size_t>(1));
-    litebus::Async(idleActor_->GetAID(), &IdleActor::OnInstanceRunning, std::string(INST_ID));
+    litebus::Async(idleActor_->GetAID(), &IdleActor::OnInstanceRunning, sm->GetInstanceInfo());
 
     std::this_thread::sleep_for(std::chrono::seconds(3));
 }
@@ -277,7 +277,7 @@ TEST_F(IdleActorTest, CommandActivityDisabled_DoesNotChangeIdleLifecycle)
 
     litebus::Async(idleActor_->GetAID(), &IdleActor::CommandActivityReport,
                    std::string(INST_ID), static_cast<size_t>(1));
-    litebus::Async(idleActor_->GetAID(), &IdleActor::OnInstanceRunning, std::string(INST_ID));
+    litebus::Async(idleActor_->GetAID(), &IdleActor::OnInstanceRunning, sm->GetInstanceInfo());
     ASSERT_AWAIT_TRUE([&]() { return callCount > 0; });
 }
 
@@ -298,7 +298,7 @@ TEST_F(IdleActorTest, CommandActivityEnabled_BlocksUntilAuthoritativeZero)
         return nullptr;
     }));
 
-    litebus::Async(idleActor_->GetAID(), &IdleActor::OnInstanceRunning, std::string(INST_ID));
+    litebus::Async(idleActor_->GetAID(), &IdleActor::OnInstanceRunning, sm->GetInstanceInfo());
     litebus::Async(idleActor_->GetAID(), &IdleActor::CommandActivityReport,
                    std::string(INST_ID), static_cast<size_t>(1));
     std::this_thread::sleep_for(std::chrono::seconds(2));
@@ -324,7 +324,7 @@ TEST_F(IdleActorTest, CommandActivityLeaseExpired_PausesIdleReclamation)
     EXPECT_CALL(*idleViewMock_, GetInstance(INST_ID)).WillRepeatedly(Return(sm));
     EXPECT_CALL(*facadeViewMock_, GetInstance(INST_ID)).Times(0);
 
-    litebus::Async(idleActor_->GetAID(), &IdleActor::OnInstanceRunning, std::string(INST_ID));
+    litebus::Async(idleActor_->GetAID(), &IdleActor::OnInstanceRunning, sm->GetInstanceInfo());
     litebus::Async(idleActor_->GetAID(), &IdleActor::CommandActivityReport,
                    std::string(INST_ID), static_cast<size_t>(0));
     std::this_thread::sleep_for(std::chrono::seconds(4));

@@ -16,10 +16,13 @@
 
 #include "instance_ctrl_actor.h"
 
+#include <algorithm>
+#include <cerrno>
 #include <limits>
 #include <optional>
-#include <cerrno>
-#include <cstring>
+#include <string_view>
+#include <system_error>
+#include <type_traits>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -92,23 +95,33 @@ static const std::string CREATE_CONFLICT_ARBITRATED_CONTENDER =
     "createConflictArbitratedContender";
 static constexpr uint32_t MAX_ROUTE_CONTROL_FRAME_SIZE = 64 * 1024;
 
-static bool WriteRouteControlBytes(int fd, const void *data, size_t size)
+static std::string RouteControlErrorMessage(int errorNumber)
 {
-    const auto *bytes = static_cast<const uint8_t *>(data);
-    while (size > 0) {
-        auto written = send(fd, bytes, size, MSG_NOSIGNAL);
+    return std::error_code(errorNumber, std::generic_category()).message();
+}
+
+static bool WriteRouteControlBytes(int fd, std::string_view data)
+{
+    while (!data.empty()) {
+        auto written = send(fd, data.data(), data.size(), MSG_NOSIGNAL);
         if (written <= 0) {
             return false;
         }
-        bytes += written;
-        size -= static_cast<size_t>(written);
+        data.remove_prefix(static_cast<size_t>(written));
     }
     return true;
 }
 
-static bool ReadRouteControlBytes(int fd, void *data, size_t size)
+template <typename T>
+static bool WriteRouteControlValue(int fd, const T &value)
 {
-    auto *bytes = static_cast<uint8_t *>(data);
+    static_assert(std::is_trivially_copyable_v<T>);
+    const auto *bytes = static_cast<const char *>(static_cast<const void *>(&value));
+    return WriteRouteControlBytes(fd, std::string_view(bytes, sizeof(value)));
+}
+
+static bool ReadRouteControlBytes(int fd, char *bytes, size_t size)
+{
     while (size > 0) {
         auto received = recv(fd, bytes, size, 0);
         if (received <= 0) {
@@ -118,6 +131,14 @@ static bool ReadRouteControlBytes(int fd, void *data, size_t size)
         size -= static_cast<size_t>(received);
     }
     return true;
+}
+
+template <typename T>
+static bool ReadRouteControlValue(int fd, T &value)
+{
+    static_assert(std::is_trivially_copyable_v<T>);
+    auto *bytes = static_cast<char *>(static_cast<void *>(&value));
+    return ReadRouteControlBytes(fd, bytes, sizeof(value));
 }
 
 static Status SendRouteControlRequest(
@@ -130,7 +151,9 @@ static Status SendRouteControlRequest(
     }
     int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (fd < 0) {
-        return Status(StatusCode::FAILED, fmt::format("create route control socket failed: {}", strerror(errno)));
+        const auto errorNumber = errno;
+        return Status(StatusCode::FAILED,
+                      fmt::format("create route control socket failed: {}", RouteControlErrorMessage(errorNumber)));
     }
     auto closeFd = [&fd]() {
         if (fd >= 0) {
@@ -143,9 +166,12 @@ static Status SendRouteControlRequest(
     (void)setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
     sockaddr_un address{};
     address.sun_family = AF_UNIX;
-    (void)memcpy(address.sun_path, udsPath.c_str(), udsPath.size() + 1);
-    if (connect(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) != 0) {
-        auto message = fmt::format("connect route control socket failed: {}", strerror(errno));
+    std::copy(udsPath.begin(), udsPath.end(), address.sun_path);
+    address.sun_path[udsPath.size()] = '\0';
+    const auto *socketAddress = static_cast<const sockaddr *>(static_cast<const void *>(&address));
+    if (connect(fd, socketAddress, sizeof(address)) != 0) {
+        const auto errorNumber = errno;
+        auto message = fmt::format("connect route control socket failed: {}", RouteControlErrorMessage(errorNumber));
         closeFd();
         return Status(StatusCode::FAILED, message);
     }
@@ -155,15 +181,17 @@ static Status SendRouteControlRequest(
         return Status(StatusCode::FAILED, "serialize route control request failed");
     }
     uint32_t size = htonl(static_cast<uint32_t>(payload.size()));
-    if (!WriteRouteControlBytes(fd, &size, sizeof(size))
-        || !WriteRouteControlBytes(fd, payload.data(), payload.size())) {
-        auto message = fmt::format("write route control request failed: {}", strerror(errno));
+    if (!WriteRouteControlValue(fd, size) ||
+        !WriteRouteControlBytes(fd, payload)) {
+        const auto errorNumber = errno;
+        auto message = fmt::format("write route control request failed: {}", RouteControlErrorMessage(errorNumber));
         closeFd();
         return Status(StatusCode::FAILED, message);
     }
     uint32_t responseSize = 0;
-    if (!ReadRouteControlBytes(fd, &responseSize, sizeof(responseSize))) {
-        auto message = fmt::format("read route control response failed: {}", strerror(errno));
+    if (!ReadRouteControlValue(fd, responseSize)) {
+        const auto errorNumber = errno;
+        auto message = fmt::format("read route control response failed: {}", RouteControlErrorMessage(errorNumber));
         closeFd();
         return Status(StatusCode::FAILED, message);
     }
@@ -173,9 +201,9 @@ static Status SendRouteControlRequest(
         return Status(StatusCode::FAILED, "route control response is too large");
     }
     std::string responsePayload(responseSize, '\0');
-    if ((responseSize > 0 && !ReadRouteControlBytes(fd, responsePayload.data(), responsePayload.size()))
-        || !response.ParseFromString(responsePayload)) {
-        auto message = fmt::format("decode route control response failed: {}", strerror(errno));
+    if ((responseSize > 0 && !ReadRouteControlBytes(fd, responsePayload.data(), responsePayload.size())) ||
+        !response.ParseFromString(responsePayload)) {
+        auto message = "decode route control response failed";
         closeFd();
         return Status(StatusCode::FAILED, message);
     }
@@ -885,10 +913,10 @@ litebus::Future<KillResponse> InstanceCtrlActor::HandleKillImpl(const std::strin
             // run the kill flow.
             // See docs/features/sandbox-rrt-idle-report.md.
             if (idleMgr_ != nullptr) {
-                constexpr const char *COMMAND_PREFIX = "command:";
-                if (killReq->payload().rfind(COMMAND_PREFIX, 0) == 0) {
+                constexpr const char *commandPrefix = "command:";
+                if (killReq->payload().rfind(commandPrefix, 0) == 0) {
                     const auto count = ParseCommandActivityCount(
-                        killReq->payload().substr(std::char_traits<char>::length(COMMAND_PREFIX)));
+                        killReq->payload().substr(std::char_traits<char>::length(commandPrefix)));
                     if (count.has_value()) {
                         idleMgr_->CommandActivityReport(killReq->instanceid(), count.value());
                     } else {

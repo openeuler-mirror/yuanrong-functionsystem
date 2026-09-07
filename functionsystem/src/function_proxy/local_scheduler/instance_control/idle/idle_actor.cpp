@@ -45,6 +45,7 @@ bool IsSamePauseGateIdentity(const resources::InstanceInfo &left, const resource
 }
 
 constexpr int64_t SECONDS_TO_MILLISECONDS = 1000;
+constexpr int64_t DEFAULT_COMMAND_ACTIVITY_TIMEOUT_SECONDS = 30;
 
 int64_t PositiveEnvSeconds(const char *name, int64_t fallback)
 {
@@ -69,7 +70,8 @@ IdleActor::IdleActor(const std::string &name,
 {
     const char *enabled = std::getenv("YR_COMMAND_RECOVERY_ENABLED");
     commandActivityEnabled_ = enabled != nullptr && std::string(enabled) != "0" && std::string(enabled) != "false";
-    commandActivityTimeoutSeconds_ = PositiveEnvSeconds("YR_COMMAND_ACTIVITY_TIMEOUT_SECS", 30);
+    commandActivityTimeoutSeconds_ =
+        PositiveEnvSeconds("YR_COMMAND_ACTIVITY_TIMEOUT_SECS", DEFAULT_COMMAND_ACTIVITY_TIMEOUT_SECONDS);
 }
 
 void IdleActor::Init()

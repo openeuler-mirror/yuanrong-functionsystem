@@ -1,28 +1,6 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
 load("@yuanrong_functionsystem//bazel:yr.bzl", "COPTS")
 
-cc_library(
-    name = "datasystem_capability",
-    hdrs = ["datasystem_capability.h"],
-    visibility = ["//visibility:public"],
-)
-
-cc_library(
-    name = "snapshot_storage",
-    srcs = glob(["snapshot_storage/*.cpp"]),
-    hdrs = glob(["snapshot_storage/*.h"]),
-    copts = COPTS,
-    deps = [
-        ":kv_client",
-        ":status",
-        ":utils",
-        "@boringssl//:crypto",
-        "@datasystem_sdk//:datasystem_sdk",
-        "@obs_sdk//:obs_sdk",
-    ],
-    visibility = ["//visibility:public"],
-)
-
 # All common libraries, mirroring the CMake build structure.
 #
 # Include path strategy:
@@ -32,12 +10,6 @@ cc_library(
 #   This allows includes like: #include "common/proto/pb/posix/xxx.pb.h"
 #                               #include "common/rpc/rpc_client.h"
 #   matching the CMake include_directories(functionsystem/src/) setting.
-
-cc_library(
-    name = "datasystem_capability",
-    hdrs = ["datasystem_capability.h"],
-    visibility = ["//visibility:public"],
-)
 
 # common_root_inc: include-provider for -Ifunctionsystem/src/common/.
 # Used only by targets that need to include headers using the common/ directory

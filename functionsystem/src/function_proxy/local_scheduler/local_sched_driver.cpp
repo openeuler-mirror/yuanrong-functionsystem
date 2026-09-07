@@ -43,6 +43,8 @@ namespace functionsystem::local_scheduler {
 const std::string LOCAL_SCHEDULER = "local-scheduler";
 
 namespace {
+constexpr int64_t DATA_PLANE_GATEWAY_ACTIVITY_TIMEOUT_SECONDS = 90;
+
 /**
  * Extract IP address from a full address string (ip:port format).
  * This is used to get the IP from LiteBus address for gRPC servers.
@@ -699,7 +701,8 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
         dataPlaneGatewayActivityGrpcServer_ =
             std::make_shared<functionsystem::grpc::CommonGrpcServer>(std::move(activityConfig));
         dataPlaneGatewayActivityService_ = std::make_shared<DataPlaneGatewayActivityService>(
-            instanceCtrl_->GetIdleMgr(), std::chrono::seconds(90), [instanceCtrl = instanceCtrl_]() {
+            instanceCtrl_->GetIdleMgr(), std::chrono::seconds(DATA_PLANE_GATEWAY_ACTIVITY_TIMEOUT_SECONDS),
+            [instanceCtrl = instanceCtrl_]() {
                 auto status = instanceCtrl->SyncDataPlaneRoutes();
                 if (status.IsError()) {
                     YRLOG_ERROR("failed to synchronize routes for a new Node Proxy epoch: {}", status.RawMessage());

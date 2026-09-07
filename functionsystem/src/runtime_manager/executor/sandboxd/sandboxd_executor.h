@@ -50,8 +50,8 @@ namespace functionsystem::runtime_manager {
 struct SandboxdRestoreResult {
     SandboxdRestoreResult() = default;
 
-    SandboxdRestoreResult(Status statusValue, std::string sandboxIDValue = {},
-                          std::vector<std::string> portsValue = {}, std::string sandboxIPValue = {})
+    explicit SandboxdRestoreResult(Status statusValue, std::string sandboxIDValue = {},
+                                   std::vector<std::string> portsValue = {}, std::string sandboxIPValue = {})
         : status(statusValue), sandboxID(std::move(sandboxIDValue)), ports(std::move(portsValue)),
           sandboxIP(std::move(sandboxIPValue))
     {

@@ -957,22 +957,26 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::ReconcileBefo
                   -> litebus::Future<messages::StartInstanceResponse> {
             if (listed.status.IsError()) {
                 return OnRestoreDone(
-                    {Status(StatusCode::GRPC_UNAVAILABLE,
-                            "resume pre-restore List result unavailable: " + listed.status.RawMessage()), {}, {}},
+                    SandboxdRestoreResult(
+                        Status(StatusCode::GRPC_UNAVAILABLE,
+                               "resume pre-restore List result unavailable: " + listed.status.RawMessage()),
+                        {}, {}),
                     context.start.request, context.start.guard, true);
             }
             if (listed.response.sandboxes_size() == 1
                 && IsExactRunningResumeSandbox(listed.response.sandboxes(0),
                                                 context.start.resumeIdentity.labels)) {
-                return OnRestoreDone({Status::OK(), listed.response.sandboxes(0).id(),
-                                      {listed.response.sandboxes(0).ports().begin(),
-                                       listed.response.sandboxes(0).ports().end()}},
-                                     context.start.request, context.start.guard, true, true);
+                return OnRestoreDone(
+                    SandboxdRestoreResult(Status::OK(), listed.response.sandboxes(0).id(),
+                                          {listed.response.sandboxes(0).ports().begin(),
+                                           listed.response.sandboxes(0).ports().end()}),
+                    context.start.request, context.start.guard, true, true);
             }
             if (listed.response.sandboxes_size() != 0) {
                 return OnRestoreDone(
-                    {Status(StatusCode::SCHEDULE_CONFLICTED,
-                            "resume sandbox facts are ambiguous or mismatched"), {}, {}},
+                    SandboxdRestoreResult(Status(StatusCode::SCHEDULE_CONFLICTED,
+                                                 "resume sandbox facts are ambiguous or mismatched"),
+                                          {}, {}),
                     context.start.request, context.start.guard, true);
             }
             return RestoreAfterExactAbsence(context);
@@ -995,20 +999,20 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::RestoreAfterE
     params.registeredTemplateIDs = registeredTemplateIDs_;
     const auto portStatus = ApplyPortForwardMappings(&params, request);
     if (portStatus.IsError()) {
-        return OnRestoreDone({portStatus, {}, {}}, request, context.start.guard, true);
+        return OnRestoreDone(SandboxdRestoreResult(portStatus, {}, {}), request, context.start.guard, true);
     }
     auto [status, startReq] = builder.Build(params);
     if (status.IsError()) {
         stateManager_.UpdatePortMappings(params.runtimeID, "");
         PortManager::GetInstance().ReleasePorts(params.runtimeID);
-        return OnRestoreDone({status, {}, {}}, request, context.start.guard, true);
+        return OnRestoreDone(SandboxdRestoreResult(status, {}, {}), request, context.start.guard, true);
     }
     startReq->mutable_labels()->insert(context.start.resumeIdentity.labels.begin(),
                                        context.start.resumeIdentity.labels.end());
     const auto checkpointDirectory = CheckpointDirectoryForRestore(context.checkpointPath);
     if (auto attach = SandboxdRequestBuilder::AttachCheckpointInfo(*startReq, checkpointDirectory);
         attach.IsError()) {
-        return OnRestoreDone({attach, {}, {}}, request, context.start.guard, true);
+        return OnRestoreDone(SandboxdRestoreResult(attach, {}, {}), request, context.start.guard, true);
     }
     StartSandboxCreateSpan(request);
     return DoStartFromCheckpoint(request, startReq)
@@ -1029,17 +1033,20 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnResumeResto
                   -> litebus::Future<messages::StartInstanceResponse> {
             if (listed.status.IsError()) {
                 return OnRestoreDone(
-                    {Status(StatusCode::GRPC_UNAVAILABLE,
-                            "resume authoritative re-List result unavailable: " + listed.status.RawMessage()), {}, {}},
+                    SandboxdRestoreResult(
+                        Status(StatusCode::GRPC_UNAVAILABLE,
+                               "resume authoritative re-List result unavailable: " + listed.status.RawMessage()),
+                        {}, {}),
                     context.start.request, context.start.guard, true);
             }
             if (listed.response.sandboxes_size() == 1
                 && IsExactRunningResumeSandbox(listed.response.sandboxes(0),
                                                 context.start.resumeIdentity.labels)) {
-                return OnRestoreDone({Status::OK(), listed.response.sandboxes(0).id(),
-                                      {listed.response.sandboxes(0).ports().begin(),
-                                       listed.response.sandboxes(0).ports().end()}},
-                                     context.start.request, context.start.guard, true, true);
+                return OnRestoreDone(
+                    SandboxdRestoreResult(Status::OK(), listed.response.sandboxes(0).id(),
+                                          {listed.response.sandboxes(0).ports().begin(),
+                                           listed.response.sandboxes(0).ports().end()}),
+                    context.start.request, context.start.guard, true, true);
             }
             if (listed.response.sandboxes_size() == 0 && !retried) {
                 return DoStartFromCheckpoint(context.start.request, startReq)
@@ -2318,17 +2325,18 @@ litebus::Future<SandboxdRestoreResult> SandboxdExecutor::DoStartFromCheckpoint(
                 YRLOG_ERROR("{}|checkpoint Start gRPC failed for runtime({}): {}",
                             request->runtimeinstanceinfo().traceid(), request->runtimeinstanceinfo().runtimeid(),
                             status.RawMessage());
-                return { status, {}, {} };
+                return SandboxdRestoreResult(status, {}, {});
             }
             if (resp->code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
-                return {Status(StatusCode::FAILED,
-                               resp->message().empty()
-                                   ? "sandboxd checkpoint Start returned a non-success response"
-                                   : resp->message()),
-                        {}, {}};
+                return SandboxdRestoreResult(
+                    Status(StatusCode::FAILED,
+                           resp->message().empty()
+                               ? "sandboxd checkpoint Start returned a non-success response"
+                               : resp->message()),
+                    {}, {});
             }
             const std::vector<std::string> ports(startReq->ports().begin(), startReq->ports().end());
-            return {Status::OK(), resp->id(), ports, resp->sandbox_ip()};
+            return SandboxdRestoreResult(Status::OK(), resp->id(), ports, resp->sandbox_ip());
         });
 }
 

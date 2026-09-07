@@ -45,7 +45,6 @@ cc_library(
         "//functionsystem/src/common:datasystem_capability",
         "//functionsystem/src/common:register",
         "//functionsystem/src/common:common_flags",
-        "//functionsystem/src/common:datasystem_capability",
         "//functionsystem/src/common:http",
         "//functionsystem/src/common:hex",
         "//functionsystem/src/common:file_monitor",

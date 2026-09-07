@@ -16,7 +16,7 @@ import (
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
-	networktypes "github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 )
@@ -187,7 +187,7 @@ func (d *DockerRuntime) ResolveEndpoint(ctx context.Context, containerID string)
 	return &NetworkEndpoint{SandboxIP: sandboxIP}, nil
 }
 
-func selectNetworkIPAddress(networkMode string, networks map[string]*networktypes.EndpointSettings) (string, error) {
+func selectNetworkIPAddress(networkMode string, networks map[string]*network.EndpointSettings) (string, error) {
 	preferred := strings.TrimSpace(networkMode)
 	if preferred == "default" {
 		preferred = "bridge"
@@ -211,7 +211,7 @@ func selectNetworkIPAddress(networkMode string, networks map[string]*networktype
 	return "", fmt.Errorf("container has no valid IP address in network mode %q", networkMode)
 }
 
-func normalizedEndpointIP(endpoint *networktypes.EndpointSettings) string {
+func normalizedEndpointIP(endpoint *network.EndpointSettings) string {
 	if endpoint == nil {
 		return ""
 	}

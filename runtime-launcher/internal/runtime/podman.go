@@ -48,6 +48,7 @@ func (p *PodmanRuntime) Create(ctx context.Context, cfg *CreateConfig) (string, 
 	return p.inner.Create(ctx, cfg)
 }
 
+// ResolveEndpoint returns the isolated network endpoint assigned by Podman.
 func (p *PodmanRuntime) ResolveEndpoint(ctx context.Context, containerID string) (*NetworkEndpoint, error) {
 	return p.inner.ResolveEndpoint(ctx, containerID)
 }

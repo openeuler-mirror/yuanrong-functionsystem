@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	networktypes "github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/network"
 )
 
 func TestCloneCommandPreservesStructuredArgv(t *testing.T) {
@@ -27,7 +27,7 @@ func TestCloneCommandPreservesStructuredArgv(t *testing.T) {
 }
 
 func TestSelectNetworkIPAddressPrefersConfiguredNetwork(t *testing.T) {
-	networks := map[string]*networktypes.EndpointSettings{
+	networks := map[string]*network.EndpointSettings{
 		"a-network":  {IPAddress: "172.20.0.2"},
 		"yr-sandbox": {IPAddress: "172.30.0.9"},
 	}
@@ -42,7 +42,7 @@ func TestSelectNetworkIPAddressPrefersConfiguredNetwork(t *testing.T) {
 }
 
 func TestSelectNetworkIPAddressMapsDefaultToBridge(t *testing.T) {
-	networks := map[string]*networktypes.EndpointSettings{
+	networks := map[string]*network.EndpointSettings{
 		"bridge": {IPAddress: "172.17.0.4"},
 		"other":  {IPAddress: "172.19.0.4"},
 	}
@@ -57,7 +57,7 @@ func TestSelectNetworkIPAddressMapsDefaultToBridge(t *testing.T) {
 }
 
 func TestSelectNetworkIPAddressUsesDeterministicFallback(t *testing.T) {
-	networks := map[string]*networktypes.EndpointSettings{
+	networks := map[string]*network.EndpointSettings{
 		"z-network": {IPAddress: "172.22.0.2"},
 		"a-network": {IPAddress: "172.21.0.2"},
 	}
@@ -72,7 +72,7 @@ func TestSelectNetworkIPAddressUsesDeterministicFallback(t *testing.T) {
 }
 
 func TestSelectNetworkIPAddressRejectsMissingOrInvalidAddresses(t *testing.T) {
-	_, err := selectNetworkIPAddress("bridge", map[string]*networktypes.EndpointSettings{
+	_, err := selectNetworkIPAddress("bridge", map[string]*network.EndpointSettings{
 		"bridge": {IPAddress: "not-an-ip"},
 	})
 	if err == nil {
