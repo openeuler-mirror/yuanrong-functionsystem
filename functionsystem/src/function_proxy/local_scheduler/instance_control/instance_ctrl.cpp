@@ -16,6 +16,8 @@
 
 #include "instance_ctrl.h"
 
+#include "common/schedule_decision/scheduler/unit_scheduler.h"
+
 #include <async/async.hpp>
 
 #include "common/constants/actor_name.h"
@@ -147,13 +149,20 @@ std::shared_ptr<schedule_decision::ScheduleQueueActor> InstanceCtrl::CreateSched
     const std::string &tag,
     const uint16_t &maxPriority,
     const std::string &aggregatedStrategy,
-    const std::shared_ptr<resource_view::ResourceView> resourceView)
+    const std::shared_ptr<resource_view::ResourceView> resourceView,
+    bool enableUnitScheduler)
 {
     auto scheduleQueueActor =
         std::make_shared<schedule_decision::ScheduleQueueActor>(instanceCtrlActor_->GetAID().Name() + "-" + tag);
     auto framework = std::make_shared<schedule_framework::FrameworkImpl>();
-    auto priorityScheduler = std::make_shared<schedule_decision::PriorityScheduler>(nullptr, maxPriority,
-        schedule_decision::PriorityPolicyType::FIFO, aggregatedStrategy);
+    std::shared_ptr<schedule_decision::ScheduleStrategy> priorityScheduler;
+    if (enableUnitScheduler) {
+        priorityScheduler = std::make_shared<schedule_decision::UnitScheduler>(
+            nullptr, maxPriority, schedule_decision::PriorityPolicyType::FIFO, NO_AGGREGATE_STRATEGY);
+    } else {
+        priorityScheduler = std::make_shared<schedule_decision::PriorityScheduler>(
+            nullptr, maxPriority, schedule_decision::PriorityPolicyType::FIFO, aggregatedStrategy);
+    }
     priorityScheduler->RegisterSchedulePerformer(resourceView, framework, nullptr,
                                                  schedule_decision::AllocateType::ALLOCATION);
     scheduleQueueActor->RegisterScheduler(priorityScheduler);
@@ -166,8 +175,15 @@ std::shared_ptr<schedule_decision::ScheduleQueueActor> InstanceCtrl::CreateSched
 
 void InstanceCtrl::Start(const std::shared_ptr<FunctionAgentMgr> &functionAgentMgr,
                          const std::shared_ptr<ResourceViewMgr> &resourceViewMgr,
+                         const std::shared_ptr<function_proxy::ControlPlaneObserver> &observer)
+{
+    Start(functionAgentMgr, resourceViewMgr, observer, StartOptions{});
+}
+
+void InstanceCtrl::Start(const std::shared_ptr<FunctionAgentMgr> &functionAgentMgr,
+                         const std::shared_ptr<ResourceViewMgr> &resourceViewMgr,
                          const std::shared_ptr<function_proxy::ControlPlaneObserver> &observer,
-                         const std::string &aggregatedStrategy, uint16_t maxPriority)
+                         const InstanceCtrl::StartOptions &options)
 {
     if (instanceCtrlActor_ == nullptr) {
         YRLOG_ERROR("failed to start instance ctrl because actor pointer is null");
@@ -182,11 +198,11 @@ void InstanceCtrl::Start(const std::shared_ptr<FunctionAgentMgr> &functionAgentM
     (void)litebus::Spawn(instanceCtrlActor_, false);
 
     primaryScheduleQueueActor_ =
-        CreateScheduler(PRIMARY_TAG, maxPriority, aggregatedStrategy,
-                        resourceViewMgr->GetInf(resource_view::ResourceType::PRIMARY));
+        CreateScheduler(PRIMARY_TAG, options.maxPriority, options.aggregatedStrategy,
+                        resourceViewMgr->GetInf(resource_view::ResourceType::PRIMARY), options.enableUnitScheduler);
     virtualScheduleQueueActor_ =
-        CreateScheduler(VIRTUAL_TAG, maxPriority, aggregatedStrategy,
-                        resourceViewMgr->GetInf(resource_view::ResourceType::VIRTUAL));
+        CreateScheduler(VIRTUAL_TAG, options.maxPriority, options.aggregatedStrategy,
+                        resourceViewMgr->GetInf(resource_view::ResourceType::VIRTUAL), options.enableUnitScheduler);
     scheduler_ = std::make_shared<schedule_decision::Scheduler>(primaryScheduleQueueActor_->GetAID(),
                                                                 virtualScheduleQueueActor_->GetAID());
     (void)RegisterPolicy(scheduler_);

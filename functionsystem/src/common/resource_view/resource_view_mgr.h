@@ -19,11 +19,6 @@
 #include "resource_view.h"
 namespace functionsystem::resource_view {
 
-enum class ResourceType {
-    PRIMARY = 0,
-    VIRTUAL = 1,
-};
-
 class ResourceViewMgr {
 public:
     ResourceViewMgr() = default;

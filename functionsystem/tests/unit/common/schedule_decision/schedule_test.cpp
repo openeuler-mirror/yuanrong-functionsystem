@@ -30,6 +30,87 @@ namespace functionsystem::test {
 using namespace ::testing;
 using namespace schedule_decision;
 
+namespace {
+class SnapshotQueueStrategy : public ScheduleStrategy {
+public:
+    explicit SnapshotQueueStrategy(std::string owner = "owner") : owner_(std::move(owner))
+    {
+    }
+
+    litebus::Future<Status> Enqueue(const std::shared_ptr<QueueItem> &item) override
+    {
+        running_.push_back(item);
+        return Status::OK();
+    }
+
+    bool CheckIsRunningQueueEmpty() override
+    {
+        return running_.empty();
+    }
+
+    bool CheckIsPendingQueueEmpty() override
+    {
+        return true;
+    }
+
+    ScheduleType GetScheduleType() override
+    {
+        return ScheduleType::PRIORITY;
+    }
+
+    void ConsumeRunningQueue() override
+    {
+        while (!running_.empty()) {
+            auto item = std::dynamic_pointer_cast<InstanceItem>(running_.front());
+            running_.pop_front();
+            item->schedulePromise->SetValue(ScheduleResult{ owner_, 0, "", {}, "", {}, {} });
+        }
+    }
+
+    void HandleResourceInfoUpdate(const resource_view::ResourceViewInfo &) override
+    {
+        ++legacyUpdateCount;
+    }
+
+    void ActivatePendingRequests() override
+    {
+    }
+
+    bool UsesScheduleSnapshot() const override
+    {
+        return true;
+    }
+
+    Status BeginScheduleRound(const resource_view::ScheduleSnapshotPtr &snapshot) override
+    {
+        if (snapshot == nullptr) {
+            return Status(StatusCode::RESOURCE_NOT_ENOUGH, "missing snapshot");
+        }
+        ++beginRoundCount;
+        pinned = snapshot;
+        return Status::OK();
+    }
+
+    int beginRoundCount{ 0 };
+    int legacyUpdateCount{ 0 };
+    resource_view::ScheduleSnapshotPtr pinned;
+
+private:
+    std::string owner_;
+    std::deque<std::shared_ptr<QueueItem>> running_;
+};
+
+resource_view::ScheduleSnapshotPtr BuildEmptySnapshot(const std::string &initTime)
+{
+    auto snapshot = std::make_shared<resource_view::ScheduleSnapshot>();
+    snapshot->revision = 1;
+    snapshot->viewInitTime = initTime;
+    snapshot->requestPlacements = std::make_shared<const resource_view::RequestPlacementIndex>();
+    snapshot->ownerLabels = std::make_shared<const resource_view::OwnerLabelIndex>();
+    return snapshot;
+}
+}  // namespace
+
 class ScheduleTest : public Test {
 public:
     void SetUp() override
@@ -86,6 +167,124 @@ TEST_F(ScheduleTest, InstanceScheduleSuccess)
     EXPECT_AWAIT_READY_FOR(future, 1000);
     auto result = future.Get();
     EXPECT_EQ(result.code, 0);
+}
+
+TEST(ScheduleSnapshotPathTest, LoadsPublishedSnapshotWithoutResourceViewMailboxRead)
+{
+    auto actor = std::make_shared<ScheduleQueueActor>("SnapshotScheduleQueueActor");
+    auto view = MockResourceView::CreateMockResourceView();
+    EXPECT_CALL(*view, AddResourceUpdateHandler).WillOnce(Return());
+    EXPECT_CALL(*view, GetResourceInfo).Times(0);
+    actor->RegisterResourceView(view);
+
+    auto snapshot = std::make_shared<resource_view::ScheduleSnapshot>();
+    snapshot->revision = 1;
+    snapshot->viewInitTime = "snapshot-path";
+    snapshot->requestPlacements = std::make_shared<const resource_view::RequestPlacementIndex>();
+    snapshot->ownerLabels = std::make_shared<const resource_view::OwnerLabelIndex>();
+    resource_view::ScheduleSnapshotPtr published(std::move(snapshot));
+    view->GetScheduleSnapshotStore()->Publish(published);
+
+    auto strategy = std::make_shared<SnapshotQueueStrategy>();
+    actor->RegisterScheduler(strategy);
+    litebus::Spawn(actor);
+
+    auto scheduler = std::make_shared<Scheduler>(actor->GetAID(), actor->GetAID());
+    auto request = std::make_shared<messages::ScheduleRequest>();
+    request->set_requestid("snapshot-request");
+    auto result = scheduler->ScheduleDecision(request, litebus::Future<std::string>());
+    EXPECT_AWAIT_READY_FOR(result, 1000);
+    EXPECT_EQ(result.Get().code, 0);
+    EXPECT_EQ(strategy->beginRoundCount, 1);
+    EXPECT_EQ(strategy->legacyUpdateCount, 0);
+    EXPECT_EQ(strategy->pinned, published);
+
+    litebus::Terminate(actor->GetAID());
+    litebus::Await(actor->GetAID());
+}
+
+TEST(ScheduleSnapshotPathTest, WaitsForInitialSnapshotWithoutFallingBackToMailboxRead)
+{
+    auto actor = std::make_shared<ScheduleQueueActor>("SnapshotInitScheduleQueueActor");
+    auto view = MockResourceView::CreateMockResourceView();
+    EXPECT_CALL(*view, AddResourceUpdateHandler).WillOnce(Return());
+    EXPECT_CALL(*view, GetResourceInfo).Times(0);
+    actor->RegisterResourceView(view);
+
+    auto strategy = std::make_shared<SnapshotQueueStrategy>();
+    actor->RegisterScheduler(strategy);
+    litebus::Spawn(actor);
+
+    auto scheduler = std::make_shared<Scheduler>(actor->GetAID(), actor->GetAID());
+    auto request = std::make_shared<messages::ScheduleRequest>();
+    request->set_requestid("snapshot-init-request");
+    auto result = scheduler->ScheduleDecision(request, litebus::Future<std::string>());
+    EXPECT_TRUE(result.IsInit());
+
+    auto snapshot = std::make_shared<resource_view::ScheduleSnapshot>();
+    snapshot->revision = 1;
+    snapshot->viewInitTime = "snapshot-init";
+    snapshot->requestPlacements = std::make_shared<const resource_view::RequestPlacementIndex>();
+    snapshot->ownerLabels = std::make_shared<const resource_view::OwnerLabelIndex>();
+    resource_view::ScheduleSnapshotPtr published(std::move(snapshot));
+    view->GetScheduleSnapshotStore()->Publish(published);
+
+    EXPECT_AWAIT_READY_FOR(result, 1000);
+    EXPECT_EQ(result.Get().code, 0);
+    EXPECT_EQ(strategy->legacyUpdateCount, 0);
+    EXPECT_EQ(strategy->pinned, published);
+
+    litebus::Terminate(actor->GetAID());
+    litebus::Await(actor->GetAID());
+}
+
+TEST(ScheduleSnapshotPathTest, PrimaryAndVirtualActorsLoadOnlyTheirOwnPublishedSnapshots)
+{
+    auto primaryActor = std::make_shared<ScheduleQueueActor>("PrimarySnapshotScheduleQueueActor");
+    auto virtualActor = std::make_shared<ScheduleQueueActor>("VirtualSnapshotScheduleQueueActor");
+    auto primaryView = MockResourceView::CreateMockResourceView();
+    auto virtualView = MockResourceView::CreateMockResourceView();
+    EXPECT_CALL(*primaryView, AddResourceUpdateHandler).WillOnce(Return());
+    EXPECT_CALL(*virtualView, AddResourceUpdateHandler).WillOnce(Return());
+    EXPECT_CALL(*primaryView, GetResourceInfo).Times(0);
+    EXPECT_CALL(*virtualView, GetResourceInfo).Times(0);
+    primaryActor->RegisterResourceView(primaryView);
+    virtualActor->RegisterResourceView(virtualView);
+
+    auto primarySnapshot = BuildEmptySnapshot("primary-snapshot");
+    auto virtualSnapshot = BuildEmptySnapshot("virtual-snapshot");
+    primaryView->GetScheduleSnapshotStore()->Publish(primarySnapshot);
+    virtualView->GetScheduleSnapshotStore()->Publish(virtualSnapshot);
+
+    auto primaryStrategy = std::make_shared<SnapshotQueueStrategy>("primary-owner");
+    auto virtualStrategy = std::make_shared<SnapshotQueueStrategy>("virtual-owner");
+    primaryActor->RegisterScheduler(primaryStrategy);
+    virtualActor->RegisterScheduler(virtualStrategy);
+    litebus::Spawn(primaryActor);
+    litebus::Spawn(virtualActor);
+
+    auto scheduler = std::make_shared<Scheduler>(primaryActor->GetAID(), virtualActor->GetAID());
+    auto primaryRequest = std::make_shared<messages::ScheduleRequest>();
+    primaryRequest->set_requestid("primary-request");
+    auto virtualRequest = std::make_shared<messages::ScheduleRequest>();
+    virtualRequest->set_requestid("virtual-request");
+    virtualRequest->mutable_instance()->mutable_scheduleoption()->set_rgroupname("virtual-group");
+
+    auto primaryResult = scheduler->ScheduleDecision(primaryRequest, litebus::Future<std::string>());
+    auto virtualResult = scheduler->ScheduleDecision(virtualRequest, litebus::Future<std::string>());
+    EXPECT_AWAIT_READY_FOR(primaryResult, 1000);
+    EXPECT_AWAIT_READY_FOR(virtualResult, 1000);
+    EXPECT_EQ(primaryResult.Get().id, "primary-owner");
+    EXPECT_EQ(virtualResult.Get().id, "virtual-owner");
+    EXPECT_EQ(primaryStrategy->pinned, primarySnapshot);
+    EXPECT_EQ(virtualStrategy->pinned, virtualSnapshot);
+    EXPECT_EQ(primaryStrategy->beginRoundCount, 1);
+    EXPECT_EQ(virtualStrategy->beginRoundCount, 1);
+
+    litebus::Terminate(primaryActor->GetAID());
+    litebus::Terminate(virtualActor->GetAID());
+    litebus::Await(primaryActor->GetAID());
+    litebus::Await(virtualActor->GetAID());
 }
 
 TEST_F(ScheduleTest, GroupScheduleSuccess)

@@ -34,6 +34,10 @@ public:
         const std::shared_ptr<schedule_framework::PreAllocatedContext> &context,
         const resource_view::ResourceViewInfo &resourceInfo,
         const std::shared_ptr<schedule_decision::GroupItem> &scheduleItem);
+    virtual schedule_decision::GroupScheduleResult DoSchedule(
+        const std::shared_ptr<schedule_framework::PreAllocatedContext> &context,
+        const resource_view::ScheduleResourceView &resourceView,
+        const std::shared_ptr<schedule_decision::GroupItem> &scheduleItem);
 
     virtual Status RollBack(const std::shared_ptr<schedule_framework::PreAllocatedContext> &context,
         const std::shared_ptr<schedule_decision::GroupItem> &scheduleItem, const GroupScheduleResult &groupResult);
@@ -61,4 +65,3 @@ private:
 
 }
 #endif  // COMMON_SCHEDULE_DECISION_GROUP_SCHEDULE_PERFORMER_H
-

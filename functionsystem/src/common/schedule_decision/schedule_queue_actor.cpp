@@ -45,6 +45,9 @@ static const QueueStateTransition STATE_TRANSITIONS_MAP[] = {
 };
 
 const int64_t RESOURCE_IDLE_TIME = 30000;
+const int64_t SNAPSHOT_INIT_RETRY_TIME = 1;
+const size_t SNAPSHOT_ROUND_REQUEST_LIMIT = 256;
+const auto SNAPSHOT_ROUND_TIME_LIMIT = std::chrono::milliseconds(10);
 
 ScheduleQueueActor::ScheduleQueueActor(const std::string &name)
     : ActorBase(name + SCHEDULE_QUEUE_ACTOR_NAME_POSTFIX)
@@ -58,6 +61,7 @@ void ScheduleQueueActor::RegisterResourceView(const std::shared_ptr<resource_vie
     if (resourceView == nullptr) {
         return;
     }
+    scheduleSnapshotStore_ = resourceView->GetScheduleSnapshotStore();
     if (type_ == AllocateType::ALLOCATION) {
         return;
     }
@@ -140,8 +144,27 @@ void ScheduleQueueActor::UpdateResourceInfo(const litebus::Future<resource_view:
 litebus::Future<ScheduleResult> ScheduleQueueActor::ScheduleDecision(
     const std::shared_ptr<messages::ScheduleRequest> &req, const litebus::Future<std::string> &cancelTag)
 {
+    return EnqueueScheduleRequest(req, cancelTag, "");
+}
+
+litebus::Future<ScheduleResult> ScheduleQueueActor::RetryScheduleDecision(
+    const std::shared_ptr<messages::ScheduleRequest> &req,
+    const litebus::Future<std::string> &cancelTag,
+    const std::string &conflictedUnitID)
+{
+    ASSERT_IF_NULL(scheduleStrategy_);
+    scheduleStrategy_->HandleScheduleConflict(req->requestid(), req->instance(), conflictedUnitID);
+    return EnqueueScheduleRequest(req, cancelTag, conflictedUnitID);
+}
+
+litebus::Future<ScheduleResult> ScheduleQueueActor::EnqueueScheduleRequest(
+    const std::shared_ptr<messages::ScheduleRequest> &req,
+    const litebus::Future<std::string> &cancelTag,
+    const std::string &conflictedUnitID)
+{
     auto promise = std::make_shared<litebus::Promise<ScheduleResult>>();
     auto item = std::make_shared<InstanceItem>(req, promise, cancelTag);
+    item->conflictedUnitID = conflictedUnitID;
     ASSERT_IF_NULL(scheduleStrategy_);
     auto res = scheduleStrategy_->Enqueue(item).Get();
     if (res.IsError()) {
@@ -241,6 +264,10 @@ litebus::Future<Status> ScheduleQueueActor::ScheduleConfirm(const std::shared_pt
 
 void ScheduleQueueActor::RequestConsumer()
 {
+    ASSERT_IF_NULL(scheduleStrategy_);
+    if (scheduleStrategy_->UsesScheduleSnapshot()) {
+        return DoConsumeWithSnapshot();
+    }
     // resource not updated, directly to consume
     if (!isNewResourceAvailable_ && type_ == AllocateType::PRE_ALLOCATION) {
         return DoConsumeWithCurrentInfo();
@@ -250,18 +277,80 @@ void ScheduleQueueActor::RequestConsumer()
         litebus::Defer(GetAID(), &ScheduleQueueActor::DoConsumeWithLatestInfo, std::placeholders::_1));
 }
 
+void ScheduleQueueActor::DoConsumeWithSnapshot()
+{
+    ASSERT_IF_NULL(scheduleStrategy_);
+    ASSERT_IF_NULL(scheduleSnapshotStore_);
+    const auto now = std::chrono::steady_clock::now();
+    if (snapshotRoundActive_ &&
+        (snapshotRoundConsumed_ >= SNAPSHOT_ROUND_REQUEST_LIMIT ||
+         now - snapshotRoundStarted_ >= SNAPSHOT_ROUND_TIME_LIMIT)) {
+        snapshotRoundActive_ = false;
+    }
+    // A completed aggregate can make its futures ready before the client
+    // replenishes the fixed-inflight window. Do not open an empty snapshot
+    // round in that gap; the next request either reuses the still-bounded
+    // round or refreshes it after N requests / T time.
+    if (scheduleStrategy_->CheckIsRunningQueueEmpty()) {
+        TransitionSchedulerQueueState();
+        HandlePendingRequests();
+        return;
+    }
+    if (!snapshotRoundActive_) {
+        auto snapshot = scheduleSnapshotStore_->Load();
+        if (snapshot == nullptr) {
+            // ResourceViewActor publishes the initial snapshot asynchronously.
+            // Keep the queued request in place and retry without issuing a
+            // ResourceView mailbox read.
+            litebus::AsyncAfter(SNAPSHOT_INIT_RETRY_TIME, GetAID(), &ScheduleQueueActor::RequestConsumer);
+            return;
+        }
+        auto status = scheduleStrategy_->BeginScheduleRound(snapshot);
+        if (!status.IsOk()) {
+            YRLOG_ERROR("failed to begin Unit schedule round: {}", status.ToString());
+            return;
+        }
+        snapshotRoundActive_ = true;
+        snapshotRoundConsumed_ = 0;
+        snapshotRoundStarted_ = now;
+        isNewResourceAvailable_ = false;
+    }
+    const auto remaining = SNAPSHOT_ROUND_REQUEST_LIMIT - snapshotRoundConsumed_;
+    snapshotRoundConsumed_ += scheduleStrategy_->ConsumeRunningQueue(remaining);
+    if (snapshotRoundConsumed_ >= SNAPSHOT_ROUND_REQUEST_LIMIT ||
+        std::chrono::steady_clock::now() - snapshotRoundStarted_ >= SNAPSHOT_ROUND_TIME_LIMIT) {
+        snapshotRoundActive_ = false;
+    }
+    if (scheduleStrategy_->CheckIsRunningQueueEmpty()) {
+        TransitionSchedulerQueueState();
+        HandlePendingRequests();
+        return;
+    }
+    // Yield to resource notifications/cancellation and pin the latest
+    // immutable snapshot for the next bounded round.
+    if (diagnosticsEnabled_) {
+        snapshotSelfYields_.fetch_add(1, std::memory_order_relaxed);
+    }
+    litebus::Async(GetAID(), &ScheduleQueueActor::DoConsumeWithSnapshot);
+}
+
 void ScheduleQueueActor::DoConsumeWithLatestInfo(
     const litebus::Future<resource_view::ResourceViewInfo> &resourceFuture)
 {
     YRLOG_INFO("Use the latest resourceview for scheduling");
     UpdateResourceInfo(resourceFuture);
     ASSERT_IF_NULL(scheduleStrategy_);
-    scheduleStrategy_->ConsumeRunningQueue();
+    scheduleStrategy_->ConsumeRunningQueue(legacyRoundRequestLimit_);
 
     // After the current queue consumption is complete, a consumption is initiated asynchronously to prevent new
     // queue requests from using new scheduling contexts during the consumption period and reduce domain scheduling
     // conflicts in concurrent scenarios.
-    litebus::Async(GetAID(), &ScheduleQueueActor::DoConsumeWithCurrentInfo);
+    if (diagnosticsEnabled_) {
+        legacySelfYields_.fetch_add(1, std::memory_order_relaxed);
+    }
+    litebus::Async(GetAID(), legacyRoundRequestLimit_ == std::numeric_limits<size_t>::max()
+                                 ? &ScheduleQueueActor::DoConsumeWithCurrentInfo
+                                 : &ScheduleQueueActor::RequestConsumer);
 }
 
 void ScheduleQueueActor::DoConsumeWithCurrentInfo()
@@ -271,6 +360,7 @@ void ScheduleQueueActor::DoConsumeWithCurrentInfo()
     // In a consumption queue request initiated asynchronously, if the queue is still empty which means no new
     // request enters the queue during the previous round of scheduling. In this case, the system exits recursively.
     if (scheduleStrategy_->CheckIsRunningQueueEmpty()) {
+        snapshotRoundActive_ = false;
         TransitionSchedulerQueueState();
         // Process pending requests before exiting
         HandlePendingRequests();
@@ -278,9 +368,14 @@ void ScheduleQueueActor::DoConsumeWithCurrentInfo()
     }
 
     YRLOG_INFO("schedule queue is not empty. continue to consuming schedule request");
-    scheduleStrategy_->ConsumeRunningQueue();
+    scheduleStrategy_->ConsumeRunningQueue(legacyRoundRequestLimit_);
 
-    litebus::Async(GetAID(), &ScheduleQueueActor::DoConsumeWithCurrentInfo);
+    if (diagnosticsEnabled_) {
+        legacySelfYields_.fetch_add(1, std::memory_order_relaxed);
+    }
+    litebus::Async(GetAID(), legacyRoundRequestLimit_ == std::numeric_limits<size_t>::max()
+                                 ? &ScheduleQueueActor::DoConsumeWithCurrentInfo
+                                 : &ScheduleQueueActor::RequestConsumer);
 }
 
 }  // namespace functionsystem::schedule_decision

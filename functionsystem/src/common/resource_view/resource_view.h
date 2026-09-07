@@ -36,7 +36,8 @@ class ResourceViewActor;
 const ResourceViewActor::Param VIEW_ACTOR_DEFAULT_PARAM = {
     .isLocal = false,
     .enableTenantAffinity = true,
-    .tenantPodReuseTimeWindow = 10
+    .tenantPodReuseTimeWindow = 10,
+    .enableScheduleSnapshot = false
 };
 
 class ResourceView : public ActorDriver {
@@ -147,6 +148,8 @@ public:
     virtual litebus::Future<litebus::Option<std::string>> GetUnitByInstReqID(const std::string &instReqID);
 
     virtual litebus::Future<ResourceViewInfo> GetResourceInfo();
+
+    virtual std::shared_ptr<ScheduleSnapshotStore> GetScheduleSnapshotStore() const;
 
     /**
      * @brief clear all resource unit from view

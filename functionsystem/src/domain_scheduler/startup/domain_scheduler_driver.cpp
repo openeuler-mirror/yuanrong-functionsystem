@@ -22,6 +22,7 @@
 #include "common/logs/logging.h"
 #include "common/resource_view/resource_poller.h"
 #include "common/schedule_decision/schedule_recorder/schedule_recorder.h"
+#include "common/schedule_decision/scheduler/unit_scheduler.h"
 #include "common/schedule_plugin/common/constants.h"
 #include "common/scheduler_framework/framework/framework_impl.h"
 #include "domain_group_control/domain_group_ctrl.h"
@@ -80,10 +81,18 @@ std::shared_ptr<schedule_decision::ScheduleQueueActor> DomainSchedulerDriver::Cr
     }
     YRLOG_INFO("start scheduler actor, enablePreemption:{} policyType:{}",
                (param_.maxPriority > 0 && param_.enablePreemption), static_cast<int>(policyType));
-    auto priorityScheduler =
-        std::make_shared<schedule_decision::PriorityScheduler>(scheduleRecorder, param_.maxPriority,
-                                                               policyType, param_.aggregatedStrategy);
+    std::shared_ptr<schedule_decision::ScheduleStrategy> priorityScheduler;
+    if (param_.enableUnitScheduler) {
+        priorityScheduler = std::make_shared<schedule_decision::UnitScheduler>(
+            scheduleRecorder, param_.maxPriority, policyType, param_.aggregatedStrategy);
+    } else {
+        priorityScheduler = std::make_shared<schedule_decision::PriorityScheduler>(
+            scheduleRecorder, param_.maxPriority, policyType, param_.aggregatedStrategy);
+    }
     priorityScheduler->RegisterSchedulePerformer(resourceView, framework, preemptCallbackFunc);
+    if (param_.enableUnitScheduler) {
+        priorityScheduler->SetPlacementPolicy(param_.schedulePlacementPolicy);
+    }
     scheduleQueueActor->RegisterScheduler(priorityScheduler);
     scheduleQueueActor->RegisterResourceView(resourceView);
     litebus::Spawn(scheduleQueueActor);
@@ -116,7 +125,9 @@ Status DomainSchedulerDriver::Start()
     auto instanceCtrl = std::make_shared<InstanceCtrl>(instanceCtrlActor_->GetAID());
 
     resourceViewMgr_ = std::make_shared<resource_view::ResourceViewMgr>();
-    resourceViewMgr_->Init(param_.identity);
+    auto resourceViewParam = resource_view::VIEW_ACTOR_DEFAULT_PARAM;
+    resourceViewParam.enableScheduleSnapshot = param_.enableUnitScheduler;
+    resourceViewMgr_->Init(param_.identity, resourceViewParam);
     resource_view::ResourcePoller::SetInterval(param_.pullResourceInterval);
     resourceViewMgr_->TriggerTryPull();
 

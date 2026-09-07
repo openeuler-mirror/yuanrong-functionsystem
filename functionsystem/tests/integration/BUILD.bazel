@@ -25,7 +25,7 @@ cc_test(
         "-ldl",
     ],
     deps = [
-        "//common/logs:logs_sdk",
+        "@logs_sdk//:logs_sdk",
         "//functionsystem/src/common:posix_pb",
         "//functionsystem/src/common:register",
         "//functionsystem/src/common:resource_view",

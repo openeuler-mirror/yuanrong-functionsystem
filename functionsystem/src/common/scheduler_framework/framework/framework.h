@@ -21,6 +21,7 @@
 
 #include "async/try.hpp"
 #include "common/resource_view/resource_type.h"
+#include "common/resource_view/schedule_snapshot.h"
 #include "common/scheduler_framework/framework/policy.h"
 #include "common/scheduler_framework/utils/score.h"
 #include "common/status/status.h"
@@ -52,6 +53,13 @@ struct ScheduleResults {
     std::priority_queue<NodeScore> sortedFeasibleNodes;
 };
 
+struct CandidateEvaluation {
+    Status status;
+    bool feasible{ false };
+    bool fatal{ false };
+    NodeScore score{ 0 };
+};
+
 class Framework {
 public:
     Framework() = default;
@@ -62,6 +70,39 @@ public:
                                            const resource_view::InstanceInfo &instance,
                                            const resource_view::ResourceUnit &resourceUnit,
                                            uint32_t expectedFeasible) = 0;
+    virtual ScheduleResults SelectFeasible(const std::shared_ptr<ScheduleContext> &ctx,
+                                           const resource_view::InstanceInfo &instance,
+                                           const resource_view::ScheduleResourceView &resourceView,
+                                           uint32_t expectedFeasible)
+    {
+        const auto *legacy = resourceView.GetLegacyResourceUnit();
+        if (legacy != nullptr) {
+            return SelectFeasible(ctx, instance, *legacy, expectedFeasible);
+        }
+        return ScheduleResults{ static_cast<int32_t>(StatusCode::ERR_SCHEDULE_PLUGIN_CONFIG),
+                                "schedule framework does not support Unit snapshot", {} };
+    }
+    virtual bool SupportsScheduleSnapshot() const
+    {
+        return false;
+    }
+    // Unknown plugins may inspect request fields that are intentionally
+    // excluded from the built-in aggregation signature. They must opt out of
+    // aggregation unless the framework can prove all registered plugins use
+    // the built-in scheduling semantics.
+    virtual bool SupportsSemanticAggregation() const
+    {
+        return false;
+    }
+    virtual CandidateEvaluation EvaluateUnit(const std::shared_ptr<ScheduleContext> &,
+                                             const resource_view::InstanceInfo &,
+                                             const resource_view::ScheduleResourceView &,
+                                             const std::string &)
+    {
+        return CandidateEvaluation{ Status(StatusCode::ERR_SCHEDULE_PLUGIN_CONFIG,
+                                           "schedule framework does not support Unit reevaluation"),
+                                    false, true, NodeScore{ 0 } };
+    }
 };
 }  // namespace functionsystem::schedule_framework
 #endif  // SCHEDULER_FRAMEWORK_H

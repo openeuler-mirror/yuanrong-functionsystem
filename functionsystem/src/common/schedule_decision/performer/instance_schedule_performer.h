@@ -34,6 +34,10 @@ public:
         const std::shared_ptr<schedule_framework::PreAllocatedContext> &context,
         const resource_view::ResourceViewInfo &resourceInfo,
         const std::shared_ptr<schedule_decision::InstanceItem> &scheduleItem);
+    virtual schedule_decision::ScheduleResult DoSchedule(
+        const std::shared_ptr<schedule_framework::PreAllocatedContext> &context,
+        const resource_view::ScheduleResourceView &resourceView,
+        const std::shared_ptr<schedule_decision::InstanceItem> &scheduleItem);
 
     virtual Status RollBack(const std::shared_ptr<schedule_framework::PreAllocatedContext> &context,
                             const std::shared_ptr<schedule_decision::InstanceItem> &instanceItem,
@@ -42,4 +46,3 @@ public:
 
 }
 #endif  // COMMON_SCHEDULE_DECISION_INSTANCE_SCHEDULE_PERFORMER_H
-

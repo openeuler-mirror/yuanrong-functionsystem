@@ -92,12 +92,11 @@ bool NUMAAffinityFilter::PerformNUMAFilter(
     const resource_view::ResourceUnit& resourceUnit) const
 {
     // 预分配场景：扣除已预分配资源后的可用量（与 DefaultFilter、NUMAAffinityScorer 一致）
-    resource_view::Resources effectiveAllocatable = resourceUnit.allocatable();
+    const resource_view::Resources *effectiveAllocatable = &resourceUnit.allocatable();
     if (preContext != nullptr) {
-        auto iter = preContext->allocated.find(resourceUnit.id());
-        if (iter != preContext->allocated.end()) {
-            effectiveAllocatable = resourceUnit.allocatable() - iter->second.resource;
-            if (!resource_view::IsValid(effectiveAllocatable)) {
+        effectiveAllocatable = &preContext->EffectiveAllocatable(resourceUnit);
+        if (preContext->allocated.find(resourceUnit.id()) != preContext->allocated.end()) {
+            if (!resource_view::IsValid(*effectiveAllocatable)) {
                 YRLOG_DEBUG("{}|ResourceUnit({}) effective allocatable invalid after deducting pre-allocated",
                             instance.requestid(), resourceUnit.id());
                 return false;
@@ -105,7 +104,7 @@ bool NUMAAffinityFilter::PerformNUMAFilter(
         }
     }
     std::vector<double> numaCpuCounts =
-        utils::NUMAUtils::GetNUMANodeCPUsFromAllocatable(effectiveAllocatable, resourceUnit.id());
+        utils::NUMAUtils::GetNUMANodeCPUsFromAllocatable(*effectiveAllocatable, resourceUnit.id());
     if (numaCpuCounts.empty()) {
         return false;
     }

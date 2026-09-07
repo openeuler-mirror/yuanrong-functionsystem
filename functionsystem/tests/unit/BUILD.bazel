@@ -65,8 +65,8 @@ cc_test(
         "-ldl",
     ],
     deps = [
-        "//common/logs:logs_sdk",
-        "//common/metrics:metrics_sdk",
+        "@logs_sdk//:logs_sdk",
+        "@metrics_sdk//:metrics_sdk",
         "//functionsystem/src/common:aksk",
         "//functionsystem/src/common:all_schedule_plugins",
         "//functionsystem/src/common:common_flags",
@@ -201,7 +201,7 @@ cc_test(
         "-ldl",
     ],
     deps = [
-        "//common/logs:logs_sdk",
+        "@logs_sdk//:logs_sdk",
         "//functionsystem/src/common:posix_pb",
         "//functionsystem/src/common:status",
         "//functionsystem/src/common:utils",
@@ -240,7 +240,7 @@ cc_test(
         "-ldl",
     ],
     deps = [
-        "//common/logs:logs_sdk",
+        "@logs_sdk//:logs_sdk",
         "//functionsystem/src/common:posix_pb",
         "//functionsystem/src/common:status",
         "//functionsystem/src/common:utils",
@@ -280,7 +280,7 @@ cc_test(
         "-ldl",
     ],
     deps = [
-        "//common/logs:logs_sdk",
+        "@logs_sdk//:logs_sdk",
         "//functionsystem/src/common:metadata",
         "//functionsystem/src/common:status",
         "//functionsystem/src/function_proxy:function_proxy_base_lib",
@@ -341,8 +341,8 @@ cc_test(
         "-ldl",
     ],
     deps = [
-        "//common/logs:logs_sdk",
-        "//common/metrics:metrics_sdk",
+        "@logs_sdk//:logs_sdk",
+        "@metrics_sdk//:metrics_sdk",
         "//functionsystem/src/common:aksk",
         "//functionsystem/src/common:all_schedule_plugins",
         "//functionsystem/src/common:common_flags",
