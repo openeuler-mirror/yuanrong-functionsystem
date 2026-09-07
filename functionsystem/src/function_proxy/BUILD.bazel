@@ -67,6 +67,7 @@ cc_library(
     deps = [
         ":function_proxy_inc",
         "//functionsystem/src:src_root_inc",
+        "//functionsystem/src/common:datasystem_capability",
         "@litebus//:litebus",
         "@datasystem_sdk//:datasystem_sdk",
         "//functionsystem/src/meta_store/client/cpp:meta_store_client",

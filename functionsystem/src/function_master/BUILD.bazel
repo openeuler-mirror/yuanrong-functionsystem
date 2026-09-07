@@ -54,6 +54,7 @@ cc_library(
     deps = [
         ":function_master_inc",
         ":function_master_common_lib",
+        "//functionsystem/src/common:datasystem_capability",
         "//functionsystem/src/common:rpc",
         "//functionsystem/src/common:status",
         "//functionsystem/src/meta_store/client/cpp:meta_store_client",
