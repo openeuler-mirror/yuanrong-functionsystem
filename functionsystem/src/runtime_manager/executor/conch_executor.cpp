@@ -439,13 +439,13 @@ void ConchExecutor::BindHostLogDir(const std::string &runtimeID, nlohmann::json 
 //      top-level policy.filesystem_policy). ConchFilesystemPolicy is
 //      extra="forbid" with only bind_mounts; emitting top-level filesystem_policy
 //      would be silently ignored by the conch path and is omitted for clarity.
-//   3. policy.conch.template_id carries the EROFS template id, sourced from the
-//      rootfs JSON imageurl (ParseRootfsImageUrl). Empty is allowed: conchd falls
-//      back to JIUWENBOX_CONCH_TEMPLATE_ID / sandbox.default_template_id.
+//   3. policy.conch.template_name carries the conch template name, sourced from the
+//      rootfs JSON imageurl (ParseRootfsImageUrl). Empty is allowed: jiuwenbox falls
+//      back to JIUWENBOX_CONCH_TEMPLATE_NAME / conchd sandbox.default_template_name.
 //   4. REMOVED vs supervisor: policy.environment (bwrap-only), policy.process,
 //      policy.namespace, policy.cgroup, and top-level filesystem_policy
 //      directories/read_write. ConchPolicy is extra="forbid" — only the 7 keys
-//      template_id/vcpu_num/vcpu_max/ram_mb/env/filesystem_policy/network are
+//      template_name/vcpu_num/vcpu_max/ram_mb/env/filesystem_policy/network are
 //      accepted; any of the supervisor keys here would yield a 400.
 //      Guest env (JIUWENSWARM_HOME + posixenvs) goes to policy.conch.env, which
 //      merge_conch_create_env merges with the create-API env override.
@@ -464,8 +464,8 @@ nlohmann::json ConchExecutor::CreateRequest(const std::shared_ptr<messages::Star
 
     nlohmann::json conch = nlohmann::json::object();
 
-    // template_id from rootfs imageurl; empty -> conchd default_template_id fallback.
-    conch["template_id"] = ParseRootfsImageUrl(rootfsJson);
+    // template_name from rootfs imageurl; empty -> jiuwenbox env / conchd default fallback.
+    conch["template_name"] = ParseRootfsImageUrl(rootfsJson);
 
     // bind_mounts under conch.filesystem_policy.bind_mounts. BindMount element shape
     // {host_path, sandbox_path, mode} is shared with the process backend. Note

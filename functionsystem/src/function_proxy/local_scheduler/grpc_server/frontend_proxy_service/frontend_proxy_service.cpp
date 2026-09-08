@@ -35,6 +35,7 @@
 #include "common/constants/signal.h"
 #include "common/hex/hex.h"
 #include "common/logs/logging.h"
+#include "common/metadata/metadata.h"
 #include "function_proxy/busproxy/invocation_handler/invocation_handler.h"
 
 namespace functionsystem::local_scheduler {
@@ -824,13 +825,15 @@ bool FrontendProxyService::ValidateCreateRequest(const ::frontend_proxy::CreateI
     const auto owningProxyID = response.has_callresult() && response.callresult().has_runtimeinfo()
                                    ? response.callresult().runtimeinfo().proxyid()
                                    : "";
-    if (createRsp.code() == common::ERR_NONE && owningProxyID.empty()) {
+    const bool requiresFinalOwner = IsForceLowReliabilityInstanceEnabled() || response.has_callresult();
+    if (createRsp.code() == common::ERR_NONE && requiresFinalOwner && owningProxyID.empty()) {
         SetStatus(response.mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
                   "frontend proxy create response missing final owner proxy node id");
         return ::grpc::Status::OK;
     }
     if (createRsp.code() == common::ERR_NONE) {
-        response.set_routeaddress(owningProxyID);
+        // Schedule-only responses use the entry proxy for subsequent lifecycle requests.
+        response.set_routeaddress(owningProxyID.empty() ? param_.nodeID : owningProxyID);
     }
     SetStatus(response.mutable_status(), createRsp.code(), createRsp.message());
     const auto routeAddress = response.routeaddress();
