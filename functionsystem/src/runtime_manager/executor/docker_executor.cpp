@@ -1043,11 +1043,13 @@ std::string DockerExecutor::BuildShellCmdLine(const std::string &execPath,
         return "exec " + quotedArgv;
     }
 
-    // Tolerant redirect: subshell ( >LOG ) probes whether the redirect target is writable; on
+    // Tolerant redirect: subshell ( >>LOG ) probes whether the redirect target is writable; on
     // open failure the yr_runtime_main execs with inherited stdout/stderr so startup is never
     // blocked. stderr merges into the same file via 2>&1. Paths stay ShellQuote-wrapped,
     // no injection.
-    return "if ( >" + ShellQuote(startReq.stdout()) + " ) 2>/dev/null; then exec " + quotedArgv + " >"
+    // >> (O_APPEND) keeps the writer offset following EOF, in step with the
+    // logrotate copytruncate rotation done by LogManagerActor.
+    return "if ( >>" + ShellQuote(startReq.stdout()) + " ) 2>/dev/null; then exec " + quotedArgv + " >>"
         + ShellQuote(startReq.stdout()) + " 2>&1; else exec " + quotedArgv + "; fi";
 }
 

@@ -302,6 +302,21 @@ public:
         return logExpirationMaxFileCount_;
     }
 
+    bool GetLogRotateEnable() const
+    {
+        return logRotateEnable_;
+    }
+
+    int GetLogRotateMaxSizeMb() const
+    {
+        return logRotateMaxSizeMb_;
+    }
+
+    int GetLogRotateMaxFiles() const
+    {
+        return logRotateMaxFiles_;
+    }
+
     bool GetRuntimeDirectConnectionEnable() const
     {
         return runtimeDirectConnectionEnable_;
@@ -469,6 +484,9 @@ protected:
     int logExpirationCleanupInterval_ = 0;
     int logExpirationTimeThreshold_ = 0;
     int logExpirationMaxFileCount_ = 0;
+    bool logRotateEnable_ = false;
+    int logRotateMaxSizeMb_ = 0;
+    int logRotateMaxFiles_ = 0;
     std::string customResources_;
     bool separatedRedirectRuntimeStd_ = false;
     bool runtimeDirectConnectionEnable_ = false;
