@@ -21,6 +21,8 @@
 namespace functionsystem {
 namespace {
 std::atomic_bool g_forceLowReliabilityInstance{ false };
+constexpr char DATA_PLANE_TUNNEL_SECURITY_MODE[] = "data_plane_tunnel_security_mode";
+constexpr char DATA_PLANE_PORT_FORWARD_SECURITY_MODE[] = "data_plane_port_forward_security_mode";
 }
 
 void SetForceLowReliabilityInstance(bool enabled)
@@ -108,6 +110,17 @@ void TransToInstanceInfoFromRouteInfo(const resources::RouteInfo &routeInfo, Ins
     instanceInfo.set_version(routeInfo.version());
     instanceInfo.mutable_instancestatus()->CopyFrom(routeInfo.instancestatus());
     instanceInfo.set_proxygrpcaddress(routeInfo.proxygrpcaddress());
+    instanceInfo.set_sandboxid(routeInfo.sandboxid());
+    instanceInfo.set_nodeproxyaddress(routeInfo.nodeproxyaddress());
+    instanceInfo.set_sandboxip(routeInfo.sandboxip());
+    if (routeInfo.tunnelsecuritymode() != resources::DATA_PLANE_SECURITY_INHERIT) {
+        (*instanceInfo.mutable_scheduleoption()->mutable_extension())[DATA_PLANE_TUNNEL_SECURITY_MODE] =
+            routeInfo.tunnelsecuritymode() == resources::DATA_PLANE_SECURITY_TLS_TOKEN ? "tls-token" : "tls";
+    }
+    if (routeInfo.portforwardsecuritymode() != resources::DATA_PLANE_SECURITY_INHERIT) {
+        (*instanceInfo.mutable_scheduleoption()->mutable_extension())[DATA_PLANE_PORT_FORWARD_SECURITY_MODE] =
+            routeInfo.portforwardsecuritymode() == resources::DATA_PLANE_SECURITY_TLS_TOKEN ? "tls-token" : "tls";
+    }
 }
 
 bool IsLowReliabilityInstance(const resources::InstanceInfo &instanceInfo)
@@ -141,6 +154,24 @@ void TransToRouteInfoFromInstanceInfo(const InstanceInfo &instanceInfo, resource
     routeInfo.mutable_instancestatus()->CopyFrom(instanceInfo.instancestatus());
     routeInfo.set_trafficreporttype(instanceInfo.trafficreporttype());
     routeInfo.set_proxygrpcaddress(instanceInfo.proxygrpcaddress());
+    routeInfo.set_sandboxid(instanceInfo.sandboxid());
+    routeInfo.set_nodeproxyaddress(instanceInfo.nodeproxyaddress());
+    routeInfo.set_sandboxip(instanceInfo.sandboxip());
+    const auto &extensions = instanceInfo.scheduleoption().extension();
+    if (auto it = extensions.find(DATA_PLANE_TUNNEL_SECURITY_MODE); it != extensions.end()) {
+        if (it->second == "tls-token") {
+            routeInfo.set_tunnelsecuritymode(resources::DATA_PLANE_SECURITY_TLS_TOKEN);
+        } else if (it->second == "tls") {
+            routeInfo.set_tunnelsecuritymode(resources::DATA_PLANE_SECURITY_TLS);
+        }
+    }
+    if (auto it = extensions.find(DATA_PLANE_PORT_FORWARD_SECURITY_MODE); it != extensions.end()) {
+        if (it->second == "tls-token") {
+            routeInfo.set_portforwardsecuritymode(resources::DATA_PLANE_SECURITY_TLS_TOKEN);
+        } else if (it->second == "tls") {
+            routeInfo.set_portforwardsecuritymode(resources::DATA_PLANE_SECURITY_TLS);
+        }
+    }
 }
 
 std::string GetDeployDir()

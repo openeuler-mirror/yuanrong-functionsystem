@@ -147,10 +147,16 @@ TEST_F(SandboxdRequestBuilderTest, RejectsRelativeCheckpointDirectory)
 TEST_F(SandboxdRequestBuilderTest, BuildReturnsFlatStartRequest)
 {
     auto params = MakeMinimalParams();
+    params.cmdArgs.execPath = "python3.9";
+    params.cmdArgs.args = { "--rt_server_address", "127.0.0.1:8080" };
     auto [status, startReq] = builder_->Build(params);
 
     EXPECT_TRUE(status.IsOk());
     ASSERT_NE(startReq, nullptr);
+    ASSERT_EQ(startReq->command_size(), 3);
+    EXPECT_EQ(startReq->command(0), "python3.9");
+    EXPECT_EQ(startReq->command(1), "--rt_server_address");
+    EXPECT_EQ(startReq->command(2), "127.0.0.1:8080");
 }
 
 // sandbox_id is left empty: sandboxd generates it and returns it in StartResponse.id.

@@ -23,6 +23,7 @@
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "async/defer.hpp"
@@ -47,9 +48,19 @@ class ActorWorker;
 namespace functionsystem::runtime_manager {
 
 struct SandboxdRestoreResult {
+    SandboxdRestoreResult() = default;
+
+    explicit SandboxdRestoreResult(Status statusValue, std::string sandboxIDValue = {},
+                                   std::vector<std::string> portsValue = {}, std::string sandboxIPValue = {})
+        : status(statusValue), sandboxID(std::move(sandboxIDValue)), ports(std::move(portsValue)),
+          sandboxIP(std::move(sandboxIPValue))
+    {
+    }
+
     Status status;
     std::string sandboxID;
     std::vector<std::string> ports;
+    std::string sandboxIP;
 };
 
 struct SandboxdListResult {

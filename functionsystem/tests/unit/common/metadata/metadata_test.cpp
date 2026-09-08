@@ -687,6 +687,11 @@ TEST_F(LoaderTest, TransToInstanceInfoFromRouteInfoTest)
     routeInfo.set_issystemfunc(true);
     routeInfo.set_version(1);
     routeInfo.mutable_instancestatus()->set_code(2);
+    routeInfo.set_sandboxid("sandbox_id");
+    routeInfo.set_nodeproxyaddress("gateway.internal:8443");
+    routeInfo.set_sandboxip("10.88.0.2");
+    routeInfo.set_tunnelsecuritymode(resources::DATA_PLANE_SECURITY_TLS_TOKEN);
+    routeInfo.set_portforwardsecuritymode(resources::DATA_PLANE_SECURITY_TLS);
 
     InstanceInfo instanceInfo;
     TransToInstanceInfoFromRouteInfo(routeInfo, instanceInfo);
@@ -704,6 +709,11 @@ TEST_F(LoaderTest, TransToInstanceInfoFromRouteInfoTest)
     EXPECT_EQ(instanceInfo.issystemfunc(), true);
     EXPECT_EQ(instanceInfo.version(), 1);
     EXPECT_EQ(instanceInfo.instancestatus().code(), 2);
+    EXPECT_EQ(instanceInfo.sandboxid(), "sandbox_id");
+    EXPECT_EQ(instanceInfo.nodeproxyaddress(), "gateway.internal:8443");
+    EXPECT_EQ(instanceInfo.sandboxip(), "10.88.0.2");
+    EXPECT_EQ(instanceInfo.scheduleoption().extension().at("data_plane_tunnel_security_mode"), "tls-token");
+    EXPECT_EQ(instanceInfo.scheduleoption().extension().at("data_plane_port_forward_security_mode"), "tls");
 }
 
 TEST_F(LoaderTest, TransToRouteInfoFromInstanceInfoTest)
@@ -721,6 +731,11 @@ TEST_F(LoaderTest, TransToRouteInfoFromInstanceInfoTest)
     instanceInfo.set_issystemfunc(true);
     instanceInfo.set_version(1);
     instanceInfo.mutable_instancestatus()->set_code(2);
+    instanceInfo.set_sandboxid("sandbox_id");
+    instanceInfo.set_nodeproxyaddress("gateway.internal:8443");
+    instanceInfo.set_sandboxip("10.88.0.2");
+    (*instanceInfo.mutable_scheduleoption()->mutable_extension())["data_plane_tunnel_security_mode"] = "tls-token";
+    (*instanceInfo.mutable_scheduleoption()->mutable_extension())["data_plane_port_forward_security_mode"] = "tls";
 
     resources::RouteInfo routeInfo;
     TransToRouteInfoFromInstanceInfo(instanceInfo, routeInfo);
@@ -737,6 +752,11 @@ TEST_F(LoaderTest, TransToRouteInfoFromInstanceInfoTest)
     EXPECT_EQ(routeInfo.issystemfunc(), true);
     EXPECT_EQ(routeInfo.version(), 1);
     EXPECT_EQ(routeInfo.instancestatus().code(), 2);
+    EXPECT_EQ(routeInfo.sandboxid(), "sandbox_id");
+    EXPECT_EQ(routeInfo.nodeproxyaddress(), "gateway.internal:8443");
+    EXPECT_EQ(routeInfo.sandboxip(), "10.88.0.2");
+    EXPECT_EQ(routeInfo.tunnelsecuritymode(), resources::DATA_PLANE_SECURITY_TLS_TOKEN);
+    EXPECT_EQ(routeInfo.portforwardsecuritymode(), resources::DATA_PLANE_SECURITY_TLS);
 }
 
 TEST_F(LoaderTest, GetInstanceMetaFromJson)

@@ -11,12 +11,6 @@ load("@yuanrong_functionsystem//bazel:yr.bzl", "COPTS")
 #                               #include "common/rpc/rpc_client.h"
 #   matching the CMake include_directories(functionsystem/src/) setting.
 
-cc_library(
-    name = "datasystem_capability",
-    hdrs = ["datasystem_capability.h"],
-    visibility = ["//visibility:public"],
-)
-
 # common_root_inc: include-provider for -Ifunctionsystem/src/common/.
 # Used only by targets that need to include headers using the common/ directory
 # as root (e.g. #include "aksk/aksk_helper.h" from within the aksk/ subdir).
@@ -441,6 +435,13 @@ cc_library(
     hdrs = glob(["file_storage/**/*.h"]),
     copts = COPTS,
     deps = [":status", ":kv_client"],
+    visibility = ["//visibility:public"],
+)
+
+# --- datasystem_capability ---
+cc_library(
+    name = "datasystem_capability",
+    hdrs = ["datasystem_capability.h"],
     visibility = ["//visibility:public"],
 )
 

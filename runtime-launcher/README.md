@@ -69,7 +69,7 @@ go build -buildvcs=false -o bin/rl-client ./cmd/rl-client/
 
 | RPC | 说明 |
 |-----|------|
-| `Start` | 创建并启动容器，返回容器 ID |
+| `Start` | 创建并启动容器；返回容器 ID、端口映射，并在 bridge/自定义容器网络下返回节点本地可达 sandbox IP |
 | `Restore` | 不支持；返回 gRPC `Unimplemented`，恢复由 sandboxd/runsc 实现 |
 | `DeleteCheckpoint` | 不支持；runtime-launcher 不持有 checkpoint |
 | `Wait` | 阻塞等待容器退出，返回退出码 |
@@ -228,6 +228,21 @@ rl-client --action unregister --id my-runtime
 | `--cpu` | `500` | CPU 毫核 |
 | `--mem` | `512` | 内存 MB |
 | `--timeout` | `5` | 删除时优雅超时秒数 |
+
+### Data Plane Gateway endpoint
+
+当 `--network` 为 `bridge`、`default` 或自定义 Docker/Podman 网络时，
+`StartResponse` 还会返回：
+
+- `sandbox_ip`：通过后端 inspect 得到的节点本地容器 IP。
+
+FunctionSystem 会将这两个字段原样投影到 `/yr/route`，Node Data Plane
+Gateway 因而可以直接连接 `sandbox_ip:target_port`，不依赖 hostPort/DNAT。
+runtime-launcher 不理解 HTTP、SSH 或目标端口。
+
+`host`、`none` 和 `container:<id>` 网络没有独立的 sandbox bridge endpoint，
+因此仍允许容器启动，但响应中的 `sandbox_ip` 为空，不能用于
+这条 Gateway 链路。对于需要 Gateway 访问的 sandbox，应使用 bridge 或独立容器网络。
 
 ## 项目结构
 

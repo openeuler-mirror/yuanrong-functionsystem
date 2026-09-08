@@ -72,6 +72,11 @@ public:
         return enableFrontendProxyService_;
     }
 
+    bool GetAdvertiseFrontendProxyCreate() const
+    {
+        return advertiseFrontendProxyCreate_;
+    }
+
     const std::string &GetMetaStoreAddress() const
     {
         return metaStoreAddress_;
@@ -506,6 +511,7 @@ protected:
     std::string componentGrpcPort_;
     bool enableExecStreamService_;
     bool enableFrontendProxyService_;
+    bool advertiseFrontendProxyCreate_;
     std::string schedulePolicy_;
     std::string metaStoreAddress_;
     std::string iamMetastoreAddress_;

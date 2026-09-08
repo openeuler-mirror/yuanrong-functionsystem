@@ -34,6 +34,7 @@ namespace functionsystem::local_scheduler {
  */
 class IdleMgr {
 public:
+    using GatewayActivityCounts = IdleActor::GatewayActivityCounts;
     explicit IdleMgr(std::shared_ptr<IdleActor> idleActor);
 
     ~IdleMgr();
@@ -43,6 +44,10 @@ public:
     void Await();
 
     void TrafficReport(const std::string &instanceID, const size_t &processingNum);
+    void CommandActivityReport(const std::string &instanceID, const size_t &activeCommands);
+
+    void GatewayActivityReconcile(const GatewayActivityCounts &activeStreamCounts);
+    void GatewayActivityUnavailable();
 
     void SessionCountDelta(const std::string &instanceID, int delta);
 

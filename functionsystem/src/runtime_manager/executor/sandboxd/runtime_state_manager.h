@@ -17,6 +17,7 @@
 #ifndef RUNTIME_MANAGER_EXECUTOR_SANDBOX_RUNTIME_STATE_MANAGER_H
 #define RUNTIME_MANAGER_EXECUTOR_SANDBOX_RUNTIME_STATE_MANAGER_H
 
+#include <cstdint>
 #include <map>
 #include <optional>
 #include <string>
@@ -50,6 +51,7 @@ struct SandboxInfo {
     std::string checkpointID;      // empty = no checkpoint
     std::string portMappingsJson;  // empty = no port mappings
     messages::RuntimeInstanceInfo instanceInfo;
+    std::string sandboxIP;
 };
 
 /**
@@ -96,6 +98,7 @@ public:
     bool IsActive(const std::string &runtimeID) const;
     bool HasSandbox(const std::string &runtimeID) const;
     std::string GetSandboxID(const std::string &runtimeID) const;
+    std::string GetSandboxIP(const std::string &runtimeID) const;
     std::string GetCheckpointID(const std::string &runtimeID) const;
     void SetCheckpointID(const std::string &runtimeID, const std::string &checkpointID);
     void ClearCheckpointID(const std::string &runtimeID);
@@ -113,6 +116,7 @@ public:
     // ── Partial updates (applied after sandbox is already registered) ─────────
 
     void UpdateSandboxID(const std::string &runtimeID, const std::string &sandboxID);
+    void UpdateNetworkEndpoint(const std::string &runtimeID, const std::string &sandboxIP);
     void UpdateCheckpoint(const std::string &runtimeID, const std::string &checkpointID);
     void UpdatePortMappings(const std::string &runtimeID, const std::string &portMappingsJson);
     void UpdateInstanceInfo(const std::string &runtimeID,
@@ -158,7 +162,7 @@ private:
     std::unordered_set<std::string> pendingDeletes_;
 
     // Narrow exception to the ordinary Wait -> NotifySandboxExit lifecycle.
-    // It is process-local and generation-fenced by sandboxID.
+    // It is process-local and identity-fenced by sandboxID.
     std::unordered_map<std::string, ExpectedSandboxStop> expectedSandboxStops_;
 };
 

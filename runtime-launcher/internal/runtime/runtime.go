@@ -15,6 +15,11 @@ type ContainerRuntime interface {
 	// 此方法应启动容器进程后立即返回，不阻塞等待容器退出。
 	Create(ctx context.Context, cfg *CreateConfig) (containerID string, err error)
 
+	// ResolveEndpoint returns the node-local network endpoint allocated to a
+	// running container. It is intentionally protocol/port agnostic: callers
+	// combine SandboxIP with the target port selected by the data-plane gateway.
+	ResolveEndpoint(ctx context.Context, containerID string) (*NetworkEndpoint, error)
+
 	// Wait 阻塞直到容器退出，返回退出状态。
 	Wait(ctx context.Context, containerID string) (*ContainerStatus, error)
 
@@ -53,6 +58,12 @@ const (
 	// RuntimeIDLabelKey stores the YuanRong runtime ID on backend containers.
 	RuntimeIDLabelKey = "yr.runtime-id"
 )
+
+// NetworkEndpoint is the backend-allocated, node-local network identity of a
+// sandbox. It does not describe application protocols or exposed ports.
+type NetworkEndpoint struct {
+	SandboxIP string
+}
 
 // ContainerStats 容器资源使用统计。
 type ContainerStats struct {
@@ -95,7 +106,7 @@ type CreateConfig struct {
 	MakeSeed    bool   // 是否为预热种子容器
 
 	// 网络配置
-	Network string // 网络模式：host, bridge, none 等，默认 host
+	Network string // 网络模式：host, bridge, none 或自定义容器网络
 	Ports   []string
 
 	// Labels are sandbox metadata labels carried through to backend labels.

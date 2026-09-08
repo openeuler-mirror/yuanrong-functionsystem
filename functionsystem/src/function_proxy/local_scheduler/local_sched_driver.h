@@ -29,6 +29,10 @@
 #include "local_scheduler/bundle_manager/bundle_mgr.h"
 #include "local_scheduler/ds_healthy_checker/ds_healthy_checker.h"
 #include "local_scheduler/function_agent_manager/function_agent_mgr.h"
+#include "local_scheduler/gc_actor/local_gc_actor.h"
+#include "local_scheduler/gc_actor/runtime_reconcile_actor.h"
+#include "local_scheduler/grpc_server/data_plane_gateway_activity_service.h"
+#include "local_scheduler/grpc_server/exec_service/exec_stream_service.h"
 #include "local_scheduler/instance_control/instance_ctrl.h"
 #include "local_scheduler/local_group_ctrl/local_group_ctrl.h"
 #include "local_scheduler/local_scheduler_service/local_sched_srv.h"
@@ -198,12 +202,15 @@ private:
     std::shared_ptr<RuntimeReconcileActor> runtimeReconcileActor_;
     std::shared_ptr<InstanceCtrlMetaStoreHealthyObserver> metaStoreHealthyObserver_;
     std::shared_ptr<functionsystem::grpc::CommonGrpcServer> posixGrpcServer_;
+    std::shared_ptr<functionsystem::grpc::CommonGrpcServer> dataPlaneGatewayActivityGrpcServer_;
     std::unique_ptr<TcpTunnelServer> tcpTunnelServer_;
     std::shared_ptr<functionsystem::grpc::CommonGrpcServer> componentGrpcServer_;
     std::shared_ptr<ExecStreamService> execStreamService_;
+    std::shared_ptr<DataPlaneGatewayActivityService> dataPlaneGatewayActivityService_;
     std::shared_ptr<TraefikRegistry> traefikRegistry_;
     bool isStarted_ = false;
     bool frontendProxyServiceRegistered_ = false;
+    bool nodeProxyEnabled_ = false;
 };
 }  // namespace functionsystem::local_scheduler
 

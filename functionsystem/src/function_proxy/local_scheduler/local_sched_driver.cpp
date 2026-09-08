@@ -28,15 +28,23 @@
 #include "local_scheduler/gc_actor/local_gc_actor.h"
 #include "local_scheduler/local_group_ctrl/local_group_ctrl_actor.h"
 #include "local_scheduler/grpc_server/bus_service/bus_service.h"
-#include "local_scheduler/tcp_tunnel_server.h"
+#include "local_scheduler/grpc_server/data_plane_gateway_activity_service.h"
 #include "local_scheduler/grpc_server/frontend_proxy_service/frontend_proxy_lifecycle_handler.h"
 #include "local_scheduler/grpc_server/frontend_proxy_service/frontend_proxy_service.h"
+#include "local_scheduler/instance_control/posix_api_handler/posix_api_handler.h"
+#include "local_scheduler/local_group_ctrl/local_group_ctrl_actor.h"
+#include "local_scheduler/tcp_tunnel_server.h"
+#include "local_scheduler/traefik_registry/traefik_registry.h"
+#include "meta_store_monitor/meta_store_monitor_factory.h"
+#include "utils/os_utils.hpp"
 
 namespace functionsystem::local_scheduler {
 
 const std::string LOCAL_SCHEDULER = "local-scheduler";
 
 namespace {
+constexpr int64_t DATA_PLANE_GATEWAY_ACTIVITY_TIMEOUT_SECONDS = 90;
+
 /**
  * Extract IP address from a full address string (ip:port format).
  * This is used to get the IP from LiteBus address for gRPC servers.
@@ -143,6 +151,29 @@ Status LocalSchedDriver::Create()
         auto endpoint =
             ResolveComponentGrpcEndpoint(param_.address, param_.ip, param_.grpcListenPort, param_.componentGrpcPort);
         config.proxyGrpcAddress = endpoint.Address();
+    }
+    if (auto enabled = litebus::os::GetEnv("YR_DATA_PLANE_NODE_PROXY_ENABLED"); enabled.IsSome()) {
+        const auto &value = enabled.Get();
+        if (value == "1" || value == "true" || value == "TRUE") {
+            nodeProxyEnabled_ = true;
+        } else if (!value.empty() && value != "0" && value != "false" && value != "FALSE") {
+            YRLOG_ERROR("invalid YR_DATA_PLANE_NODE_PROXY_ENABLED value({})", value);
+            return Status(StatusCode::FAILED, "invalid Node Proxy enable flag");
+        }
+    }
+    if (nodeProxyEnabled_) {
+        auto proxy = litebus::os::GetEnv("YR_NODE_PROXY_ADDRESS");
+        if (proxy.IsNone() || proxy.Get().empty()) {
+            YRLOG_ERROR("YR_NODE_PROXY_ADDRESS is required when Node Proxy is enabled");
+            return Status(StatusCode::FAILED, "Node Proxy address is empty");
+        }
+        config.nodeProxyAddress = proxy.Get();
+        auto activityUdsDir = litebus::os::GetEnv("YR_DATA_PLANE_NODE_PROXY_ACTIVITY_UDS_DIR");
+        if (activityUdsDir.IsNone() || activityUdsDir.Get().empty()) {
+            YRLOG_ERROR("YR_DATA_PLANE_NODE_PROXY_ACTIVITY_UDS_DIR is required for Node Proxy route control");
+            return Status(StatusCode::FAILED, "Node Proxy route control UDS is empty");
+        }
+        config.nodeProxyRouteControlUds = litebus::os::Join(activityUdsDir.Get(), "route.sock");
     }
     instanceCtrl_ = InstanceCtrl::Create(param_.nodeID, config);
     PosixAPIHandler::BindInstanceCtrl(instanceCtrl_);
@@ -396,6 +427,22 @@ void LocalSchedDriver::ToReady()
     ActorReady({ abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_,
                  resourceViewMgr_->GetInf(resource_view::ResourceType::PRIMARY),
                  resourceViewMgr_->GetInf(resource_view::ResourceType::VIRTUAL), snapCtrl_ });
+    if (nodeProxyEnabled_) {
+        auto routeStatus = instanceCtrl_->SyncDataPlaneRoutes();
+        if (routeStatus.IsError()) {
+            YRLOG_ERROR("failed to synchronize Node Proxy routes: {}", routeStatus.RawMessage());
+        }
+    }
+    if (dataPlaneGatewayActivityService_ != nullptr) {
+        // ModuleDriver::ToReady is called only after Sync and Recover. Do not
+        // accept activity snapshots before the proxy instance view is ready.
+        dataPlaneGatewayActivityService_->EnableAfterProxySync();
+    } else if (nodeProxyEnabled_) {
+        // A configured gateway without a working activity channel is UNKNOWN,
+        // not idle. Keep the legacy path unchanged when the gateway is off,
+        // but fail safe by pausing reclamation when it is on.
+        instanceCtrl_->GetIdleMgr()->GatewayActivityUnavailable();
+    }
     // Co-process reconciliation is triggered by FunctionAgentMgrActor::EnableFuncAgent callback
     // after agent registration completes and instances are loaded into InstanceControlView.
 }
@@ -417,6 +464,11 @@ Status LocalSchedDriver::Stop()
     if (componentGrpcServer_) {
         componentGrpcServer_.reset();
         YRLOG_INFO("component grpc server stopped");
+    }
+    if (dataPlaneGatewayActivityGrpcServer_) {
+        dataPlaneGatewayActivityGrpcServer_.reset();
+        dataPlaneGatewayActivityService_.reset();
+        YRLOG_INFO("data plane gateway activity grpc server stopped");
     }
     execStreamService_.reset();
     if (dsHealthyChecker_) {
@@ -571,12 +623,12 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
             return instanceCtrl->KillFrontend(tenantID, killReq);
         };
     bindings.killCleanupProbe =
-        [instanceCtrl(instanceCtrl_)](const std::string &requestID, const std::string &instanceID) {
+        [instanceCtrl(instanceCtrl_)](const std::string &requestID, const std::string &instanceID, uint64_t delayMs) {
             if (instanceCtrl == nullptr) {
                 FrontendKillCleanupSnapshot snapshot;
                 return litebus::Future<FrontendKillCleanupSnapshot>(snapshot);
             }
-            return instanceCtrl->ProbeFrontendKillCleanup(requestID, instanceID);
+            return instanceCtrl->ProbeFrontendKillCleanup(requestID, instanceID, delayMs);
         };
     auto componentEndpoint =
         ResolveComponentGrpcEndpoint(param_.address, param_.ip, param_.posixPort, param_.componentGrpcPort);
@@ -639,6 +691,41 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
     }
     frontendProxyServiceRegistered_ = param_.enableFrontendProxyService;
     YRLOG_INFO("POSIX gRPC server started on port {}", param_.posixPort);
+
+    // Activity is an independent node-local control channel. It deliberately
+    // does not share the POSIX service's listener, credentials, or exposure.
+    if (auto activityUdsDir = litebus::os::GetEnv("YR_DATA_PLANE_NODE_PROXY_ACTIVITY_UDS_DIR");
+        nodeProxyEnabled_ && activityUdsDir.IsSome() && !activityUdsDir.Get().empty()) {
+        functionsystem::grpc::CommonGrpcServerConfig activityConfig;
+        activityConfig.udsPath = activityUdsDir.Get();
+        activityConfig.creds = ::grpc::InsecureServerCredentials();
+        dataPlaneGatewayActivityGrpcServer_ =
+            std::make_shared<functionsystem::grpc::CommonGrpcServer>(std::move(activityConfig));
+        dataPlaneGatewayActivityService_ = std::make_shared<DataPlaneGatewayActivityService>(
+            instanceCtrl_->GetIdleMgr(), std::chrono::seconds(DATA_PLANE_GATEWAY_ACTIVITY_TIMEOUT_SECONDS),
+            [instanceCtrl = instanceCtrl_]() {
+                auto status = instanceCtrl->SyncDataPlaneRoutes();
+                if (status.IsError()) {
+                    YRLOG_ERROR("failed to synchronize routes for a new Node Proxy epoch: {}", status.RawMessage());
+                }
+            });
+        dataPlaneGatewayActivityGrpcServer_->RegisterService(dataPlaneGatewayActivityService_);
+        dataPlaneGatewayActivityGrpcServer_->Start();
+        if (!dataPlaneGatewayActivityGrpcServer_->WaitServerReady()) {
+            YRLOG_ERROR("failed to start data plane gateway activity gRPC server on UDS directory {}",
+                        activityUdsDir.Get());
+            // Activity is only an idle-reclamation hint. Its listener must
+            // never prevent the POSIX/data-plane server from becoming ready.
+            dataPlaneGatewayActivityGrpcServer_.reset();
+            dataPlaneGatewayActivityService_.reset();
+        } else {
+            YRLOG_INFO("DataPlaneGatewayActivityService listening on {}/fs.sock", activityUdsDir.Get());
+        }
+    } else if (nodeProxyEnabled_) {
+        YRLOG_WARN(
+            "data plane gateway is enabled without YR_DATA_PLANE_NODE_PROXY_ACTIVITY_UDS_DIR; "
+            "idle reclamation will remain paused after proxy synchronization");
+    }
     return true;
 }
 }  // namespace functionsystem::local_scheduler

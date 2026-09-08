@@ -253,6 +253,15 @@ enum TrafficReportType {
     Periodic       = 2;  // Emit events periodically
 }
 
+// Per-sandbox client-side security policy. Every public entrypoint uses TLS;
+// TLS_TOKEN additionally requires Edge to validate the user's token. Direct
+// access is always TLS_TOKEN.
+enum DataPlaneSecurityMode {
+    DATA_PLANE_SECURITY_INHERIT = 0;
+    DATA_PLANE_SECURITY_TLS = 1;
+    DATA_PLANE_SECURITY_TLS_TOKEN = 2;
+}
+
 message InstanceStatus {
     // code in state-machine
     int32 code = 1;
@@ -385,9 +394,11 @@ message InstanceInfo {
 
     // container/sandbox internal IP (docker bridge network via inspect); empty for supervisor/runsc.
     string containerIP = 41;
-
     // Same-node recovery policy selected by the creating client.
     bool failover = 42;
+    string sandboxID = 43;
+    string nodeProxyAddress = 44;
+    string sandboxIP = 45;
 }
 
 message SchedulingQueueInfo {
@@ -413,6 +424,11 @@ message RouteInfo {
     int64 version = 12;    // indicates the number of times that instance information is modified in etcd
     TrafficReportType trafficReportType = 13;
     string proxyGrpcAddress = 14;  // proxy gRPC service address (ip:port format)
+    string sandboxID = 15;
+    string nodeProxyAddress = 16;
+    string sandboxIP = 17;
+    DataPlaneSecurityMode tunnelSecurityMode = 19;
+    DataPlaneSecurityMode portForwardSecurityMode = 20;
 }
 
 message SystemInfo {

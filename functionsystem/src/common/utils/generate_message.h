@@ -284,6 +284,10 @@ inline std::shared_ptr<messages::DeployInstanceResponse> BuildDeployInstanceResp
     deployInstanceResponse->set_containerid(startInstanceResponse.startruntimeinstanceresponse().containerid());
     deployInstanceResponse->set_executortype(startInstanceResponse.startruntimeinstanceresponse().executortype());
     deployInstanceResponse->set_containerip(startInstanceResponse.startruntimeinstanceresponse().containerip());
+    deployInstanceResponse->set_sandboxid(startInstanceResponse.startruntimeinstanceresponse().sandboxid());
+    deployInstanceResponse->set_sandboxip(startInstanceResponse.startruntimeinstanceresponse().sandboxip());
+    deployInstanceResponse->set_nodeproxyaddress(
+        startInstanceResponse.startruntimeinstanceresponse().nodeproxyaddress());
 
     if (!deployInstanceResponse->runtimeid().empty()) {
         auto now = std::chrono::system_clock::now().time_since_epoch();
