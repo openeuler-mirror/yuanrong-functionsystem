@@ -282,12 +282,15 @@ litebus::Future<messages::StartInstanceResponse> ConchExecutor::StartInstance(
     }
 
     if (language.find(PYTHON_LANGUAGE) != std::string::npos) {
+        // Resolve yr_runtime_main inside the guest (as DockerExecutor does): the sandbox image's
+        // yr layout may differ from the host's, so the runtimePath-based path can miss. os.execv
+        // keeps the PID; ShellQuote escapes the single quotes for the sh -c command line.
         auto execPath = cmdBuilder_.GetExecPathFromRuntimeConfig(info.runtimeconfig());
-        std::string pythonServerPath = PYTHON_SERVER_PATH;
-        if (pkgType_ == PKG_TYPE_WHEEL) {
-            pythonServerPath = PYTHON_SERVER_PATH_IN_WHEEL;
-        }
-        args.insert(args.begin(), { execPath, "-u", config_.runtimePath + pythonServerPath });
+        std::string yrServerPath =
+            "import os,sys;"
+            "p=os.path.join(os.path.dirname(__import__('yr').__file__),'main','yr_runtime_main.py');"
+            "os.execv(sys.executable,[sys.executable,'-u',p]+sys.argv[1:])";
+        args.insert(args.begin(), { execPath, "-u", "-c", yrServerPath });
     }
 
     // Conch sandboxes run on host network with no published host ports, so each user port
