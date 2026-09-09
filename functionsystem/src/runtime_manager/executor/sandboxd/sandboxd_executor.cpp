@@ -2313,9 +2313,7 @@ litebus::Future<SandboxdRestoreResult> SandboxdExecutor::DoStartFromCheckpoint(
                                    : resp->message()),
                         {}, {}};
             }
-            const std::vector<std::string> ports = resp->ports().empty()
-                ? std::vector<std::string>(startReq->ports().begin(), startReq->ports().end())
-                : std::vector<std::string>(resp->ports().begin(), resp->ports().end());
+            const std::vector<std::string> ports(startReq->ports().begin(), startReq->ports().end());
             return { Status::OK(), resp->id(), ports };
         });
 }
