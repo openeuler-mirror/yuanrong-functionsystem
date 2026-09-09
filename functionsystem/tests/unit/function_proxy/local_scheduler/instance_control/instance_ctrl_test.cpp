@@ -8705,4 +8705,104 @@ TEST_F(InitialLowReliabilityRouteConflictActorTest, ResolverFreezesFirstResolved
     EXPECT_EQ(resolver->ResolvedWinner().functionproxyid(), firstWinner.functionproxyid());
 }
 
+/**
+ * UpdateInstanceStatusInSchedulingStatePropagatesStatusMsg
+ * Verify that when an instance is in SCHEDULING state, calling UpdateInstanceStatus
+ * propagates the statusMsg to the promise registered in instanceStatusPromises_.
+ */
+TEST_F(InstanceCtrlTest, UpdateInstanceStatusInSchedulingStatePropagatesStatusMsg)
+{
+    auto actor = std::make_shared<InstanceCtrlActor>("InstanceCtrlActor1", "nodeID", instanceCtrlConfig);
+    auto instanceControlView = std::make_shared<MockInstanceControlView>("nodeID");
+    actor->BindInstanceControlView(instanceControlView);
+    auto instanceCtrl = InstanceCtrl(actor);
+    auto observer = std::make_shared<MockObserver>();
+    instanceCtrl.Start(nullptr, mockResourceViewMgr_, observer);
+
+    const std::string testInstanceID = "instanceScheduling";
+    auto stateMachine = std::make_shared<MockInstanceStateMachine>("nodeID");
+    auto &mockStateMachine = *stateMachine;
+    EXPECT_CALL(*instanceControlView, GetInstance(testInstanceID)).WillRepeatedly(Return(stateMachine));
+    EXPECT_CALL(mockStateMachine, GetInstanceState).WillRepeatedly(Return(InstanceState::SCHEDULING));
+
+    // Ensure concernedInstance_ contains the instanceID so UpdateInstanceStatusPromise can find the promise
+    actor->concernedInstance_.insert(testInstanceID);
+
+    // Set up a promise in instanceStatusPromises_ for this instanceID.
+    // Must call GetFuture on the map element (not the local promise) because
+    // litebus::Promise is move-only: the assignment to the map leaves the
+    // local promise in a moved-from state.
+    actor->instanceStatusPromises_[testInstanceID] = litebus::Promise<Status>();
+    auto future = actor->instanceStatusPromises_[testInstanceID].GetFuture();
+
+    // Build an InstanceExitStatus with the statusMsg we want to verify
+    const std::string expectedMsg = "No module named 'demo'";
+    auto exitStatus = GenInstanceStatusInfo(testInstanceID, 132, expectedMsg,
+                                            static_cast<int32_t>(EXIT_TYPE::UNKNOWN_ERROR));
+
+    auto status = instanceCtrl.UpdateInstanceStatus(exitStatus);
+    ASSERT_AWAIT_READY(status);
+    // SCHEDULING state returns ERR_INNER_SYSTEM_ERROR
+    EXPECT_EQ(status.Get().StatusCode(), StatusCode::ERR_INNER_SYSTEM_ERROR);
+
+    // Verify the promise was resolved with the statusMsg
+    ASSERT_AWAIT_READY(future);
+    EXPECT_EQ(future.Get().StatusCode(), StatusCode::ERR_REQUEST_BETWEEN_RUNTIME_BUS);
+    EXPECT_NE(future.Get().GetMessage().find(expectedMsg), std::string::npos);
+}
+
+/**
+ * DoRescheduleExhaustedCarriesLastFailMsg
+ * Verify that when Reschedule retries are exhausted (scheduleTimes <= 0), the FATAL
+ * transition's msg carries the last failure reason from the instance status.
+ */
+TEST_F(InstanceCtrlTest, DoRescheduleExhaustedCarriesLastFailMsg)
+{
+    auto actor = std::make_shared<InstanceCtrlActor>("InstanceCtrlActor2", "nodeID", instanceCtrlConfig);
+    auto instanceControlView = std::make_shared<MockInstanceControlView>("nodeID");
+    actor->BindInstanceControlView(instanceControlView);
+    actor->BindResourceView(mockResourceViewMgr_);
+    litebus::Spawn(actor);
+
+    const std::string testInstanceID = "instanceRescheduleExhausted";
+    auto stateMachine = std::make_shared<MockInstanceStateMachine>("nodeID");
+    auto &mockStateMachine = *stateMachine;
+
+    EXPECT_CALL(*instanceControlView, GetInstance(testInstanceID)).WillRepeatedly(Return(stateMachine));
+    EXPECT_CALL(mockStateMachine, IsSaving()).WillRepeatedly(Return(false));
+    EXPECT_CALL(mockStateMachine, GetVersion()).WillRepeatedly(Return(1));
+
+    // Set up InstanceInfo with a last-failure msg
+    const std::string lastFailMsg = "ModuleNotFoundError: No module named 'demo'";
+    InstanceInfo instanceInfo;
+    instanceInfo.set_instanceid(testInstanceID);
+    instanceInfo.mutable_instancestatus()->set_msg(lastFailMsg);
+    EXPECT_CALL(mockStateMachine, GetInstanceInfo).WillRepeatedly(Return(instanceInfo));
+
+    // Capture the msg argument passed to TransitionToImpl
+    std::string capturedMsg;
+    EXPECT_CALL(mockStateMachine, TransitionToImpl(InstanceState::FATAL, 1, _, true, _))
+        .WillOnce(DoAll(SaveArg<2>(&capturedMsg), Return(FATAL_RESULT)));
+
+    auto mockResourceView = MockResourceView::CreateMockResourceView();
+    mockResourceViewMgr_->primary_ = mockResourceView;
+    EXPECT_CALL(*mockResourceView, DeleteInstances).WillRepeatedly(Return(Status::OK()));
+
+    // Build a schedule request with scheduletimes = 0 (exhausted)
+    auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
+    scheduleReq->mutable_instance()->set_instanceid(testInstanceID);
+    scheduleReq->set_requestid("requestID");
+    scheduleReq->mutable_instance()->set_scheduletimes(0);
+
+    auto future = litebus::Async(actor->GetAID(), &InstanceCtrlActor::DoReschedule, scheduleReq,
+                                 static_cast<uint32_t>(StatusCode::FAILED), "reschedule failed");
+    ASSERT_AWAIT_READY(future);
+
+    // Verify the FATAL transition msg carries the last failure reason
+    EXPECT_EQ(capturedMsg, "failed to recover: " + lastFailMsg);
+
+    litebus::Terminate(actor->GetAID());
+    litebus::Await(actor->GetAID());
+}
+
 }  // namespace functionsystem::test
