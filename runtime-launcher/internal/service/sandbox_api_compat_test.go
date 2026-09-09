@@ -12,12 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package runtimev1
+// Package service exposes sandbox lifecycle operations through the runtime launcher.
+package service
 
 import (
 	"testing"
 
 	"google.golang.org/protobuf/proto"
+
+	runtimev1 "runtime-launcher/api/proto/runtime/v1"
 )
 
 func TestStartResponseSandboxdWireCompatibility(t *testing.T) {
@@ -29,11 +32,11 @@ func TestStartResponseSandboxdWireCompatibility(t *testing.T) {
 		wire string
 		ip   string
 	}{
-		{name: "sandbox_ip", wire: base + "\x22\x0a192.0.2.10", ip: "192.0.2.10"},
+		{name: "sandbox_ip", wire: base + "\x22\x0910.0.0.10", ip: "10.0.0.10"},
 		{name: "omitted_sandbox_ip", wire: base},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var response StartResponse
+			var response runtimev1.StartResponse
 			if err := proto.Unmarshal([]byte(tc.wire), &response); err != nil {
 				t.Fatal(err)
 			}
