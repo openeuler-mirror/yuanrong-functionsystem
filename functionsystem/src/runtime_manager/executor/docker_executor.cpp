@@ -59,6 +59,10 @@ constexpr int HTTP_STATUS_CLIENT_ERROR = 400;  // >= 400 is an error response
 // HTTP status code string length ("200".."599")
 constexpr size_t HTTP_STATUS_CODE_LEN = 3;
 
+// Max length of a Docker daemon error message retained in Status / status_msg.
+// Truncated to prevent unbounded daemon responses from inflating logs and msgs.
+constexpr size_t MAX_ERR_MSG_LEN = 512;
+
 // CRLF ("\r\n") length and hex base, used when decoding chunked transfer bodies.
 constexpr size_t CRLF_LEN = 2;
 constexpr int HEX_BASE = 16;
@@ -460,7 +464,13 @@ litebus::Future<Status> DockerExecutor::PullImage(const std::string &image)
         return Status(StatusCode::RUNTIME_MANAGER_PARAMS_INVALID, "invalid Docker image name");
     }
     YRLOG_INFO("pulling Docker image {}", image);
-    auto pullFail = [&image]() {
+    // daemonMsg carries the daemon's own explanation (e.g. registry connection refused,
+    // pull access denied) so the failure Status is actionable instead of generic.
+    auto pullFail = [image](const std::string &daemonMsg = "") {
+        if (!daemonMsg.empty()) {
+            return Status(StatusCode::ERR_INNER_COMMUNICATION,
+                          fmt::format("failed to pull Docker image {}: {}", image, daemonMsg));
+        }
         return Status(StatusCode::ERR_INNER_COMMUNICATION, fmt::format("failed to pull Docker image {}", image));
     };
     return SendRequestToDocker("POST", "/images/create?fromImage=" + image, nlohmann::json::object())
@@ -473,8 +483,18 @@ litebus::Future<Status> DockerExecutor::PullImage(const std::string &image)
             if (pullResp.contains("__http_status")) {
                 int pullStatus = pullResp["__http_status"].get<int>();
                 if (pullStatus >= HTTP_STATUS_CLIENT_ERROR || pullStatus == 0) {
-                    YRLOG_ERROR("failed to pull Docker image {}, status={}", image, pullStatus);
-                    return pullFail();
+                    std::string daemonMsg;
+                    if (pullResp.contains("__connect_failed") || pullResp.contains("__send_failed")
+                        || pullResp.contains("__recv_failed") || pullResp.contains("__parse_failed")) {
+                        daemonMsg = "Docker daemon connection failed";
+                    } else {
+                        daemonMsg = DockerDaemonMessage(pullResp);
+                    }
+                    if (daemonMsg.size() > MAX_ERR_MSG_LEN) {
+                        daemonMsg.resize(MAX_ERR_MSG_LEN);
+                    }
+                    YRLOG_ERROR("failed to pull Docker image {}, status={}, msg={}", image, pullStatus, daemonMsg);
+                    return pullFail(daemonMsg);
                 }
             }
             YRLOG_INFO("successfully pulled Docker image {}", image);
@@ -1162,7 +1182,18 @@ litebus::Future<messages::StartInstanceResponse> DockerExecutor::StartContainerC
         .Then([this, runtimeID, image, createBody](const litebus::Future<Status> &imageStatus)
                   -> litebus::Future<std::string> {
             if (imageStatus.IsError() || imageStatus.Get().IsError()) {
-                YRLOG_ERROR("{}|failed to ensure image {} exists", runtimeID, image);
+                // Keep the ensure-image failure reason (invalid name, pull failure detail, ...)
+                // so the containerID.empty() branch below reports it instead of the generic
+                // "Failed to create Docker container".
+                std::string errMsg;
+                if (!imageStatus.IsError() && imageStatus.Get().IsError()) {
+                    errMsg = imageStatus.Get().GetMessage();
+                }
+                if (errMsg.empty()) {
+                    errMsg = fmt::format("failed to ensure image {} exists", image);
+                }
+                YRLOG_ERROR("{}|failed to ensure image {} exists: {}", runtimeID, image, errMsg);
+                runtime2dockerErr_[runtimeID] = errMsg;
                 return "";
             }
             return SendRequestToDocker("POST", "/containers/create", createBody)
