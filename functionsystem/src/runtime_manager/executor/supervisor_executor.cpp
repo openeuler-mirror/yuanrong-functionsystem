@@ -505,12 +505,19 @@ nlohmann::json SupervisorExecutor::CreateRequest(const std::shared_ptr<messages:
         policy["environment"][kv.first] = kv.second;
     }
 
-    YRLOG_INFO("{}|Create sandbox for {}", runtimeID, hostUser);
+    YRLOG_INFO("{}|Create sandbox for {}, instance({})", runtimeID, hostUser, info.instanceid());
 
     nlohmann::json body = nlohmann::json{ { "policy", std::move(policy) }, { "policy_mode", "append" } };
     body["trace_id"] = info.traceid();
     body["instance_id"] = info.instanceid();
     body["runtime_id"] = runtimeID;
+    // sandbox_id carries the user-facing instance_id so "jiuwenbox sandbox ls" shows the
+    // instance directly. jiuwenbox echoes it back as the sandbox ID, so exec/delete and the
+    // containerid stored downstream follow automatically; empty keeps the old
+    // server-generated ID.
+    if (!info.instanceid().empty()) {
+        body["sandbox_id"] = info.instanceid();
+    }
     return body;
 }
 

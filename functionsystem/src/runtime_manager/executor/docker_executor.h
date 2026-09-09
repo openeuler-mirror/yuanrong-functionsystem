@@ -113,7 +113,7 @@ private:
 
     litebus::Future<messages::StartInstanceResponse> StartContainerChain(
         const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &image,
-        const nlohmann::json &createBody, const std::string &port);
+        const nlohmann::json &createBody, const std::string &containerName, const std::string &port);
 
     litebus::Future<messages::StartInstanceResponse> OnStartRuntime(
         const Status &startStatus, const std::shared_ptr<messages::StartInstanceRequest> &request,
@@ -167,6 +167,9 @@ private:
         std::map<std::string, double> resources;
         std::string workingDir;                           // container working directory (-w)
         std::string user;                                 // container run-as user (Config.User)
+        // instance_id, used as the container name (?name= query param) and the yr.instance-id
+        // label, so a container is directly traceable to its instance.
+        std::string instanceId;
     };
     nlohmann::json BuildCreateContainerRequest(const ContainerCreateSpec &spec);
     nlohmann::json BuildHostConfig(const ContainerCreateSpec &spec) const;
