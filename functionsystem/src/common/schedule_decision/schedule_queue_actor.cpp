@@ -122,6 +122,8 @@ void ScheduleQueueActor::HandlePendingRequests()
 void ScheduleQueueActor::ScheduleOnResourceUpdate()
 {
     litebus::TimerTools::Cancel(idleTimer_);
+    // A resource notification invalidates the snapshot pinned by the previous round.
+    snapshotRoundActive_ = false;
     isNewResourceAvailable_ = true;
     HandlePendingRequests();
     // If resources are not updated for a long time, the pending queue cannot be consumed and cancel requests may remain

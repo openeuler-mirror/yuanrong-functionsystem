@@ -345,4 +345,46 @@ TEST(ScheduleSnapshotTest, DisabledPathDoesNotPublishSnapshot)
     EXPECT_EQ(view->GetScheduleSnapshotStore()->Load(), nullptr);
 }
 
+TEST(ScheduleSnapshotTest, StatusOnlyDeltaPublishesBeforeNotifyingScheduler)
+{
+    ResourceViewActor::Param localParam{ .isLocal = true };
+    ResourceViewActor::Param domainParam{ .isLocal = false, .enableScheduleSnapshot = true };
+    auto local = ResourceView::CreateResourceView("status-notify-local", localParam);
+    auto domain = ResourceView::CreateResourceView("status-notify-domain", domainParam);
+    auto unit = Get1DResourceUnit("recovering-unit");
+    unit.set_status(static_cast<uint32_t>(UnitStatus::RECOVERING));
+    ASSERT_TRUE(local->AddResourceUnit(unit).Get().IsOk());
+    auto localView = local->GetFullResourceView().Get();
+    ASSERT_TRUE(domain->AddResourceUnitWithUrl(*localView, "127.0.0.1:1").Get().IsOk());
+    // Finish the registration publication before observing the status-only update.
+    ASSERT_AWAIT_READY(domain->GetResourceViewCopy());
+    auto before = domain->GetScheduleSnapshotStore()->Load();
+    ASSERT_NE(before, nullptr);
+    ASSERT_NE(before->FindUnit(unit.id()), nullptr);
+
+    auto observed = std::make_shared<litebus::Promise<ScheduleSnapshotPtr>>();
+    auto notified = observed->GetFuture();
+    domain->AddResourceUpdateHandler([store = domain->GetScheduleSnapshotStore(), observed]() {
+        observed->SetValue(store->Load());
+    });
+    auto changes = std::make_shared<ResourceUnitChanges>();
+    changes->set_localid(localView->id());
+    changes->set_localviewinittime(localView->viewinittime());
+    changes->set_startrevision(localView->revision());
+    changes->set_endrevision(localView->revision() + 1);
+    auto change = changes->add_changes();
+    change->set_resourceunitid(unit.id());
+    change->mutable_modification()->mutable_statuschange()->set_status(static_cast<uint32_t>(UnitStatus::NORMAL));
+    ASSERT_TRUE(domain->UpdateResourceUnitDelta(changes).Get().IsOk());
+
+    ASSERT_AWAIT_READY_FOR(notified, 1000);
+    auto after = notified.Get();
+    ASSERT_NE(after, nullptr);
+    ASSERT_NE(after->FindUnit(unit.id()), nullptr);
+    EXPECT_EQ(after->FindUnit(unit.id())->status(), static_cast<uint32_t>(UnitStatus::NORMAL));
+    EXPECT_GT(after->publicationSequence, before->publicationSequence);
+    EXPECT_TRUE(after->FindUnit(unit.id())->capacity() == before->FindUnit(unit.id())->capacity());
+    EXPECT_EQ(before->FindUnit(unit.id())->status(), static_cast<uint32_t>(UnitStatus::RECOVERING));
+}
+
 }  // namespace functionsystem::test

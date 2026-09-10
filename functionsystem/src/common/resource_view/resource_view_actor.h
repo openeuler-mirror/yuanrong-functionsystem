@@ -464,6 +464,7 @@ private:
     uint32_t snapshotMutationDepth_{ 0 };
     uint32_t snapshotPendingMutationCount_{ 0 };
     bool snapshotFlushScheduled_{ false };
+    bool snapshotNotificationPending_{ false };
     litebus::Timer snapshotFlushTimer_;
     ScheduleSnapshotDirtySet snapshotDirtySet_;
     std::shared_ptr<ScheduleSnapshotStore> scheduleSnapshotStore_;

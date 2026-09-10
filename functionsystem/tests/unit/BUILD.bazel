@@ -124,6 +124,40 @@ cc_test(
     ],
 )
 
+# Keep snapshot regressions runnable without compiling unrelated service tests.
+cc_test(
+    name = "schedule_snapshot_test",
+    linkstatic = True,
+    srcs = [
+        "main.cpp",
+        "common/resource_view/view_utils.cpp",
+        "common/resource_view/schedule_snapshot_test.cpp",
+        "common/schedule_decision/schedule_test.cpp",
+    ] + glob(["**/*.h"]),
+    copts = COPTS + [
+        "-Wno-error",
+        "-fno-access-control",
+        "-Wno-missing-field-initializers",
+        "-fvisibility=hidden",
+        "-Ifunctionsystem/src",
+        "-Ifunctionsystem/tests/unit",
+        "-include",
+        "functionsystem/tests/unit/gtest_sleep_compat.h",
+    ],
+    linkopts = ["-Wl,--no-as-needed", "-pthread", "-lcap", "-ldl"],
+    deps = [
+        "//functionsystem/src/common:all_schedule_plugins",
+        "//functionsystem/src/common:common_flags",
+        "//functionsystem/src/common:resource_view",
+        "//functionsystem/src/common:scheduler",
+        "//functionsystem/src/common:utils",
+        "//functionsystem/tests/integration:future_test_helper",
+        "@gtest//:gtest",
+        "@litebus//:litebus",
+        "@logs_sdk//:logs_sdk",
+    ],
+)
+
 cc_test(
     name = "port_manager_test",
     linkstatic = True,

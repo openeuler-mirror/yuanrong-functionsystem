@@ -255,6 +255,10 @@ void ResourceViewActor::CommitScheduleSnapshot()
     }
     snapshotDirtySet_.Clear();
     snapshotPendingMutationCount_ = 0;
+    if (snapshotNotificationPending_) {
+        snapshotNotificationPending_ = false;
+        NotifyResourceUpdated();
+    }
 }
 void ResourceViewActor::DeleteInstancesBySubUnit(ResourceUnit &view, const ResourceUnit &subUnit)
 {
@@ -2027,6 +2031,7 @@ Status ResourceViewActor::HandleReportedModification(const ResourceUnitChange &c
 
     if (modification.has_statuschange()) {
         agentResourceUnit.set_status(static_cast<uint32_t>(modification.statuschange().status()));
+        MarkResourceUpdated();
     }
 
     if (modification.has_capacitychange()) {
@@ -2250,6 +2255,11 @@ void ResourceViewActor::MarkResourceUpdated()
 void ResourceViewActor::NotifyResourceUpdated()
 {
     if (!hasResourceUpdated_) {
+        return;
+    }
+    // Snapshot consumers must observe the published update when they wake up.
+    if (scheduleSnapshotEnabled_ && !snapshotDirtySet_.Empty()) {
+        snapshotNotificationPending_ = true;
         return;
     }
     OnUpdate();

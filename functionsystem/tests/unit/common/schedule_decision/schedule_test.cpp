@@ -50,7 +50,7 @@ public:
 
     bool CheckIsPendingQueueEmpty() override
     {
-        return true;
+        return pending_.empty();
     }
 
     ScheduleType GetScheduleType() override
@@ -60,6 +60,12 @@ public:
 
     void ConsumeRunningQueue() override
     {
+        ++consumeCount;
+        if (waitForNormal && pinned->FindUnit("recovering-unit")->status() !=
+            static_cast<uint32_t>(resource_view::UnitStatus::NORMAL)) {
+            pending_.swap(running_);
+            return;
+        }
         while (!running_.empty()) {
             auto item = std::dynamic_pointer_cast<InstanceItem>(running_.front());
             running_.pop_front();
@@ -74,6 +80,7 @@ public:
 
     void ActivatePendingRequests() override
     {
+        running_.swap(pending_);
     }
 
     bool UsesScheduleSnapshot() const override
@@ -92,12 +99,15 @@ public:
     }
 
     int beginRoundCount{ 0 };
+    int consumeCount{ 0 };
+    bool waitForNormal{ false };
     int legacyUpdateCount{ 0 };
     resource_view::ScheduleSnapshotPtr pinned;
 
 private:
     std::string owner_;
     std::deque<std::shared_ptr<QueueItem>> running_;
+    std::deque<std::shared_ptr<QueueItem>> pending_;
 };
 
 resource_view::ScheduleSnapshotPtr BuildEmptySnapshot(const std::string &initTime)
@@ -199,6 +209,56 @@ TEST(ScheduleSnapshotPathTest, LoadsPublishedSnapshotWithoutResourceViewMailboxR
     EXPECT_EQ(strategy->legacyUpdateCount, 0);
     EXPECT_EQ(strategy->pinned, published);
 
+    litebus::Terminate(actor->GetAID());
+    litebus::Await(actor->GetAID());
+}
+
+TEST(ScheduleSnapshotPathTest, ResourceNotificationRetriesPendingWithFreshSnapshot)
+{
+    auto actor = std::make_shared<ScheduleQueueActor>("SnapshotRecoveryQueueActor");
+    auto view = MockResourceView::CreateMockResourceView();
+    EXPECT_CALL(*view, AddResourceUpdateHandler).WillOnce(Return());
+    EXPECT_CALL(*view, GetResourceInfo).Times(0);
+    actor->RegisterResourceView(view);
+    auto recovering = std::make_shared<resource_view::ScheduleSnapshot>(*BuildEmptySnapshot("recovery"));
+    auto unit = view_utils::Get1DResourceUnit("recovering-unit");
+    unit.set_status(static_cast<uint32_t>(resource_view::UnitStatus::RECOVERING));
+    recovering->units.push_back(std::make_shared<const resource_view::ResourceUnit>(unit));
+    auto index = std::make_shared<resource_view::UnitIndex>();
+    index->emplace(unit.id(), 0);
+    recovering->unitIndex = index;
+    auto strategy = std::make_shared<SnapshotQueueStrategy>();
+    strategy->waitForNormal = true;
+    actor->RegisterScheduler(strategy);
+    ASSERT_TRUE(strategy->BeginScheduleRound(recovering).IsOk());
+    auto request = std::make_shared<messages::ScheduleRequest>();
+    request->set_requestid("pending-recovery-request");
+    auto promise = std::make_shared<litebus::Promise<ScheduleResult>>();
+    auto result = promise->GetFuture();
+    strategy->Enqueue(std::make_shared<InstanceItem>(request, promise, litebus::Future<std::string>()));
+    strategy->ConsumeRunningQueue();
+    ASSERT_FALSE(strategy->CheckIsPendingQueueEmpty());
+    ASSERT_TRUE(result.IsInit());
+
+    auto normal = std::make_shared<resource_view::ScheduleSnapshot>(*recovering);
+    unit.set_status(static_cast<uint32_t>(resource_view::UnitStatus::NORMAL));
+    normal->units[0] = std::make_shared<const resource_view::ResourceUnit>(unit);
+    normal->revision = 2;
+    view->GetScheduleSnapshotStore()->Publish(normal);
+    actor->status_ = QueueStatus::PENDING;
+    actor->snapshotRoundActive_ = true;
+    // Keep the old round below its time limit regardless of test-host scheduling delays.
+    actor->snapshotRoundStarted_ = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    litebus::Spawn(actor);
+    litebus::Async(actor->GetAID(), &ScheduleQueueActor::ScheduleOnResourceUpdate);
+    EXPECT_AWAIT_READY_FOR(result, 1000);
+    if (result.IsOK()) {
+        EXPECT_EQ(result.Get().code, 0);
+        EXPECT_EQ(strategy->pinned, normal);
+        EXPECT_EQ(strategy->beginRoundCount, 2);
+        EXPECT_EQ(strategy->consumeCount, 2);  // Initial pending attempt plus one retry with NORMAL.
+    }
+    litebus::TimerTools::Cancel(actor->idleTimer_);
     litebus::Terminate(actor->GetAID());
     litebus::Await(actor->GetAID());
 }
