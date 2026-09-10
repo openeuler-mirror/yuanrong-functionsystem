@@ -1819,6 +1819,7 @@ Status ResourceViewActor::HandleReportedModification(const ResourceUnitChange &c
 
     if (modification.has_statuschange()) {
         agentResourceUnit.set_status(static_cast<uint32_t>(modification.statuschange().status()));
+        MarkResourceUpdated();
     }
 
     if (modification.has_capacitychange()) {
