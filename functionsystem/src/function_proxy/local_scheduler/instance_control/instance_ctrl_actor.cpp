@@ -4926,6 +4926,9 @@ litebus::Future<Status> InstanceCtrlActor::UpdateInstanceStatus(const std::share
         || state == InstanceState::SCHEDULE_FAILED || state == InstanceState::FATAL) {
         YRLOG_WARN("instance {} with state({}) is not concerned updated status", info->instanceID,
                    fmt::underlying(state));
+        if (!info->statusMsg.empty()) {
+            (void)UpdateInstanceStatusPromise(info->instanceID, info->statusMsg);
+        }
         return Status(StatusCode::ERR_INNER_SYSTEM_ERROR, "invalid instance state to change");
     }
     if (concernedInstance_.find(info->instanceID) == concernedInstance_.end()) {
@@ -6662,7 +6665,8 @@ litebus::Future<Status> InstanceCtrlActor::RedeployDecision(const Status &status
     if (state != InstanceState::FAILED) {
         YRLOG_INFO("{}|current instance state is {}, transit to FAILED", request->requestid(), fmt::underlying(state));
         (void)TransInstanceState(stateMachine,
-                                 TransContext{ InstanceState::FAILED, stateMachine->GetVersion(), "instance Failed" });
+                                 TransContext{ InstanceState::FAILED, stateMachine->GetVersion(),
+                                               status.GetMessage().empty() ? "instance Failed" : status.GetMessage() });
     }
     YRLOG_DEBUG("reschedule begin to kill and clean instance({}) before redeploy", request->instance().instanceid());
     return KillRuntime(request->instance(), false)
@@ -6768,8 +6772,14 @@ litebus::Future<Status> InstanceCtrlActor::DoReschedule(const std::shared_ptr<me
     int scheduleTimes = request->instance().scheduletimes();
     if (scheduleTimes <= 0) {
         YRLOG_ERROR("{}|instance({}) scheduleTimes exceeded", requestID, request->instance().instanceid());
+        const auto lastFailMsg = stateMachine->GetInstanceInfo().instancestatus().msg();
+        constexpr size_t maxErrMsgLen = 512;
+        std::string truncFailMsg = lastFailMsg.substr(0, maxErrMsgLen);
+        std::string fatalMsg = truncFailMsg.empty()
+            ? "failed to recover"
+            : "failed to recover: " + truncFailMsg;
         (void)TransInstanceState(
-            stateMachine, TransContext{ InstanceState::FATAL, stateMachine->GetVersion(), "failed to recover", true,
+            stateMachine, TransContext{ InstanceState::FATAL, stateMachine->GetVersion(), fatalMsg, true,
                                         StatusCode::ERR_USER_FUNCTION_EXCEPTION });
         return Status(code != 0 ? static_cast<StatusCode>(code) : StatusCode::ERR_INNER_SYSTEM_ERROR, msg);
     }

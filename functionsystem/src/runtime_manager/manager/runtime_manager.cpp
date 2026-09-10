@@ -783,7 +783,7 @@ void RuntimeManager::StartInstanceResponse(const litebus::AID &from, const std::
     if (response.IsError()) {
         messages::StartInstanceResponse failResponse;
         failResponse.set_code(static_cast<int32_t>(RUNTIME_MANAGER_START_INSTANCE_FAILED));
-        failResponse.set_message("start instance failed");
+        failResponse.set_message("start instance failed, instanceID: " + instanceID + ", requestID: " + requestID);
         Send(from, "StartInstanceResponse", failResponse.SerializeAsString());
         return;  // end
     }
