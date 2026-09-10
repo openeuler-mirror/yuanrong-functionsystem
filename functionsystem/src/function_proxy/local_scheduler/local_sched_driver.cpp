@@ -604,10 +604,14 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
             [instanceView(instanceCtrl_->GetInstanceControlView())](const std::string &tenantID,
                                                                     const std::string &instanceID) {
                 if (tenantID.empty() || instanceView == nullptr) {
-                    return false;
+                    return common::ERR_AUTHORIZE_FAILED;
                 }
                 auto stateMachine = instanceView->GetInstance(instanceID);
-                return stateMachine != nullptr && stateMachine->GetInstanceInfo().tenantid() == tenantID;
+                if (stateMachine == nullptr) {
+                    return common::ERR_INSTANCE_NOT_FOUND;
+                }
+                return stateMachine->GetInstanceInfo().tenantid() == tenantID ? common::ERR_NONE
+                                                                             : common::ERR_AUTHORIZE_FAILED;
             };
         registerService(std::make_shared<FrontendProxyService>(std::move(frontendServiceParam)));
         YRLOG_INFO("FrontendProxyService registered at {}", componentEndpoint.Address());

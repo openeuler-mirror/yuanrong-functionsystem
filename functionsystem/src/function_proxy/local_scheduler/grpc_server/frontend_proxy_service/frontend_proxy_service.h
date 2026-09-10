@@ -35,7 +35,7 @@ namespace functionsystem::local_scheduler {
 struct FrontendProxyServiceParam {
     using InvokeDispatcher =
         std::function<litebus::Future<SharedStreamMsg>(const std::string &, const SharedStreamMsg &)>;
-    using InvokeTenantAuthorizer = std::function<bool(const std::string &, const std::string &)>;
+    using InvokeTenantAuthorizer = std::function<common::ErrorCode(const std::string &, const std::string &)>;
     using CreateDispatcher =
         std::function<litebus::Future<SharedStreamMsg>(const std::string &, const SharedStreamMsg &)>;
     using CreateReadyDispatcher =
@@ -55,7 +55,8 @@ struct FrontendProxyServiceParam {
     // Optional test seam. Production leaves this empty and dispatches through InvocationHandler::Invoke.
     InvokeDispatcher invokeDispatcher;
     // Production resolves the target instance locally and requires exact tenant
-    // ownership before dispatching a frontend-originated invoke.
+    // ownership before dispatching a frontend-originated invoke. Returns ERR_NONE,
+    // ERR_INSTANCE_NOT_FOUND, or ERR_AUTHORIZE_FAILED.
     InvokeTenantAuthorizer invokeTenantAuthorizer;
     // Optional test seam. Production may wire this to the reviewed create handler only after
     // frontend system-caller create semantics are enabled end-to-end.
