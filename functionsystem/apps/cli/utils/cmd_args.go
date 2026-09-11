@@ -19,8 +19,11 @@ package utils
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"os/signal"
 	"runtime"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -47,7 +50,17 @@ func GetGOOSType() (string, string) {
 func ExecCommandUntil(cmd *exec.Cmd, stopCond func(ctx context.Context, block bool) error, timeout int, block bool) (
 	error, chan error,
 ) {
+	// Register before Start so termination during startup is queued. Only the
+	// supervisor receives the signal; it owns the order of child cleanup.
+	var signals chan os.Signal
+	if block {
+		signals = make(chan os.Signal, 1)
+		signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	}
 	if err := cmd.Start(); err != nil {
+		if signals != nil {
+			signal.Stop(signals)
+		}
 		fmt.Println("failed to start sub command:", err)
 		return err, nil
 	}
@@ -67,9 +80,26 @@ func ExecCommandUntil(cmd *exec.Cmd, stopCond func(ctx context.Context, block bo
 	}()
 
 	cmdExitChan := make(chan error, 1)
+	processDone := make(chan struct{})
 	go func() {
-		cmdExitChan <- cmd.Wait()
+		err := cmd.Wait()
+		close(processDone)
+		cmdExitChan <- err
+		close(cmdExitChan)
 	}()
+	if signals != nil {
+		go func() {
+			defer signal.Stop(signals)
+			select {
+			case sig := <-signals:
+				// Do not exit the CLI or kill its process group here: the
+				// supervisor must finish unregistering its children first.
+				_ = cmd.Process.Signal(sig)
+				<-processDone
+			case <-processDone:
+			}
+		}()
+	}
 
 	select {
 	case err := <-resultChan:

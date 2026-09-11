@@ -25,7 +25,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -444,7 +443,8 @@ func yrDeployMaster(path string, dumpPolicy currentMasterInfoDumpPolicy) error {
 	// block, run the command directly
 	// no block, run the command until master_info_output file generated
 	if yrOpts.block {
-		blockRun(masterDeployCmd, cancel)
+		prepareBlockedCommand(masterDeployCmd)
+		defer os.RemoveAll(constant.DefaultYuanRongCurrentMasterInfoPath)
 	}
 
 	var waitChan chan error
@@ -500,25 +500,10 @@ func concatMasterDeployCmd(path string) (error, *exec.Cmd) {
 	return nil, masterDeployCmd
 }
 
-func blockRun(masterDeployCmd *exec.Cmd, cancel context.CancelFunc) {
-	// when block, use pdeathsig to make sure when this command exit, send sigterm to the deploy.sh
-	// when no blocked, will just run
-	masterDeployCmd.SysProcAttr = &syscall.SysProcAttr{
-		Pdeathsig: syscall.SIGTERM,
-	}
-
-	ch := make(chan os.Signal, 2)
-	signal.Notify(ch, syscall.SIGINT, syscall.SIGKILL, syscall.SIGTERM)
-	go func() {
-		select {
-		case <-ch:
-			cancel()
-			if err := os.RemoveAll(constant.DefaultYuanRongCurrentMasterInfoPath); err != nil {
-				// do nothing
-			}
-			os.Exit(0)
-		}
-	}()
+// Keep the deployment supervisor alive to finish graceful shutdown. Signal
+// forwarding and waiting are owned by ExecCommandUntil for both master and agent.
+func prepareBlockedCommand(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGTERM}
 }
 
 func yrProcessDeployArgs() {
@@ -661,11 +646,7 @@ func yrDeployAgent(path string) error {
 	agentDeployCmd.Stderr = deployStdFile
 
 	if yrOpts.block {
-		// when block, use pdeathsig to make sure when this command exit, send sigterm to the deploy.sh
-		// when no blocked, will just run
-		agentDeployCmd.SysProcAttr = &syscall.SysProcAttr{
-			Pdeathsig: syscall.SIGTERM,
-		}
+		prepareBlockedCommand(agentDeployCmd)
 	}
 
 	if err, _ = utils.ExecCommandUntil(agentDeployCmd, untilAgentDeploySucceed,
