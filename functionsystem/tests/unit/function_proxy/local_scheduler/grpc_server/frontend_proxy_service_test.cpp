@@ -183,6 +183,7 @@ TEST(FrontendProxyServiceTest, InvokeUsesFunctionProxyAsRuntimeSender)
     FrontendProxyServiceParam param;
     param.nodeID = "proxy-node-a";
     param.invokeResultTimeoutMs = 1;
+    param.invokeTenantAuthorizer = [](const std::string &, const std::string &) { return common::ERR_NONE; };
     param.invokeDispatcher = [&capturedCaller, &capturedRequest](const std::string &caller,
                                                                  const SharedStreamMsg &request) {
         capturedCaller = caller;
@@ -213,14 +214,15 @@ TEST(FrontendProxyServiceTest, InvokeUsesFunctionProxyAsRuntimeSender)
     EXPECT_EQ(capturedRequest->invokereq().requestid(), "frontend-proxy-request-1");
 }
 
-TEST(FrontendProxyServiceTest, InvokeRejectsTenantThatDoesNotOwnTargetInstance)
+TEST(FrontendProxyServiceTest, InvokeRejectsUnauthorizedOrMissingTargetInstance)
 {
     bool dispatched = false;
+    auto authorizeCode = common::ERR_AUTHORIZE_FAILED;
     FrontendProxyServiceParam param;
-    param.invokeTenantAuthorizer = [](const std::string &tenantID, const std::string &instanceID) {
+    param.invokeTenantAuthorizer = [&authorizeCode](const std::string &tenantID, const std::string &instanceID) {
         EXPECT_EQ(tenantID, "tenant-a");
         EXPECT_EQ(instanceID, "instance-b");
-        return false;
+        return authorizeCode;
     };
     param.invokeDispatcher = [&dispatched](const std::string &, const SharedStreamMsg &) {
         dispatched = true;
@@ -238,6 +240,14 @@ TEST(FrontendProxyServiceTest, InvokeRejectsTenantThatDoesNotOwnTargetInstance)
 
     EXPECT_TRUE(service.InvokeInstance(nullptr, &request, &response).ok());
     EXPECT_EQ(response.status().code(), common::ERR_AUTHORIZE_FAILED);
+    EXPECT_EQ(response.status().message(), "frontend proxy invoke tenant does not own target instance");
+    EXPECT_FALSE(dispatched);
+
+    authorizeCode = common::ERR_INSTANCE_NOT_FOUND;
+    response.Clear();
+    EXPECT_TRUE(service.InvokeInstance(nullptr, &request, &response).ok());
+    EXPECT_EQ(response.status().code(), common::ERR_INSTANCE_NOT_FOUND);
+    EXPECT_EQ(response.status().message(), "frontend proxy invoke target instance not found");
     EXPECT_FALSE(dispatched);
 }
 

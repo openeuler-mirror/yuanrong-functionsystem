@@ -606,11 +606,15 @@ bool FrontendProxyService::ValidateInvokeRequest(const ::frontend_proxy::InvokeI
                   "frontend proxy invoke tenant does not match context labels");
         return false;
     }
-    if (param_.invokeTenantAuthorizer
-        && !param_.invokeTenantAuthorizer(request.context().tenantid(), request.invoke().instanceid())) {
-        SetStatus(response.mutable_status(), common::ERR_AUTHORIZE_FAILED,
-                  "frontend proxy invoke tenant does not own target instance");
-        return false;
+    if (param_.invokeTenantAuthorizer) {
+        const auto code = param_.invokeTenantAuthorizer(request.context().tenantid(), request.invoke().instanceid());
+        if (code != common::ERR_NONE) {
+            SetStatus(response.mutable_status(), code,
+                      code == common::ERR_INSTANCE_NOT_FOUND
+                          ? "frontend proxy invoke target instance not found"
+                          : "frontend proxy invoke tenant does not own target instance");
+            return false;
+        }
     }
     if (HasOperationRequestIDMismatch(request.context(), request.invoke().requestid())) {
         SetStatus(response.mutable_status(), common::ERR_PARAM_INVALID,

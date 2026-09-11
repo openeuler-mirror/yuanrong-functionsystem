@@ -163,6 +163,11 @@ void InstanceControlView::Delete(const std::string &instanceID, int64_t modRevis
             return;
         }
 
+        YRLOG_DEBUG("Delete instance({}) state machine, requestID({}), nodeID({}), owner({}), state({}), "
+                    "version({}), modRevision({}), deleteRevision({}), viewSizeBefore({})",
+                    instanceID, requestID, self_, machine->GetOwner(),
+                    static_cast<int32_t>(machine->GetInstanceState()), machine->GetVersion(),
+                    machine->GetModRevision(), modRevision, machines_.size());
         machine->ExecuteStateChangeCallback(machine->GetRequestID(), InstanceState::EXITED);
         // only owner would try to exit instance
         if (machine->GetOwner() == self_) {
@@ -306,6 +311,12 @@ void InstanceControlView::OnDelInstance(const std::string &instanceID, const std
     (void)requestInstances_.erase(currentRequestID);
     (void)createRequestFuture_.erase(currentRequestID);
     if (needErase) {
+        const auto &machine = machines_.at(instanceID);
+        YRLOG_DEBUG("OnDelInstance erase instance({}) state machine, requestID({}), nodeID({}), owner({}), state({}), "
+                    "version({}), modRevision({}), viewSizeBefore({})",
+                    instanceID, currentRequestID, self_, machine->GetOwner(),
+                    static_cast<int32_t>(machine->GetInstanceState()), machine->GetVersion(),
+                    machine->GetModRevision(), machines_.size());
         YRLOG_INFO("erase instance({}) state Machine", instanceID);
         (void)machines_.erase(instanceID);
     }
