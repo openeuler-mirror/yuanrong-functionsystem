@@ -41,6 +41,75 @@ namespace exectest {
 class ExecTest : public TemporaryDirectoryTest {
 };
 
+TEST_F(ExecTest, ExternalReaperPreservesRegisteredExitStatus)
+{
+    int externalReaps = 0;
+    for (int round = 0; round < 256; ++round) {
+        int gate[2];
+        ASSERT_EQ(pipe(gate), 0);
+        const pid_t pid = fork();
+        ASSERT_GE(pid, 0);
+        if (pid == 0) {
+            close(gate[1]);
+            char byte;
+            const auto count = read(gate[0], &byte, 1);
+            _exit(count == 1 ? 7 : 99);
+        }
+        close(gate[0]);
+        // Both subscribers must receive the actual status, whichever reaper
+        // wins waitpid. Registration completes before the child can exit.
+        auto first = ReapInActor(pid);
+        auto second = ReapInActor(pid);
+        ASSERT_EQ(write(gate[1], "x", 1), 1);
+        close(gate[1]);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while ((first.IsInit() || second.IsInit()) && std::chrono::steady_clock::now() < deadline) {
+            int status = 0;
+            bool notified = false;
+            const auto reaped = ReapAnyChild(status, notified);
+            if (reaped == pid) {
+                EXPECT_TRUE(notified);
+                EXPECT_TRUE(WIFEXITED(status));
+                EXPECT_EQ(WEXITSTATUS(status), 7);
+                ++externalReaps;
+            }
+            usleep(100);
+        }
+        ASSERT_FALSE(first.IsInit());
+        ASSERT_FALSE(first.IsError());
+        ASSERT_FALSE(second.IsInit());
+        ASSERT_FALSE(second.IsError());
+        ASSERT_TRUE(first.Get().IsSome());
+        ASSERT_TRUE(second.Get().IsSome());
+        EXPECT_EQ(first.Get().Get(), 7 << 8);
+        EXPECT_EQ(second.Get().Get(), 7 << 8);
+    }
+    EXPECT_GT(externalReaps, 0);
+}
+
+TEST_F(ExecTest, ExternalReaperReturnsUnregisteredChildStatus)
+{
+    const pid_t pid = fork();
+    ASSERT_GE(pid, 0);
+    if (pid == 0) {
+        _exit(23);
+    }
+    int status = 0;
+    bool notified = true;
+    pid_t reaped = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (reaped == 0 && std::chrono::steady_clock::now() < deadline) {
+        reaped = ReapAnyChild(status, notified);
+        if (reaped == 0) {
+            usleep(100);
+        }
+    }
+    ASSERT_EQ(reaped, pid);
+    EXPECT_FALSE(notified);
+    EXPECT_TRUE(WIFEXITED(status));
+    EXPECT_EQ(WEXITSTATUS(status), 23);
+}
+
 Try<std::shared_ptr<Exec>> RunSubprocess(const std::function<Try<std::shared_ptr<Exec>>()> &createExec)
 {
     Try<std::shared_ptr<Exec>> s = createExec();

@@ -20,6 +20,7 @@
 #include "actor/buslog.hpp"
 #include "async/asyncafter.hpp"
 #include "litebus.hpp"
+#include <vector>
 
 namespace litebus {
 static const int REAP_INTERVAL = 200;
@@ -52,54 +53,75 @@ inline pid_t OSWaitPid(pid_t pid, int *status, int options)
 }
 }    // namespace reapinternal
 
-// get subprocess and write subprocess's status to promise
-void NotifyPromise(pid_t pid, int result, int status)
-{
-    std::lock_guard<std::mutex> lock(g_promisesLock);
-    // no pid found then return
-    if (g_promises.find(pid) == g_promises.end()) {
-        BUSLOG_ERROR("Map has no pid:{}", pid);
-        return;
-    }
+namespace {
+using ReapPromises = std::vector<std::shared_ptr<Promise<Option<int>>>>;
 
-    auto itRange = g_promises.equal_range(pid);
-    // to iterator pid in map
-    for (auto it = itRange.first; it != itRange.second; ++it) {
-        // notify reaped
-        if (result > 0) {
-            BUSLOG_INFO("Notify pid:{},status:{}", pid, status);
-            it->second->SetValue(Option<int>(status));
-            // notify not exist
-        } else if (result == 0) {
-            BUSLOG_WARN("Notify pid none:{}", pid);
-            it->second->SetFailed(-1);
-            // notify failed
-        } else {
-            BUSLOG_ERROR("Notify pid error:{}", pid);
-            it->second->SetFailed(result);
-        }
+// The caller holds g_promisesLock. Taking ownership before releasing the lock
+// prevents another reaper from completing the same child with a missing status.
+ReapPromises TakePromises(pid_t pid)
+{
+    ReapPromises promises;
+    auto range = g_promises.equal_range(pid);
+    for (auto it = range.first; it != range.second; ++it) {
+        promises.push_back(it->second);
     }
-    // remove pid from map finally
-    (void)g_promises.erase(pid);
-    return;
+    g_promises.erase(pid);
+    return promises;
 }
 
-// Notify the pending promise for `pid` with a real status obtained by an
-// external reaper. Returns true if a promise was found (and notified).
+void CompletePromises(const ReapPromises &promises, pid_t pid, int result, int status)
+{
+    for (const auto &promise : promises) {
+        if (result > 0) {
+            BUSLOG_INFO("Notify pid:{},status:{}", pid, status);
+            promise->SetValue(Option<int>(status));
+        } else {
+            BUSLOG_WARN("Notify pid failed:{},result:{}", pid, result);
+            promise->SetFailed(result == 0 ? -1 : result);
+        }
+    }
+}
+}  // namespace
+
+void NotifyPromise(pid_t pid, int result, int status)
+{
+    ReapPromises promises;
+    {
+        std::lock_guard<std::mutex> lock(g_promisesLock);
+        promises = TakePromises(pid);
+    }
+    // Future callbacks may register another process. Never invoke them while
+    // holding the registry lock.
+    CompletePromises(promises, pid, result, status);
+}
+
 bool TryNotifyExternalReap(pid_t pid, int status)
 {
-    std::lock_guard<std::mutex> lock(g_promisesLock);
-    if (g_promises.find(pid) == g_promises.end()) {
-        return false;
+    ReapPromises promises;
+    {
+        std::lock_guard<std::mutex> lock(g_promisesLock);
+        promises = TakePromises(pid);
     }
-    auto itRange = g_promises.equal_range(pid);
-    for (auto it = itRange.first; it != itRange.second; ++it) {
-        unsigned int st = static_cast<unsigned int>(status);
-        BUSLOG_INFO("External reap notify pid:{},status:{},Wstatus:{}", pid, status, WEXITSTATUS(st));
-        it->second->SetValue(Option<int>(status));
+    CompletePromises(promises, pid, pid, status);
+    return !promises.empty();
+}
+
+pid_t ReapAnyChild(int &status, bool &notified)
+{
+    ReapPromises promises;
+    pid_t pid;
+    {
+        std::lock_guard<std::mutex> lock(g_promisesLock);
+        // waitpid consumes the kernel status. It must share the critical
+        // section with promise transfer and ReaperActor's missing-pid check.
+        pid = reapinternal::OSWaitPid(-1, &status, WNOHANG);
+        if (pid > 0) {
+            promises = TakePromises(pid);
+        }
     }
-    (void)g_promises.erase(pid);
-    return true;
+    notified = !promises.empty();
+    CompletePromises(promises, pid, pid, status);
+    return pid;
 }
 
 ReaperActor::~ReaperActor()
@@ -129,28 +151,21 @@ void ReaperActor::ReapStatus(bool withTimer)
         (void)keySet.insert(it->first);
     }
     g_promisesLock.unlock();
-    // to loop all promise in map and find waitpid status
-    for (auto keyIt = keySet.begin(); keyIt != keySet.end(); ++keyIt) {
-        int status;
+    for (const auto pid : keySet) {
+        ReapPromises promises;
+        int status = 0;
         pid_t childPid = 0;
-        pid_t pid = *keyIt;
-        // need to reap, involk os waitpid and get result
-        childPid = litebus::reapinternal::OSWaitPid(pid, &status, WNOHANG);
-        if (childPid > 0) {
-            // We have reaped a sub process, wait and get status. notify status to
-            // promise
-            unsigned int st = static_cast<unsigned int>(status);
-            BUSLOG_INFO("Reap success, pid:{},status:{},Wstatus:{}", pid, status, WEXITSTATUS(st));
-            NotifyPromise(pid, childPid, status);
-        } else {
-            // pid still exist, need to reap again
-            if (!litebus::reapinternal::PidExist(pid)) {
-                // pid not exist, notify pid already exit
-                BUSLOG_WARN("Reap pid not exist, result childpid:{},pid:{}", childPid, pid);
-                // notify none to promise
-                NotifyPromise(pid, 0, 0);
+        {
+            std::lock_guard<std::mutex> lock(g_promisesLock);
+            if (g_promises.find(pid) == g_promises.end()) {
+                continue;
+            }
+            childPid = reapinternal::OSWaitPid(pid, &status, WNOHANG);
+            if (childPid > 0 || !litebus::reapinternal::PidExist(pid)) {
+                promises = TakePromises(pid);
             }
         }
+        CompletePromises(promises, pid, childPid, status);
     }
 
     // if promises still has then wait for next time reap

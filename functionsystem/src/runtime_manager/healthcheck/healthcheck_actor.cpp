@@ -346,7 +346,8 @@ void HealthCheckActor::WaitProcessCyclical()
 {
     pid_t pid;
     int status = 0; // In normal cases, the value of status is between the values of [0,255].
-    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+    bool notified = false;
+    while ((pid = litebus::ReapAnyChild(status, notified)) > 0) {
         YRLOG_INFO("RecycleSubProcess pid({}), status({}), exitState({}), exitCode({})", pid, status, WIFEXITED(status),
                    WEXITSTATUS(status));
         if (pid2RuntimeIDMap_.find(pid) != pid2RuntimeIDMap_.end() &&
@@ -362,13 +363,9 @@ void HealthCheckActor::WaitProcessCyclical()
                 HealthCheckActor::logPrefixExitCallback_(runtimeID);
             }
         } else {
-            // In merge_process mode, function_proxy's litebus ReaperActor lives in the
-            // same process and may also be waiting on this pid (e.g. a subprocess
-            // forked by ExecSession). waitpid(-1) above already reaped it, so hand the
-            // real status over to litebus's pending promise before falling through to
-            // the existing oom/callback paths. In non-merge_process mode this is a
-            // cheap no-op (g_promises is empty in runtime_manager).
-            if (litebus::TryNotifyExternalReap(pid, status)) {
+            // ReapAnyChild has already transferred registered Exec status
+            // atomically, before ReaperActor can observe that the PID is gone.
+            if (notified) {
                 continue;
             }
             // Check if the pid corresponds to an RuntimeMemoryExceedLimit(OOM) situation

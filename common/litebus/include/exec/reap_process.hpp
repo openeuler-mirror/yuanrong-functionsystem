@@ -47,6 +47,12 @@ Future<Option<int>> ReapInActor(pid_t pid);
 // Safe to call from any thread; takes the internal promise lock.
 bool TryNotifyExternalReap(pid_t pid, int status);
 
+// Nonblocking wait for any child, atomically claiming any registered litebus
+// promises with the kernel exit status. External reapers in a shared process
+// must use this instead of waitpid followed by TryNotifyExternalReap. `notified`
+// distinguishes registered Exec children from runtime or adopted children.
+pid_t ReapAnyChild(int &status, bool &notified);
+
 }    // namespace litebus
 
 #endif
