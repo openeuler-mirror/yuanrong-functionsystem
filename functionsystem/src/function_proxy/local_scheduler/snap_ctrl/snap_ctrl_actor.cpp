@@ -279,6 +279,14 @@ void SnapCtrlActor::OnAnonymousCheckpointCreated(
     } else {
         context->snapshotResponse = future.Get();
     }
+    if (context->snapshotResponse.code() != static_cast<int32_t>(StatusCode::SUCCESS)
+        && context->snapshotResponse.checkpointnotstarted()
+        && !context->snapshotResponse.resultunknown()) {
+        CompleteAnonymousCheckpoint(
+            context, Status::GetPosixErrorCode(context->snapshotResponse.code()),
+            context->snapshotResponse.message());
+        return;
+    }
     context->snapStartedDeadline = std::chrono::steady_clock::now()
         + std::chrono::milliseconds(pauseRetryPolicy_.operationTimeoutMs);
     RetryAnonymousCheckpointClient(context);
@@ -353,6 +361,8 @@ void SnapCtrlActor::CompleteAnonymousCheckpoint(
     KillResponse response;
     response.set_code(code);
     response.set_message(message);
+    response.set_checkpointnotstarted(context->snapshotResponse.checkpointnotstarted()
+                                     && !context->snapshotResponse.resultunknown());
     context->completion->SetValue(response);
 }
 

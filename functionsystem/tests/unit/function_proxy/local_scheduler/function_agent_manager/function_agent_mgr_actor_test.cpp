@@ -319,6 +319,29 @@ TEST(FunctionAgentMgrTest, RegistrationRetriesSnapshotListBeforeReconcile)
               (std::vector<std::string>{"list-snapshots", "list-snapshots", "reconcile"}));
 }
 
+TEST(FunctionAgentMgrTest, AnonymousCheckpointPreflightRejectionIsNotStarted)
+{
+    auto manager = std::make_shared<FunctionAgentMgrActor>(
+        "anonymous-preflight-manager", PARAM, "nodeID", std::make_shared<MockMetaStoreClient>("127.0.0.1:1"));
+    resources::InstanceInfo instance;
+    instance.set_functionagentid("missing-agent");
+    auto missing = manager->SnapshotRuntimeAnonymous("missing-agent-request", instance, "anon-missing");
+    ASSERT_TRUE(missing.IsOK());
+    EXPECT_NE(missing.Get().code(), common::ERR_NONE);
+    EXPECT_TRUE(missing.Get().checkpointnotstarted());
+
+    FunctionAgentMgrActor::FuncAgentInfo agent;
+    agent.isEnable = true;
+    agent.isInit = true;
+    manager->InsertAgent("agent-a", agent);
+    instance.set_functionagentid("agent-a");
+    (*instance.mutable_createoptions())["YR_CHECKPOINT_TIMEOUT_MS"] = "0";
+    auto invalid = manager->SnapshotRuntimeAnonymous("invalid-timeout-request", instance, "anon-invalid");
+    ASSERT_TRUE(invalid.IsOK());
+    EXPECT_EQ(invalid.Get().code(), StatusCode::ERR_PARAM_INVALID);
+    EXPECT_TRUE(invalid.Get().checkpointnotstarted());
+}
+
 TEST(FunctionAgentMgrTest, AnonymousSnapshotRequestCarriesOnlyLocalCheckpointIntent)
 {
     const auto metaStoreAddress = "127.0.0.1:" + std::to_string(FindAvailablePort());

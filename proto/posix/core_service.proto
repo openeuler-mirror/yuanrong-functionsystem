@@ -246,6 +246,8 @@ message KillResponse {
   common.ErrorCode code    = 1;
   string           message = 2;
   bytes            payload = 3;
+  // A rejected checkpoint never reached the backend; no handoff will follow.
+  bool checkpointNotStarted = 4;
 }
 
 message EventRequest {

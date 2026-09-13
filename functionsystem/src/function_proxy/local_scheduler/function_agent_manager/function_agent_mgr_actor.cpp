@@ -1852,6 +1852,7 @@ litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgrActor::Snapsh
 {
     messages::SnapshotRuntimeResponse error;
     error.set_requestid(requestID);
+    error.set_checkpointnotstarted(true);
     const auto agent = funcAgentTable_.find(instanceInfo.functionagentid());
     if (agent == funcAgentTable_.end() || snapshotID.empty()) {
         error.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));

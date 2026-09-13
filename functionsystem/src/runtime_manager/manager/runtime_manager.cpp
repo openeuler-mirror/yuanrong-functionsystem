@@ -499,6 +499,7 @@ void RuntimeManager::SnapshotRuntime(const litebus::AID &from, std::string &&, s
                     runtimeID, resolveStatus.ToString());
         messages::SnapshotRuntimeResponse response;
         response.set_requestid(request->requestid());
+        response.set_checkpointnotstarted(true);
         response.set_code(static_cast<int32_t>(resolveStatus.StatusCode()));
         response.set_message(resolveStatus.RawMessage());
         Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
@@ -509,6 +510,7 @@ void RuntimeManager::SnapshotRuntime(const litebus::AID &from, std::string &&, s
         YRLOG_ERROR("{}|container executor not found", request->requestid());
         messages::SnapshotRuntimeResponse response;
         response.set_requestid(request->requestid());
+        response.set_checkpointnotstarted(true);
         response.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_SYSTEM_ERROR));
         response.set_message("container executor not found");
         Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
