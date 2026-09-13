@@ -6938,6 +6938,67 @@ TEST_F(InstanceCtrlTest, ForceDeleteInstanceWithoutAgent)
     }
 }
 
+TEST_F(InstanceCtrlTest, ForceDeleteRetirementFailurePreservesRetryableInstance)
+{
+    auto actor = instanceCtrlWithMockObserver_->instanceCtrlActor_;
+    auto resourceViewMgr = std::make_shared<resource_view::ResourceViewMgr>();
+    auto primary = MockResourceView::CreateMockResourceView();
+    resourceViewMgr->primary_ = primary;
+    resourceViewMgr->virtual_ = MockResourceView::CreateMockResourceView();
+    instanceCtrlWithMockObserver_->BindResourceView(resourceViewMgr);
+    auto stateMachine = std::make_shared<MockInstanceStateMachine>("nodeID");
+    InstanceInfo instance;
+    instance.set_instanceid("retire-retry");
+    instance.set_functionagentid("agentID");
+    instance.set_nodeproxyaddress("127.0.0.1:9443");
+    instance.set_sandboxid("workload-retire-retry");
+    instance.mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::RUNNING));
+    actor->config_.nodeProxyRouteControlUds.clear();
+    actor->AddHeartbeatTimer(instance.instanceid());
+    EXPECT_CALL(*instanceControlView_, GetInstance(instance.instanceid())).WillRepeatedly(Return(stateMachine));
+    EXPECT_CALL(*stateMachine, GetInstanceInfo).WillRepeatedly(Return(instance));
+    EXPECT_CALL(*primary, DeleteInstances).Times(0);
+    EXPECT_CALL(*instanceControlView_, DelInstance).Times(0);
+    EXPECT_CALL(*mockSharedClientManagerProxy_, GetControlInterfacePosixClient(_)).Times(0);
+    EXPECT_CALL(*mockSharedClientManagerProxy_, DeleteClient(_)).Times(0);
+    EXPECT_CALL(*funcAgentMgr_, KillInstance).Times(0);
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        auto result = instanceCtrlWithMockObserver_->ForceDeleteInstance(instance.instanceid());
+        ASSERT_AWAIT_READY(result);
+        EXPECT_TRUE(result.Get().IsError());
+        EXPECT_NE(result.Get().RawMessage().find("route control"), std::string::npos);
+        EXPECT_EQ(actor->GetHeartbeatTimers().count(instance.instanceid()), 1u);
+    }
+    actor->runtimeHeartbeatTimers_.erase(instance.instanceid());
+}
+
+TEST_F(InstanceCtrlTest, DeleteInstancePreservesCleanupFailureStatus)
+{
+    auto actor = instanceCtrlWithMockObserver_->instanceCtrlActor_;
+    InstanceInfo instance;
+    instance.set_instanceid("delete-error");
+    const Status failure(StatusCode::FAILED, "retirement was not acknowledged");
+    EXPECT_CALL(*instanceControlView_, DelInstance).Times(0);
+    auto result = actor->DeleteInstanceInControlView(failure, instance);
+    ASSERT_AWAIT_READY(result);
+    EXPECT_EQ(result.Get().RawMessage(), failure.RawMessage());
+    auto reported = actor->ReportInstanceExitLatency(result.Get(), 0, instance);
+    ASSERT_AWAIT_READY(reported);
+    EXPECT_EQ(reported.Get().RawMessage(), failure.RawMessage());
+}
+
+TEST_F(InstanceCtrlTest, DeleteInstancePreservesMetadataFailureStatus)
+{
+    auto actor = instanceCtrlWithMockObserver_->instanceCtrlActor_;
+    InstanceInfo instance;
+    instance.set_instanceid("metadata-error");
+    EXPECT_CALL(*instanceControlView_, DelInstance(instance.instanceid()))
+        .WillOnce(Return(Status(StatusCode::ERR_ETCD_OPERATION_ERROR, "delete failed")));
+    auto result = actor->DeleteInstanceInControlView(Status::OK(), instance);
+    ASSERT_AWAIT_READY(result);
+    EXPECT_EQ(result.Get().StatusCode(), StatusCode::ERR_ETCD_OPERATION_ERROR);
+}
+
 // force delete
 TEST_F(InstanceCtrlTest, ForceDeleteInstance)
 {

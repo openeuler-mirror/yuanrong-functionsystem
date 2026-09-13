@@ -925,9 +925,10 @@ private:
                                                           const std::string &requestID, const std::string &instanceID);
 
     litebus::Future<Status> KillRuntime(const InstanceInfo &instanceInfo, bool isRecovering = false);
+    litebus::Future<Status> BeginInstanceDelete(const InstanceInfo &instanceInfo);
     litebus::Future<Status> KillRuntimeForInstanceDelete(const InstanceInfo &instanceInfo);
     litebus::Future<Status> KillRuntimeWithSnapshotCleanup(
-        const InstanceInfo &instanceInfo, bool isRecovering, bool deleteInstanceSnapshots);
+        const InstanceInfo &instanceInfo, bool isRecovering, bool deleteInstanceSnapshots, bool routeAlreadyRetired = false);
     Status SetDataPlaneRoute(const InstanceInfo &instanceInfo,
                              data_plane_gateway_activity::DataPlaneGatewayRouteState state);
     litebus::Future<Status> RecordFrontendKillRuntimeResult(

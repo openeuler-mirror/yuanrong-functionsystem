@@ -345,26 +345,7 @@ void InstanceCtrlActor::Init()
         auto startTimeMillis =
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
                 .count();
-        litebus::Async(aid, &InstanceCtrlActor::StopHeartbeat, instanceInfo.instanceid());
-        if (IsDriver(instanceInfo)) {
-            YRLOG_INFO("{}|driver exited, ({}) should be clear.", instanceInfo.requestid(),
-                       instanceInfo.instanceid());
-            litebus::Async(aid, &InstanceCtrlActor::DeleteDriverClient, instanceInfo.instanceid(),
-                           instanceInfo.jobid());
-        }
-        if (instanceInfo.functionagentid().empty()) {
-            YRLOG_INFO("{}|function agent ID of instance({}) is empty, delete instance in control view",
-                       instanceInfo.requestid(), instanceInfo.instanceid());
-            return litebus::Async(aid, &InstanceCtrlActor::DeleteInstanceInControlView, Status::OK(), instanceInfo);
-        }
-        return litebus::Async(aid, &InstanceCtrlActor::DeleteInstanceInResourceView, Status::OK(), instanceInfo)
-            .Then(litebus::Defer(aid, &InstanceCtrlActor::ShutDownInstance, instanceInfo,
-                                 static_cast<uint32_t>(instanceInfo.gracefulshutdowntime())))
-            .Then([instanceInfo, aid](const Status &) {
-                return litebus::Async(aid, &InstanceCtrlActor::KillRuntimeForInstanceDelete, instanceInfo);
-            })
-            .Then(litebus::Defer(aid, &InstanceCtrlActor::DeleteInstanceInControlView, std::placeholders::_1,
-                                 instanceInfo))
+        return litebus::Async(aid, &InstanceCtrlActor::BeginInstanceDelete, instanceInfo)
             .Then(litebus::Defer(aid, &InstanceCtrlActor::ReportInstanceExitLatency, std::placeholders::_1,
                                  startTimeMillis, instanceInfo));
     };
@@ -391,6 +372,34 @@ void InstanceCtrlActor::Init()
     Receive("CheckInstanceState", &InstanceCtrlActor::CheckInstanceState);
     Receive("CheckInstanceStateResponse", &InstanceCtrlActor::CheckInstanceStateResponse);
     Receive("TenantQuotaExceeded", &InstanceCtrlActor::OnTenantQuotaExceededMsg);
+}
+
+litebus::Future<Status> InstanceCtrlActor::BeginInstanceDelete(const InstanceInfo &instanceInfo)
+{
+    if (!instanceInfo.functionagentid().empty()) {
+        auto routeStatus = SetDataPlaneRoute(
+            instanceInfo, data_plane_gateway_activity::DATA_PLANE_GATEWAY_ROUTE_STATE_RETIRED);
+        if (routeStatus.IsError()) {
+            // Keep heartbeat, resource accounting and metadata available for a retry.
+            return routeStatus;
+        }
+    }
+    StopHeartbeat(instanceInfo.instanceid());
+    if (IsDriver(instanceInfo)) {
+        DeleteDriverClient(instanceInfo.instanceid(), instanceInfo.jobid());
+    }
+    if (instanceInfo.functionagentid().empty()) {
+        return DeleteInstanceInControlView(Status::OK(), instanceInfo);
+    }
+    const auto aid = GetAID();
+    return DeleteInstanceInResourceView(Status::OK(), instanceInfo)
+        .Then(litebus::Defer(aid, &InstanceCtrlActor::ShutDownInstance, instanceInfo,
+                             static_cast<uint32_t>(instanceInfo.gracefulshutdowntime())))
+        .Then([instanceInfo, aid](const Status &) {
+            return litebus::Async(aid, &InstanceCtrlActor::KillRuntimeForInstanceDelete, instanceInfo);
+        })
+        .Then(litebus::Defer(aid, &InstanceCtrlActor::DeleteInstanceInControlView, std::placeholders::_1,
+                             instanceInfo));
 }
 
 Status InstanceCtrlActor::SyncDataPlaneRoutes()
@@ -462,7 +471,7 @@ litebus::Future<Status> InstanceCtrlActor::ReportInstanceExitLatency(const Statu
 {
     functionsystem::metrics::MetricsAdapter::GetInstance().ReportInstanceExitLatency(status, startTimeMillis,
                                                                                      instanceInfo);
-    return Status::OK();
+    return status;
 }
 
 litebus::Future<Status> InstanceCtrlActor::DeleteInstanceInResourceView(const Status &status,
@@ -486,6 +495,9 @@ litebus::Future<Status> InstanceCtrlActor::ReleasePausedInstanceResources(
 litebus::Future<Status> InstanceCtrlActor::DeleteInstanceInControlView(const Status &status,
                                                                        const InstanceInfo &instanceInfo)
 {
+    if (status.IsError()) {
+        return status;
+    }
     CleanupAnonymousSnapshotForDeletedInstance(instanceInfo);
     if (traefikRegistry_) {
         (void)litebus::Async(GetAID(), &InstanceCtrlActor::UnregisterTraefikRoute, instanceInfo.instanceid());
@@ -502,13 +514,13 @@ litebus::Future<Status> InstanceCtrlActor::DeleteInstanceInControlView(const Sta
             if (status.IsOk()) {
                 RetirePauseGateForDeletedInstance(instanceID);
             }
-            return Status::OK();
+            return status;
         }))
         .Then([instanceID(instanceInfo.instanceid())](const Status &status) {
             if (status.IsOk()) {
                 function_proxy::StateHandler::DeleteState(instanceID);
             }
-            return Status::OK();
+            return status;
         });
 }
 
@@ -2115,16 +2127,19 @@ litebus::Future<Status> InstanceCtrlActor::KillRuntime(const InstanceInfo &insta
 
 litebus::Future<Status> InstanceCtrlActor::KillRuntimeForInstanceDelete(const InstanceInfo &instanceInfo)
 {
-    return KillRuntimeWithSnapshotCleanup(instanceInfo, false, true);
+    // BeginInstanceDelete already acknowledged retirement before releasing resources.
+    return KillRuntimeWithSnapshotCleanup(instanceInfo, false, true, true);
 }
 
 litebus::Future<Status> InstanceCtrlActor::KillRuntimeWithSnapshotCleanup(
-    const InstanceInfo &instanceInfo, bool isRecovering, bool deleteInstanceSnapshots)
+    const InstanceInfo &instanceInfo, bool isRecovering, bool deleteInstanceSnapshots, bool routeAlreadyRetired)
 {
-    auto routeStatus = SetDataPlaneRoute(
-        instanceInfo, data_plane_gateway_activity::DATA_PLANE_GATEWAY_ROUTE_STATE_RETIRED);
-    if (routeStatus.IsError()) {
-        return litebus::Future<Status>(routeStatus);
+    if (!routeAlreadyRetired) {
+        auto routeStatus = SetDataPlaneRoute(
+            instanceInfo, data_plane_gateway_activity::DATA_PLANE_GATEWAY_ROUTE_STATE_RETIRED);
+        if (routeStatus.IsError()) {
+            return litebus::Future<Status>(routeStatus);
+        }
     }
     // stop wait for update status when kill runtime
     auto iter = instanceStatusPromises_.find(instanceInfo.instanceid());
