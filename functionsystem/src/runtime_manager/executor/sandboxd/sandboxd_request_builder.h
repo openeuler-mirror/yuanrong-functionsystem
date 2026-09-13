@@ -91,11 +91,12 @@ public:
                              google::protobuf::RepeatedPtrField<runtime::v1::Mount> *mounts,
                              std::string &workingRoot) const;
 
-private:
-    std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> BuildStart(const SandboxdStartParams &params) const;
-
+    // Resolve the same service baseline and request overlay used by Start.
     Status BuildRootfs(const std::shared_ptr<messages::StartInstanceRequest> &request,
                        runtime::v1::StartRequest &start) const;
+
+private:
+    std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> BuildStart(const SandboxdStartParams &params) const;
 
     // ── Shared helpers (mirror sandbox_request_builder) ──────────────────────
 

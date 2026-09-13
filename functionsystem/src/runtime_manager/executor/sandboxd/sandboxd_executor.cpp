@@ -649,7 +649,10 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartInstance
         return *existing;
     }
 
-    stateManager_.Register(SandboxInfo{runtimeID, {}, {}, {}, info});
+    const auto registerStatus = ResolveAndRegisterRuntime(request);
+    if (registerStatus.IsError()) {
+        return GenFailStartInstanceResponse(request, registerStatus.StatusCode(), registerStatus.RawMessage());
+    }
     stateManager_.ClearPendingDelete(runtimeID);
     sandboxLifecycleStates_.erase(runtimeID);
 
@@ -696,6 +699,26 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartInstance
         future.Then(litebus::Defer(GetAID(), &SandboxdExecutor::OnStartCompleted, runtimeID, std::placeholders::_1));
     stateManager_.MarkStartInProgress(runtimeID, future);
     return future;
+}
+
+Status SandboxdExecutor::ResolveAndRegisterRuntime(
+    const std::shared_ptr<messages::StartInstanceRequest> &request)
+{
+    const auto &info = request->runtimeinstanceinfo();
+    const auto &runtimeID = info.runtimeid();
+    auto effectiveInfo = info;
+    if (info.warmuptype() == static_cast<int32_t>(WarmupType::NONE)) {
+        runtime::v1::StartRequest resolved;
+        const auto status = SandboxdRequestBuilder{cmdBuilder_}.BuildRootfs(request, resolved);
+        if (status.IsError()) {
+            return status;
+        }
+        effectiveInfo.mutable_container()->set_runtime(resolved.runtime());
+    }
+    // Preserve the request's template baseline for Build/IsTemplateCompatible.
+    // Runtime state must describe the resolved backend used by this instance.
+    stateManager_.Register(SandboxInfo{runtimeID, {}, {}, {}, effectiveInfo});
+    return Status::OK();
 }
 
 void SandboxdExecutor::ApplyRuntimeControlEnvironment(runtime::v1::StartRequest &request) const
@@ -863,7 +886,12 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartBySnapsh
 {
     const auto &request = context.request;
     const auto &info         = request->runtimeinstanceinfo();
-    const auto &runtimeClass = info.container().runtime();
+    runtime::v1::StartRequest resolved;
+    const auto status = SandboxdRequestBuilder{cmdBuilder_}.BuildRootfs(request, resolved);
+    if (status.IsError()) {
+        return GenFailStartInstanceResponse(request, status.StatusCode(), status.RawMessage());
+    }
+    const auto &runtimeClass = resolved.runtime();
     const auto capability = runtimeCapabilities_.find(runtimeClass);
     if (!availableRuntimesInitialized_ || runtimeClass.empty()
         || capability == runtimeCapabilities_.end()
@@ -1527,6 +1555,7 @@ litebus::Future<messages::SnapshotRuntimeResponse> SandboxdExecutor::SnapshotRun
     messages::SnapshotRuntimeResponse response;
     response.set_requestid(request->requestid());
     response.mutable_snapshotinfo()->set_checkpointid(request->snapshotid());
+    response.set_checkpointnotstarted(true);
 
     auto sandbox = stateManager_.Find(request->runtimeid());
     if (!sandbox.has_value() || sandbox->sandboxID.empty()) {
@@ -1550,6 +1579,7 @@ litebus::Future<messages::SnapshotRuntimeResponse> SandboxdExecutor::SnapshotRun
         response.set_message(planStatus.RawMessage());
         return response;
     }
+    response.set_checkpointnotstarted(false);
     return ckptOrch_->CheckpointLocal(plan)
         .Then(litebus::Defer(GetAID(),
             [this, request, response, sandboxID = sandbox->sandboxID](

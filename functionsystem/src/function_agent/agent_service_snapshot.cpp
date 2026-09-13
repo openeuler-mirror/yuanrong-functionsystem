@@ -121,6 +121,7 @@ void AgentServiceActor::SnapshotRuntime(const litebus::AID &from, std::string &&
     // Prepare response
     messages::SnapshotRuntimeResponse response;
     response.set_requestid(request->requestid());
+    response.set_checkpointnotstarted(true);
 
     if (from != localSchedFuncAgentMgrAID_) {
         YRLOG_WARN("{}|reject SnapshotRuntime from untrusted sender {}",
@@ -179,6 +180,7 @@ void AgentServiceActor::SnapshotRuntime(const litebus::AID &from, std::string &&
         }
         response.set_code(static_cast<int32_t>(StatusCode::PARAMETER_ERROR));
         response.set_message("conflicting in-flight snapshot request ID");
+        response.set_checkpointnotstarted(false);
         Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
         return;
     }
@@ -226,6 +228,7 @@ void AgentServiceActor::SnapshotRuntime(const litebus::AID &from, std::string &&
     if (!snapshotRequests_.emplace(request->requestid(), std::move(pending)).second) {
         response.set_code(static_cast<int32_t>(StatusCode::PARAMETER_ERROR));
         response.set_message("duplicate in-flight snapshot request ID");
+        response.set_checkpointnotstarted(false);
         Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
         return;
     }
@@ -244,6 +247,7 @@ void AgentServiceActor::SnapshotRuntime(const litebus::AID &from, std::string &&
         CopyLocalSnapshotMetadata(descriptor, stored.localSnapshot);
         stored.createdAtUnixSeconds = descriptor.createdAtUnixSeconds;
         response.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
+        response.set_checkpointnotstarted(false);
         response.mutable_snapshotinfo()->set_checkpointid(descriptor.snapshotID);
         response.mutable_snapshotinfo()->set_size(static_cast<int64_t>(descriptor.size));
         ContinueSnapshotAfterLocalCommit(request->requestid(), std::move(response));
