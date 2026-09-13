@@ -97,6 +97,63 @@ std::shared_ptr<runtime::v1::StartRequest> BuildRuntimeOverlayStartRequest(
     return start;
 }
 
+TEST(SandboxdExecutorTest, EffectiveRuntimeIsStoredWithoutChangingTheServiceTemplate)
+{
+    SandboxdExecutor executor("effective-runtime", litebus::AID(), "/tmp/effective-runtime-checkpoints");
+    auto request = std::make_shared<messages::StartInstanceRequest>();
+    auto *info = request->mutable_runtimeinstanceinfo();
+    info->set_runtimeid("effective-runtime");
+    info->mutable_container()->set_runtime("runsc");
+    info->mutable_container()->mutable_rootfsconfig()->set_type(runtime::v1::RootfsSrcType::LOCAL);
+    info->mutable_container()->mutable_rootfsconfig()->set_path("/rootfs.img");
+    (*info->mutable_deploymentconfig()->mutable_deployoptions())["rootfs"] = R"({"runtime":"firecracker"})";
+    ASSERT_TRUE(executor.ResolveAndRegisterRuntime(request).IsOk());
+    ASSERT_TRUE(executor.stateManager_.Find(info->runtimeid()).has_value());
+    EXPECT_EQ(executor.stateManager_.Find(info->runtimeid())->instanceInfo.container().runtime(), "firecracker");
+    EXPECT_EQ(info->container().runtime(), "runsc");
+
+    auto capabilities = RuntimeCapabilities();
+    capabilities->mutable_runtimes()->DeleteSubrange(0, 1); // Only Firecracker is registered.
+    ASSERT_TRUE(executor.OnListAvailableRuntimes(capabilities, Status::OK()).IsOk());
+    executor.stateManager_.UpdateSandboxID(info->runtimeid(), "sandbox");
+    executor.ckptOrch_ = std::make_shared<SandboxdCheckpointOrchestrator>(nullptr);
+    auto snapshot = std::make_shared<messages::SnapshotRuntimeRequest>();
+    snapshot->set_runtimeid(info->runtimeid());
+    snapshot->set_snapshotid("checkpoint");
+    // An invalid directory must reach plan validation, past the capability gate.
+    auto response = executor.SnapshotRuntime(snapshot);
+    ASSERT_TRUE(response.IsOK());
+    EXPECT_NE(response.Get().message().find("directory"), std::string::npos);
+    EXPECT_TRUE(response.Get().checkpointnotstarted());
+
+    SandboxdExecutor::SandboxdStartContext context;
+    context.request = request;
+    info->set_restoresnapshotid("missing-checkpoint");
+    auto restore = executor.StartBySnapshot(context);
+    ASSERT_TRUE(restore.IsOK());
+    EXPECT_NE(restore.Get().message().find("not an existing directory"), std::string::npos);
+}
+
+TEST(SandboxdExecutorTest, UnsupportedEffectiveRuntimeRejectsBeforeCheckpointRpc)
+{
+    SandboxdExecutor executor("unsupported-runtime", litebus::AID(), "/tmp/unsupported-runtime-checkpoints");
+    messages::RuntimeInstanceInfo info;
+    info.set_runtimeid("unsupported-runtime");
+    info.mutable_container()->set_runtime("runsc");
+    executor.stateManager_.Register(SandboxInfo{info.runtimeid(), "sandbox", {}, {}, info, {}});
+    executor.ckptOrch_ = std::make_shared<SandboxdCheckpointOrchestrator>(nullptr);
+    auto capabilities = RuntimeCapabilities();
+    capabilities->mutable_runtimes()->DeleteSubrange(0, 1);
+    ASSERT_TRUE(executor.OnListAvailableRuntimes(capabilities, Status::OK()).IsOk());
+    auto request = std::make_shared<messages::SnapshotRuntimeRequest>();
+    request->set_runtimeid(info.runtimeid());
+    auto response = executor.SnapshotRuntime(request);
+    ASSERT_TRUE(response.IsOK());
+    EXPECT_EQ(response.Get().code(), StatusCode::RUNTIME_MANAGER_CHECKPOINT_FAILED);
+    EXPECT_TRUE(response.Get().checkpointnotstarted());
+    EXPECT_FALSE(response.Get().resultunknown());
+}
+
 // ── SandboxdExecutor static helpers ───────────────────────────────────────────
 
 TEST(SandboxdExecutorTest, ParseForwardPortsParsesPortForwardings)

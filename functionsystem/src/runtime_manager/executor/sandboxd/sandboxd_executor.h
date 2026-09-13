@@ -222,6 +222,7 @@ protected:
     }
 
 private:
+    Status ResolveAndRegisterRuntime(const std::shared_ptr<messages::StartInstanceRequest> &request);
     void ApplyRuntimeControlEnvironment(runtime::v1::StartRequest &request) const;
     void ApplyRuntimeControlEnvironment(
         const std::string &runtimeClass,

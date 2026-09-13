@@ -215,6 +215,8 @@ public:
         messages::SnapshotRuntimeResponse response;
         response.set_requestid(requestID);
         response.set_code(anonymousCode_);
+        response.set_checkpointnotstarted(anonymousNotStarted_);
+        response.set_resultunknown(anonymousResultUnknown_);
         response.set_message(anonymousCode_ == common::ERR_NONE ? "" : "anonymous checkpoint failed");
         if (anonymousCode_ == common::ERR_NONE) {
             auto *snapshot = response.mutable_localsnapshot();
@@ -227,9 +229,12 @@ public:
         return response;
     }
 
-    void ConfigureAnonymousCheckpoint(int32_t code, std::vector<std::string> *operations)
+    void ConfigureAnonymousCheckpoint(int32_t code, std::vector<std::string> *operations,
+                                      bool notStarted = false, bool resultUnknown = false)
     {
         anonymousCode_ = code;
+        anonymousNotStarted_ = notStarted;
+        anonymousResultUnknown_ = resultUnknown;
         operations_ = operations;
     }
 
@@ -531,6 +536,8 @@ private:
     std::string pauseRequestID_;
     std::string anonymousSnapshotID_;
     int32_t anonymousCode_ { common::ERR_NONE };
+    bool anonymousNotStarted_ { false };
+    bool anonymousResultUnknown_ { false };
     std::string pauseSnapshotID_;
     std::vector<std::string> pauseSnapshotIDs_;
     std::vector<runtime::v1::SandboxState> pausePhysicalStates_;
@@ -918,6 +925,40 @@ TEST_F(SnapCtrlActorPauseContextTest, AnonymousCheckpointFailureStillCallsSnapSt
     EXPECT_EQ(snapshotRuntimeProbe_->AnonymousCalls(), 1);
     EXPECT_EQ(prepareClient_->SnapStartedCalls(), 1);
     EXPECT_EQ(stateMachine_->GetInstanceState(), InstanceState::RUNNING);
+}
+
+TEST_F(SnapCtrlActorPauseContextTest, AnonymousCheckpointEarlyRejectionReturnsWithoutSnapStarted)
+{
+    snapshotRuntimeProbe_->ConfigureAnonymousCheckpoint(
+        StatusCode::RUNTIME_MANAGER_CHECKPOINT_FAILED, nullptr, true);
+    prepareClient_->ConfigureSnapStarted(common::ERR_NONE, nullptr);
+    auto request = litebus::Async(
+        actor_->GetAID(), &SnapCtrlActor::HandleAnonymousCheckpoint,
+        std::string("anonymous-early-rejection"), std::string(INSTANCE_ID), uint64_t{0});
+    requests_.emplace_back(request);
+    ASSERT_AWAIT_TRUE_FOR([this]() { return prepareClient_->PrepareCalls() == 1; }, 5'000);
+    prepareClient_->Complete(MakePrepareResponse(common::ERR_NONE, ""));
+    ASSERT_AWAIT_READY_FOR(request, 5'000);
+    EXPECT_EQ(request.Get().code(), Status::GetPosixErrorCode(StatusCode::RUNTIME_MANAGER_CHECKPOINT_FAILED));
+    EXPECT_EQ(request.Get().message(), "anonymous checkpoint failed");
+    EXPECT_TRUE(request.Get().checkpointnotstarted());
+    EXPECT_EQ(prepareClient_->SnapStartedCalls(), 0);
+    EXPECT_EQ(stateMachine_->GetInstanceState(), InstanceState::RUNNING);
+}
+
+TEST_F(SnapCtrlActorPauseContextTest, AnonymousCheckpointUnknownResultCannotAbortHandoff)
+{
+    snapshotRuntimeProbe_->ConfigureAnonymousCheckpoint(common::ERR_INNER_COMMUNICATION, nullptr, true, true);
+    prepareClient_->ConfigureSnapStarted(common::ERR_NONE, nullptr);
+    auto request = litebus::Async(
+        actor_->GetAID(), &SnapCtrlActor::HandleAnonymousCheckpoint,
+        std::string("anonymous-unknown-result"), std::string(INSTANCE_ID), uint64_t{0});
+    requests_.emplace_back(request);
+    ASSERT_AWAIT_TRUE_FOR([this]() { return prepareClient_->PrepareCalls() == 1; }, 5'000);
+    prepareClient_->Complete(MakePrepareResponse(common::ERR_NONE, ""));
+    ASSERT_AWAIT_READY_FOR(request, 5'000);
+    EXPECT_FALSE(request.Get().checkpointnotstarted());
+    EXPECT_EQ(prepareClient_->SnapStartedCalls(), 1);
 }
 
 TEST_F(SnapCtrlActorPauseContextTest, AnonymousCheckpointRetriesSnapStartedAfterStreamReconnect)

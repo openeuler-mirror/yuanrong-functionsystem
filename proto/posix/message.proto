@@ -1408,6 +1408,9 @@ message SnapshotRuntimeResponse {
   SandboxPhysicalFact physicalFact = 6;
   SnapshotArtifact reusableSnapshotArtifact = 9;
   LocalSnapshotMetadata localSnapshot = 10;
+  // True only for a definitive rejection before the checkpoint RPC was sent.
+  // False includes older peers and unknown or already-started operations.
+  bool checkpointNotStarted = 11;
 }
 
 // Internal-only physical facts returned by sandboxd List reconciliation.
