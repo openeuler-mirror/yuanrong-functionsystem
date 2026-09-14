@@ -1318,6 +1318,9 @@ private:
         std::shared_ptr<messages::ScheduleRequest> request;
         std::shared_ptr<ControlInterfacePosixClient> candidateClient;
         std::shared_ptr<litebus::Promise<Status>> completion;
+        bool cleanupStarted = false;
+        uint32_t cleanupRetryDelayMs = 1000;
+        litebus::Timer cleanupRetryTimer;
     };
     std::unordered_map<std::string, std::shared_ptr<LocalSnapshotRecoveryContext>> localSnapshotRecoveries_;
 
@@ -1346,6 +1349,8 @@ private:
     void FailLocalSnapshotRecovery(
         const std::shared_ptr<LocalSnapshotRecoveryContext> &context,
         const Status &status, bool cleanupCandidate);
+    void CleanLocalSnapshotCandidate(
+        const std::shared_ptr<LocalSnapshotRecoveryContext> &context, const Status &status);
     void OnLocalSnapshotCandidateCleaned(
         const std::shared_ptr<LocalSnapshotRecoveryContext> &context,
         const Status &status, const litebus::Future<Status> &future);

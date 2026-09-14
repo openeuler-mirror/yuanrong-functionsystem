@@ -328,6 +328,10 @@ InstanceCtrlActor::InstanceCtrlActor(const std::string &name, const std::string 
 
 InstanceCtrlActor::~InstanceCtrlActor()
 {
+    for (const auto &[instanceID, context] : localSnapshotRecoveries_) {
+        (void)litebus::TimerTools::Cancel(context->cleanupRetryTimer);
+        context->cleanupRetryTimer = litebus::Timer();
+    }
     if (instanceControlView_ && observer_) {
         observer_->Detach(instanceControlView_);
     }
@@ -4941,6 +4945,9 @@ void InstanceCtrlActor::OnLocalSnapshotDeployed(
     candidate->set_runtimeaddress(response.address());
     candidate->set_containerid(response.containerid());
     candidate->set_containerip(response.containerip());
+    candidate->set_sandboxid(response.sandboxid());
+    candidate->set_sandboxip(response.sandboxip());
+    candidate->set_nodeproxyaddress(config_.nodeProxyAddress);
     candidate->set_executortype(response.executortype());
     candidate->set_starttime(response.timeinfo());
     candidate->set_proxygrpcaddress(config_.proxyGrpcAddress);
@@ -4989,6 +4996,14 @@ void InstanceCtrlActor::OnLocalSnapshotStarted(
         FailLocalSnapshotRecovery(
             context, Status(StatusCode::SCHEDULE_CONFLICTED,
                             "local snapshot recovery source changed before commit"), true);
+        return;
+    }
+    // The source route was retired before restore. Activate the new workload
+    // before publishing RUNNING so data-plane callers can reach this runtime.
+    auto routeStatus = SetDataPlaneRoute(
+        context->request->instance(), data_plane_gateway_activity::DATA_PLANE_GATEWAY_ROUTE_STATE_ACTIVE);
+    if (routeStatus.IsError()) {
+        FailLocalSnapshotRecovery(context, routeStatus, true);
         return;
     }
     // A restored gVisor transport can retain checkpoint-era TCP state even
@@ -5044,24 +5059,63 @@ void InstanceCtrlActor::FailLocalSnapshotRecovery(
     const std::shared_ptr<LocalSnapshotRecoveryContext> &context,
     const Status &status, bool cleanupCandidate)
 {
+    const auto active = localSnapshotRecoveries_.find(context->source.instanceid());
+    if (active == localSnapshotRecoveries_.end() || active->second != context || context->cleanupStarted) {
+        return;
+    }
     if (cleanupCandidate && context->request != nullptr
         && !context->request->instance().runtimeid().empty()
         && context->request->instance().runtimeid() != context->source.runtimeid()) {
-        KillRuntime(context->request->instance(), true).OnComplete(litebus::Defer(
-            GetAID(), &InstanceCtrlActor::OnLocalSnapshotCandidateCleaned,
-            context, status, std::placeholders::_1));
+        context->cleanupStarted = true;
+        CleanLocalSnapshotCandidate(context, status);
         return;
     }
     CompleteLocalSnapshotRecovery(context, status);
+}
+
+void InstanceCtrlActor::CleanLocalSnapshotCandidate(
+    const std::shared_ptr<LocalSnapshotRecoveryContext> &context, const Status &status)
+{
+    const auto active = localSnapshotRecoveries_.find(context->source.instanceid());
+    if (active == localSnapshotRecoveries_.end() || active->second != context) {
+        return;
+    }
+    const auto &candidate = context->request->instance();
+    auto retired = SetDataPlaneRoute(candidate, data_plane_gateway_activity::DATA_PLANE_GATEWAY_ROUTE_STATE_RETIRED);
+    if (retired.IsError()) {
+        OnLocalSnapshotCandidateCleaned(context, status, litebus::Future<Status>(retired));
+        return;
+    }
+    // Generic KillRuntime preserves legacy success semantics even when the agent rejects the kill.
+    // Candidate cleanup must confirm termination before dropping its recovery ownership.
+    SendKillRequestToAgent(candidate, true, false)
+        .Then([](const messages::KillInstanceResponse &response) {
+            if (response.code() == static_cast<int32_t>(StatusCode::SUCCESS)
+                || response.code() == static_cast<int32_t>(StatusCode::RUNTIME_MANAGER_RUNTIME_PROCESS_NOT_FOUND)) {
+                return Status::OK();
+            }
+            return Status(static_cast<StatusCode>(response.code()), response.message());
+        })
+        .OnComplete(litebus::Defer(GetAID(), &InstanceCtrlActor::OnLocalSnapshotCandidateCleaned,
+                                  context, status, std::placeholders::_1));
 }
 
 void InstanceCtrlActor::OnLocalSnapshotCandidateCleaned(
     const std::shared_ptr<LocalSnapshotRecoveryContext> &context,
     const Status &status, const litebus::Future<Status> &future)
 {
+    const auto active = localSnapshotRecoveries_.find(context->source.instanceid());
+    if (active == localSnapshotRecoveries_.end() || active->second != context) {
+        return;
+    }
     if (future.IsError() || future.Get().IsError()) {
-        YRLOG_WARN("{}|failed to clean local snapshot recovery candidate",
-                   context->source.instanceid());
+        YRLOG_WARN("{}|failed to clean local snapshot recovery candidate({}), retry in {} ms",
+                   context->source.instanceid(), context->request->instance().runtimeid(), context->cleanupRetryDelayMs);
+        context->cleanupRetryTimer = litebus::AsyncAfter(
+            context->cleanupRetryDelayMs, GetAID(), &InstanceCtrlActor::CleanLocalSnapshotCandidate, context, status);
+        constexpr uint32_t maxRetryDelayMs = 30000;
+        context->cleanupRetryDelayMs = std::min(context->cleanupRetryDelayMs * 2, maxRetryDelayMs);
+        return;
     }
     CompleteLocalSnapshotRecovery(context, status);
 }
@@ -5074,6 +5128,9 @@ void InstanceCtrlActor::CompleteLocalSnapshotRecovery(
     if (active == localSnapshotRecoveries_.end() || active->second != context) {
         return;
     }
+    (void)litebus::TimerTools::Cancel(context->cleanupRetryTimer);
+    // The timer handle itself retains its callback and therefore the context.
+    context->cleanupRetryTimer = litebus::Timer();
     localSnapshotRecoveries_.erase(active);
     if (status.IsOk()) {
         YRLOG_INFO("{}|instance({}) local snapshot({}) failover completed from runtime({}) to runtime({})",

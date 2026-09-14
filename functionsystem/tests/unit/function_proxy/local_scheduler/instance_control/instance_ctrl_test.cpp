@@ -14,6 +14,12 @@
  * limitations under the License.
  */
 #include <atomic>
+#include <arpa/inet.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <thread>
+#include <unistd.h>
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -527,6 +533,8 @@ protected:
                 response.set_runtimeid("runtime-new");
                 response.set_address(address);
                 response.set_containerid("container-new");
+                response.set_sandboxid("sandbox-new");
+                response.set_sandboxip("10.0.0.2");
                 response.set_executortype(static_cast<int32_t>(EXECUTOR_TYPE::SANDBOXD));
                 return litebus::Future<messages::DeployInstanceResponse>(response);
             }));
@@ -538,6 +546,13 @@ protected:
         EXPECT_CALL(*recoveryClient_, SnapStarted(_)).WillOnce(Return(started));
         EXPECT_CALL(*recoveryStateMachine_, TransitionToImpl(InstanceState::RUNNING, 7, _, true, _))
             .WillOnce(Invoke([this, address](const InstanceState &, int64_t, const std::string &, bool, int32_t) {
+                const auto &candidate = instanceCtrl_->instanceCtrlActor_->localSnapshotRecoveries_
+                    .at("sandbox-a")->request->instance();
+                EXPECT_EQ(candidate.sandboxid(), "sandbox-new");
+                EXPECT_EQ(candidate.sandboxip(), "10.0.0.2");
+                recoveryInfo_->set_sandboxid(candidate.sandboxid());
+                recoveryInfo_->set_sandboxip(candidate.sandboxip());
+                recoveryInfo_->set_nodeproxyaddress(candidate.nodeproxyaddress());
                 recoveryInfo_->set_runtimeid("runtime-new");
                 recoveryInfo_->set_runtimeaddress(address);
                 recoveryInfo_->set_containerid("container-new");
@@ -554,11 +569,121 @@ protected:
         EXPECT_CALL(*recoveryClient_, Heartbeat(_)).WillRepeatedly(Return(Status::OK()));
     }
 
+    std::shared_ptr<InstanceCtrlActor::LocalSnapshotRecoveryContext> SeedReloadCandidate()
+    {
+        SeedRunningLocalFailover(false);
+        auto context = std::make_shared<InstanceCtrlActor::LocalSnapshotRecoveryContext>();
+        context->source = *recoveryInfo_;
+        context->request = std::make_shared<messages::ScheduleRequest>(*recoveryRequest_);
+        auto *candidate = context->request->mutable_instance();
+        candidate->set_runtimeid("runtime-new");
+        candidate->set_sandboxid("sandbox-new");
+        candidate->set_sandboxip("10.0.0.2");
+        candidate->set_nodeproxyaddress("127.0.0.1:9443");
+        context->candidateClient = std::make_shared<MockSharedClient>();
+        context->completion = std::make_shared<litebus::Promise<Status>>();
+        instanceCtrl_->instanceCtrlActor_->localSnapshotRecoveries_["sandbox-a"] = context;
+        EXPECT_CALL(*recoveryStateMachine_, TransitionToImpl).Times(0);
+        return context;
+    }
+
     std::shared_ptr<messages::ScheduleRequest> recoveryRequest_;
     std::shared_ptr<resources::InstanceInfo> recoveryInfo_;
     std::shared_ptr<InstanceContext> recoveryContext_;
     std::shared_ptr<MockInstanceStateMachine> recoveryStateMachine_;
     std::shared_ptr<MockSharedClient> recoveryClient_;
+};
+
+// Exercise the actual route-control wire path, including activation rejection.
+class LocalRecoveryRouteServer {
+public:
+    explicit LocalRecoveryRouteServer(bool rejectActive = false) : rejectActive_(rejectActive)
+    {
+        path_ = "/tmp/reload-route-" + litebus::uuid_generator::UUID::GetRandomUUID().ToString();
+    }
+    ~LocalRecoveryRouteServer()
+    {
+        stopped_ = true;
+        if (worker_.joinable()) {
+            worker_.join();
+        }
+        if (fd_ >= 0) {
+            close(fd_);
+            unlink(path_.c_str());
+        }
+    }
+
+    bool Start()
+    {
+        fd_ = socket(AF_UNIX, SOCK_STREAM, 0);
+        sockaddr_un address{};
+        address.sun_family = AF_UNIX;
+        std::copy(path_.begin(), path_.end(), address.sun_path);
+        if (fd_ < 0 || bind(fd_, reinterpret_cast<sockaddr *>(&address), sizeof(address)) != 0
+            || listen(fd_, 4) != 0) {
+            return false;
+        }
+        worker_ = std::thread([this] {
+            while (!stopped_) {
+                pollfd event{fd_, POLLIN, 0};
+                if (poll(&event, 1, 100) <= 0) {
+                    continue;
+                }
+                int client = accept(fd_, nullptr, nullptr);
+                if (client < 0) {
+                    continue;
+                }
+                timeval timeout{2, 0};
+                setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+                uint32_t size = 0;
+                if (recv(client, &size, sizeof(size), MSG_WAITALL) != sizeof(size)
+                    || ntohl(size) > 65536) {
+                    close(client);
+                    continue;
+                }
+                std::string payload(ntohl(size), '\0');
+                data_plane_gateway_activity::DataPlaneGatewaySetRouteRequest request;
+                if (recv(client, payload.data(), payload.size(), MSG_WAITALL)
+                        != static_cast<ssize_t>(payload.size()) || !request.ParseFromString(payload)) {
+                    close(client);
+                    continue;
+                }
+                EXPECT_EQ(request.instance_id(), "sandbox-a");
+                data_plane_gateway_activity::DataPlaneGatewaySetRouteResponse response;
+                if (request.state() == data_plane_gateway_activity::DATA_PLANE_GATEWAY_ROUTE_STATE_ACTIVE) {
+                    EXPECT_EQ(request.workload_id(), "sandbox-new");
+                    EXPECT_EQ(request.sandbox_ip(), "10.0.0.2");
+                    if (rejectActive_) {
+                        response.set_code(1);
+                        response.set_message("activation rejected");
+                    }
+                    ++activeRequests;
+                } else {
+                    ++retiredRequests;
+                }
+                response.SerializeToString(&payload);
+                size = htonl(static_cast<uint32_t>(payload.size()));
+                EXPECT_EQ(send(client, &size, sizeof(size), MSG_NOSIGNAL), sizeof(size));
+                if (!payload.empty()) {
+                    EXPECT_EQ(send(client, payload.data(), payload.size(), MSG_NOSIGNAL),
+                              static_cast<ssize_t>(payload.size()));
+                }
+                close(client);
+            }
+        });
+        return true;
+    }
+
+    const std::string &Path() const { return path_; }
+    std::atomic<int> activeRequests{0};
+    std::atomic<int> retiredRequests{0};
+
+private:
+    bool rejectActive_;
+    std::atomic<bool> stopped_{false};
+    int fd_ = -1;
+    std::string path_;
+    std::thread worker_;
 };
 
 TEST_F(InstanceCtrlTest, WaitAndHeartbeatShareOneLocalFailover)
@@ -753,6 +878,170 @@ TEST_F(InstanceCtrlTest, ReloadKillsSourceAndUsesAutomaticRecoveryPath)
     EXPECT_EQ(response.Get().code(), common::ERR_NONE);
     EXPECT_EQ(recoveryInfo_->runtimeid(), "runtime-new");
     EXPECT_EQ(recoveryInfo_->instancestatus().code(), static_cast<int32_t>(InstanceState::RUNNING));
+}
+
+TEST_F(InstanceCtrlTest, ReloadActivatesRestoredWorkloadBeforePublishingRunning)
+{
+    LocalRecoveryRouteServer routes;
+    ASSERT_TRUE(routes.Start());
+    SeedRunningLocalFailover(false);
+    recoveryInfo_->set_sandboxid("sandbox-old");
+    recoveryInfo_->set_sandboxip("10.0.0.1");
+    recoveryInfo_->set_nodeproxyaddress("127.0.0.1:9443");
+    auto actor = instanceCtrl_->instanceCtrlActor_;
+    actor->config_.nodeProxyAddress = "127.0.0.1:9443";
+    actor->config_.nodeProxyRouteControlUds = routes.Path();
+    EXPECT_CALL(*funcAgentMgr_, LatestAnonymousSnapshot("sandbox-a"))
+        .WillOnce(Return(std::optional<messages::LocalSnapshotMetadata>(LocalFailoverSnapshot())));
+    ExpectSuccessfulLocalFailover();
+    EXPECT_CALL(*recoveryStateMachine_, ExecuteStateChangeCallback(_, InstanceState::RUNNING))
+        .WillRepeatedly(Invoke([&routes](const std::string &, const InstanceState &) {
+            EXPECT_EQ(routes.activeRequests.load(), 1);
+        }));
+    auto request = GenKillRequest("sandbox-a", INSTANCE_RELOAD_SIGNAL);
+    request->set_requestid("reload-data-plane");
+    auto response = instanceCtrl_->KillFrontend("tenant-a", request);
+    ASSERT_AWAIT_READY(response);
+    EXPECT_EQ(response.Get().code(), common::ERR_NONE);
+    EXPECT_EQ(routes.retiredRequests.load(), 1);
+    EXPECT_EQ(routes.activeRequests.load(), 1);
+    EXPECT_EQ(recoveryInfo_->sandboxid(), "sandbox-new");
+    EXPECT_EQ(recoveryInfo_->sandboxip(), "10.0.0.2");
+    EXPECT_EQ(recoveryInfo_->nodeproxyaddress(), "127.0.0.1:9443");
+}
+
+TEST_F(InstanceCtrlTest, ReloadActivationFailureDoesNotPublishRunningAndCleansCandidate)
+{
+    LocalRecoveryRouteServer routes(true);
+    ASSERT_TRUE(routes.Start());
+    SeedRunningLocalFailover(false);
+    auto actor = instanceCtrl_->instanceCtrlActor_;
+    actor->config_.nodeProxyRouteControlUds = routes.Path();
+    auto context = std::make_shared<InstanceCtrlActor::LocalSnapshotRecoveryContext>();
+    context->source = *recoveryInfo_;
+    context->request = std::make_shared<messages::ScheduleRequest>(*recoveryRequest_);
+    auto *candidate = context->request->mutable_instance();
+    candidate->set_runtimeid("runtime-new");
+    candidate->set_sandboxid("sandbox-new");
+    candidate->set_sandboxip("10.0.0.2");
+    candidate->set_nodeproxyaddress("127.0.0.1:9443");
+    context->candidateClient = std::make_shared<MockSharedClient>();
+    context->completion = std::make_shared<litebus::Promise<Status>>();
+    actor->localSnapshotRecoveries_["sandbox-a"] = context;
+    EXPECT_CALL(*recoveryStateMachine_, TransitionToImpl).Times(0);
+    EXPECT_CALL(*mockSharedClientManagerProxy_, DeleteClient("sandbox-a"))
+        .WillOnce(Return(Status::OK()));
+    EXPECT_CALL(*funcAgentMgr_, KillInstance(_, "agent-a", true))
+        .WillOnce(Return(GenKillInstanceResponse(StatusCode::SUCCESS, "killed", "cleanup")));
+    runtime::SnapStartedResponse started;
+    started.set_code(common::ERR_NONE);
+    litebus::Async(actor->GetAID(), &InstanceCtrlActor::OnLocalSnapshotStarted,
+                   context, litebus::Future<runtime::SnapStartedResponse>(started));
+    auto result = context->completion->GetFuture();
+    ASSERT_AWAIT_READY(result);
+    EXPECT_TRUE(result.Get().IsError());
+    EXPECT_EQ(result.Get().RawMessage(), "activation rejected");
+    EXPECT_EQ(routes.activeRequests.load(), 1);
+    EXPECT_EQ(routes.retiredRequests.load(), 1);
+    EXPECT_EQ(recoveryInfo_->runtimeid(), "runtime-old");
+    EXPECT_TRUE(actor->localSnapshotRecoveries_.empty());
+}
+
+TEST_F(InstanceCtrlTest, ReloadCleanupRetriesAfterNodeProxyUnavailable)
+{
+    LocalRecoveryRouteServer routes;
+    auto context = SeedReloadCandidate();
+    auto actor = instanceCtrl_->instanceCtrlActor_;
+    actor->config_.nodeProxyRouteControlUds = routes.Path();
+    EXPECT_CALL(*mockSharedClientManagerProxy_, DeleteClient("sandbox-a")).WillOnce(Return(Status::OK()));
+    EXPECT_CALL(*funcAgentMgr_, KillInstance(_, "agent-a", true))
+        .WillOnce(Invoke([&routes](const std::shared_ptr<messages::KillInstanceRequest> &request,
+                                 const std::string &, bool) {
+            EXPECT_EQ(request->runtimeid(), "runtime-new");
+            EXPECT_EQ(routes.retiredRequests.load(), 1);
+            return litebus::Future<messages::KillInstanceResponse>(
+                GenKillInstanceResponse(StatusCode::SUCCESS, "killed", "cleanup"));
+        }));
+    runtime::SnapStartedResponse started;
+    started.set_code(common::ERR_NONE);
+    auto invoked = litebus::Async(actor->GetAID(), [actor, context, started] {
+        actor->OnLocalSnapshotStarted(context, litebus::Future<runtime::SnapStartedResponse>(started));
+        return true;
+    });
+    ASSERT_AWAIT_READY(invoked);
+    auto result = context->completion->GetFuture();
+    EXPECT_TRUE(result.IsInit());
+    EXPECT_EQ(actor->localSnapshotRecoveries_.at("sandbox-a"), context);
+    EXPECT_TRUE(context->cleanupStarted);
+    // No route server exists yet: activation and retirement both failed, without killing the candidate.
+    ASSERT_TRUE(routes.Start());
+    ASSERT_AWAIT_READY(result);
+    EXPECT_TRUE(result.Get().IsError());
+    EXPECT_EQ(recoveryInfo_->runtimeid(), "runtime-old");
+    EXPECT_TRUE(actor->localSnapshotRecoveries_.empty());
+    std::weak_ptr<InstanceCtrlActor::LocalSnapshotRecoveryContext> cleanupContext = context;
+    context.reset();
+    ASSERT_AWAIT_TRUE([&] { return cleanupContext.expired(); });
+}
+
+TEST_F(InstanceCtrlTest, ReloadCleanupRetriesKillFailuresUntilCandidateAbsent)
+{
+    LocalRecoveryRouteServer routes(true);
+    ASSERT_TRUE(routes.Start());
+    auto context = SeedReloadCandidate();
+    auto actor = instanceCtrl_->instanceCtrlActor_;
+    actor->config_.nodeProxyRouteControlUds = routes.Path();
+    litebus::Promise<messages::KillInstanceResponse> firstKill;
+    EXPECT_CALL(*mockSharedClientManagerProxy_, DeleteClient("sandbox-a"))
+        .Times(3).WillRepeatedly(Return(Status::OK()));
+    std::atomic<int> attempts{0};
+    EXPECT_CALL(*funcAgentMgr_, KillInstance(_, "agent-a", true))
+        .Times(3).WillRepeatedly(Invoke([&](const std::shared_ptr<messages::KillInstanceRequest> &request,
+                                          const std::string &, bool) {
+            EXPECT_EQ(request->runtimeid(), "runtime-new");
+            EXPECT_FALSE(request->deleteinstancesnapshots());
+            EXPECT_TRUE(context->completion->GetFuture().IsInit());
+            EXPECT_EQ(actor->localSnapshotRecoveries_.at("sandbox-a"), context);
+            auto attempt = ++attempts;
+            if (attempt == 1) {
+                return firstKill.GetFuture();
+            }
+            return litebus::Future<messages::KillInstanceResponse>(GenKillInstanceResponse(
+                attempt == 2 ? StatusCode::ERR_INNER_COMMUNICATION
+                             : StatusCode::RUNTIME_MANAGER_RUNTIME_PROCESS_NOT_FOUND,
+                "candidate cleanup", "cleanup"));
+        }));
+    runtime::SnapStartedResponse started;
+    started.set_code(common::ERR_NONE);
+    litebus::Async(actor->GetAID(), &InstanceCtrlActor::OnLocalSnapshotStarted,
+                   context, litebus::Future<runtime::SnapStartedResponse>(started));
+    ASSERT_AWAIT_TRUE([&] { return attempts.load() == 1; });
+    firstKill.SetFailed(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+    auto result = context->completion->GetFuture();
+    ASSERT_AWAIT_READY(result);
+    EXPECT_TRUE(result.Get().IsError());
+    EXPECT_EQ(result.Get().RawMessage(), "activation rejected");
+    EXPECT_EQ(attempts.load(), 3);
+    EXPECT_EQ(routes.retiredRequests.load(), 3);
+    EXPECT_TRUE(actor->localSnapshotRecoveries_.empty());
+}
+
+TEST_F(InstanceCtrlTest, ReloadCleanupIgnoresStaleContext)
+{
+    auto context = SeedReloadCandidate();
+    auto actor = instanceCtrl_->instanceCtrlActor_;
+    auto replacement = std::make_shared<InstanceCtrlActor::LocalSnapshotRecoveryContext>();
+    actor->localSnapshotRecoveries_["sandbox-a"] = replacement;
+    EXPECT_CALL(*funcAgentMgr_, KillInstance).Times(0);
+    const Status failed(StatusCode::ERR_INNER_COMMUNICATION, "cleanup failed");
+    auto callbacks = litebus::Async(actor->GetAID(), [actor, context, failed] {
+        actor->CleanLocalSnapshotCandidate(context, failed);
+        actor->OnLocalSnapshotCandidateCleaned(context, failed, litebus::Future<Status>(Status::OK()));
+        return true;
+    });
+    ASSERT_AWAIT_READY(callbacks);
+    EXPECT_EQ(actor->localSnapshotRecoveries_.at("sandbox-a"), replacement);
+    EXPECT_TRUE(context->completion->GetFuture().IsInit());
 }
 
 TEST_F(InstanceCtrlTest, ScheduleGetFuncMetaFailed)
