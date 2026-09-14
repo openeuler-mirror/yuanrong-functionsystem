@@ -19,6 +19,7 @@
 #include <sys/un.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cctype>
 #include <cstring>
 #include <sstream>
@@ -452,6 +453,9 @@ void ConchExecutor::BindHostLogDir(const std::string &runtimeID, nlohmann::json 
 //      accepted; any of the supervisor keys here would yield a 400.
 //      Guest env (JIUWENSWARM_HOME + posixenvs) goes to policy.conch.env, which
 //      merge_conch_create_env merges with the create-API env override.
+//   5. Runtime resources (runtimeconfig.resources, CPU in milli-cores / Memory in MB)
+//      map to policy.conch.vcpu_num / ram_mb so conch doesn't fall back to its
+//      2-vCPU/2048MB default; omitted when absent or non-positive.
 nlohmann::json ConchExecutor::CreateRequest(const std::shared_ptr<messages::StartInstanceRequest> &request)
 {
     const auto &info = request->runtimeinstanceinfo();
@@ -482,6 +486,25 @@ nlohmann::json ConchExecutor::CreateRequest(const std::shared_ptr<messages::Star
     conch["env"] = nlohmann::json::object({ { "JIUWENSWARM_HOME", homeDir } });
     for (const auto &kv : info.runtimeconfig().posixenvs()) {
         conch["env"][kv.first] = kv.second;
+    }
+
+    // VM resources: scheduling carries CPU in milli-cores and Memory in MB (same source
+    // supervisor_executor::BuildCgroup / docker_executor::BuildResources read). ConchPolicy
+    // takes vcpu_num / ram_mb as integers >= 1 (vcpu_max omitted: jiuwenbox requires it to
+    // be >= vcpu_num and the frontend has no separate max concept), so milli-cores round up
+    // to whole vCPUs (a sub-core request still gets 1) and memory rounds up to whole MB.
+    const auto &runtimeResources = info.runtimeconfig().resources().resources();
+    if (auto cpuIt = runtimeResources.find(resource_view::CPU_RESOURCE_NAME); cpuIt != runtimeResources.end()) {
+        const double cpuVal = Executor::GetEffectiveScalarLimit(cpuIt->second, 0);
+        if (cpuVal > 0) {
+            conch["vcpu_num"] = std::max(1, static_cast<int>(std::ceil(cpuVal / CPU_MILLICORES_PER_CORE)));
+        }
+    }
+    if (auto memIt = runtimeResources.find(resource_view::MEMORY_RESOURCE_NAME); memIt != runtimeResources.end()) {
+        const double memVal = Executor::GetEffectiveScalarLimit(memIt->second, 0);
+        if (memVal > 0) {
+            conch["ram_mb"] = static_cast<int64_t>(std::ceil(memVal));
+        }
     }
 
     nlohmann::json policy = nlohmann::json::object();
