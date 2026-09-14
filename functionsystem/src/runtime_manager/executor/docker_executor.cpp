@@ -74,6 +74,11 @@ constexpr int64_t BYTES_PER_MB = 1024 * 1024;    // Docker Memory is in bytes; i
 constexpr int64_t NANOCPUS_PER_MILLICORE = 1000000;  // 1 milli-core = 1000000 NanoCpus
 constexpr int DEFAULT_PIDS_LIMIT = 4096;             // Max processes per container
 
+// Label key carrying the instance_id on containers created by this executor, for structured
+// lookup (docker ps --filter label=yr.instance-id=<X>). Mirrors runtime-launcher's
+// yr.runtime-id convention.
+constexpr char INSTANCE_ID_LABEL_KEY[] = "yr.instance-id";
+
 
 DockerExecutor::DockerExecutor(const std::string &name, const litebus::AID &functionAgentAID)
     : Executor(name), functionAgentAID_(functionAgentAID)
@@ -691,6 +696,11 @@ nlohmann::json DockerExecutor::BuildCreateContainerRequest(const ContainerCreate
     if (!spec.user.empty()) {
         req["User"] = spec.user;
     }
+    // Label mirrors the container name for structured lookup: exact key-value match
+    // (no prefix false-positives) and survives name-charset constraints.
+    if (!spec.instanceId.empty()) {
+        req["Labels"] = nlohmann::json::object({ { INSTANCE_ID_LABEL_KEY, spec.instanceId } });
+    }
     return req;
 }
 
@@ -1150,7 +1160,8 @@ litebus::Future<messages::StartInstanceResponse> DockerExecutor::StartRuntime(
 
     auto resources = BuildResources(info);
     auto createBody = BuildCreateContainerRequest(ContainerCreateSpec{
-        image, cmd, containerEnvs, bindMounts, portBindings, resources, workdir, runUser });
+        image, cmd, containerEnvs, bindMounts, portBindings, resources, workdir, runUser,
+        info.instanceid() });
 
     // Log the effective container spec handed to the daemon. Cmd/Binds/Workdir/Resources only;
     // Env is intentionally omitted to avoid leaking credentials. fmt has no formatter for
@@ -1162,24 +1173,24 @@ litebus::Future<messages::StartInstanceResponse> DockerExecutor::StartRuntime(
     if (resources.find("cpu") != resources.end()) { cpu = resources.at("cpu"); }
     if (resources.find("memory") != resources.end()) { memory = resources.at("memory"); }
     if (resources.find("memory_limit") != resources.end()) { memLimit = resources.at("memory_limit"); }
-    YRLOG_INFO("{}|{}|docker create spec: image={}, workdir={}, user={}, cmd=[{}], binds=[{}], "
+    YRLOG_INFO("{}|{}|docker create spec: name={}, image={}, workdir={}, user={}, cmd=[{}], binds=[{}], "
                "resources=cpu={},memory={},memory_limit={}",
-               info.traceid(), info.requestid(), image, workdir, runUser,
+               info.traceid(), info.requestid(), info.instanceid(), image, workdir, runUser,
                fmt::join(cmd.begin(), cmd.end(), " "),
                fmt::join(bindMounts.begin(), bindMounts.end(), ", "), cpu, memory, memLimit);
 
-    return StartContainerChain(request, image, createBody, port);
+    return StartContainerChain(request, image, createBody, info.instanceid(), port);
 }
 
 litebus::Future<messages::StartInstanceResponse> DockerExecutor::StartContainerChain(
     const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &image,
-    const nlohmann::json &createBody, const std::string &port)
+    const nlohmann::json &createBody, const std::string &containerName, const std::string &port)
 {
     const auto &info = request->runtimeinstanceinfo();
     const auto &runtimeID = info.runtimeid();
     // Ensure image -> create container -> start container
     return EnsureImageExists(image)
-        .Then([this, runtimeID, image, createBody](const litebus::Future<Status> &imageStatus)
+        .Then([this, runtimeID, image, createBody, containerName](const litebus::Future<Status> &imageStatus)
                   -> litebus::Future<std::string> {
             if (imageStatus.IsError() || imageStatus.Get().IsError()) {
                 // Keep the ensure-image failure reason (invalid name, pull failure detail, ...)
@@ -1196,7 +1207,12 @@ litebus::Future<messages::StartInstanceResponse> DockerExecutor::StartContainerC
                 runtime2dockerErr_[runtimeID] = errMsg;
                 return "";
             }
-            return SendRequestToDocker("POST", "/containers/create", createBody)
+            // Container name is a query param (?name=), not a body field, in the Docker API;
+            // empty keeps the old daemon-assigned random name.
+            std::string createPath = containerName.empty()
+                ? "/containers/create"
+                : "/containers/create?name=" + containerName;
+            return SendRequestToDocker("POST", createPath, createBody)
                 .Then([this, runtimeID](litebus::Try<nlohmann::json> createResult) -> std::string {
                     return createResult.IsOK()
                                ? ParseCreateContainerResponse(createResult.Get(), runtimeID)
