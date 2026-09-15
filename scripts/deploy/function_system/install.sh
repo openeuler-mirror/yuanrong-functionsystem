@@ -347,7 +347,12 @@ function install_collector() {
 }
 
 function install_faas_frontend() {
-  log_info "start faas frontend, http_ip=${IP_ADDRESS}, http_port=${FAAS_FRONTEND_HTTP_PORT}, grpc_port=${FAAS_FRONTEND_GRPC_PORT}..."
+  # Frontend HTTP listen IP; defaults to the global IP_ADDRESS when not set.
+  # This only controls the bind address — clients reach the frontend via
+  # ${IP_ADDRESS}:${FAAS_FRONTEND_HTTP_PORT} (advertised in dashboard/metaservice
+  # configs and master info), so the two may differ on multi-homed hosts.
+  local faas_frontend_http_ip="${FAAS_FRONTEND_HTTP_IP:-${IP_ADDRESS}}"
+  log_info "start faas frontend, http_ip=${faas_frontend_http_ip}, http_port=${FAAS_FRONTEND_HTTP_PORT}, grpc_port=${FAAS_FRONTEND_GRPC_PORT}..."
   local meta_service_address="${META_SERVICE_ADDRESS}"
   local auth_provider="${AUTH_PROVIDER:-casdoor}"
   
@@ -381,7 +386,7 @@ function install_faas_frontend() {
   install_init_frontend_config=${config_install_dir}/init_frontend_args_temp.json
   cp ${init_frontend_config} ${install_init_frontend_config}
   sed -i "s/{etcdAddr}/$(echo ${ETCD_CLUSTER_ADDRESS} | sed 's/,/","/g')/g" ${install_init_frontend_config}
-  sed -i "s/{faas_frontend_http_ip}/${IP_ADDRESS}/g" ${install_init_frontend_config}
+  sed -i "s/{faas_frontend_http_ip}/${faas_frontend_http_ip}/g" ${install_init_frontend_config}
   sed -i "s/{faas_frontend_http_port}/${FAAS_FRONTEND_HTTP_PORT}/g" ${install_init_frontend_config}
   sed -i "s/{sslEnable}/${SSL_ENABLE}/g" ${install_init_frontend_config}
   sed -i "s/{frontendSslEnable}/${FRONTEND_SSL_ENABLE}/g" ${install_init_frontend_config}
@@ -506,7 +511,7 @@ function install_faas_frontend() {
   -functionSystemAddress="${LOCAL_IP}:${FUNCTION_PROXY_GRPC_PORT}" \
   -driverMode true  >> "${FS_LOG_PATH}/${NODE_ID}-faas_frontend${STD_LOG_SUFFIX}"  2>&1 &
   FAAS_FRONTEND_PID="$!"
-  log_info "succeed to start faas frontend, http_ip=${IP_ADDRESS}, http_port=${FAAS_FRONTEND_HTTP_PORT}, grpc_port=${FAAS_FRONTEND_GRPC_PORT}, pid=${FAAS_FRONTEND_PID}"
+  log_info "succeed to start faas frontend, http_ip=${faas_frontend_http_ip}, http_port=${FAAS_FRONTEND_HTTP_PORT}, grpc_port=${FAAS_FRONTEND_GRPC_PORT}, pid=${FAAS_FRONTEND_PID}"
 }
 
 function install_function_scheduler() {
