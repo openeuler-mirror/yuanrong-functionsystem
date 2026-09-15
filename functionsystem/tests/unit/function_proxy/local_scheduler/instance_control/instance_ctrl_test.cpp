@@ -6118,6 +6118,11 @@ TEST_F(InstanceCtrlTest, RecoverExitingInstanceWithoutAgent)
     resourceViewMgr->virtual_ = MockResourceView::CreateMockResourceView();
     instanceCtrlWithMockObserver_->BindResourceView(resourceViewMgr);
     EXPECT_CALL(*primary, DeleteInstances).WillRepeatedly(Return(Status::OK()));
+    EXPECT_CALL(*mockSharedClientManagerProxy_, GetControlInterfacePosixClient(_)).WillRepeatedly(Return(nullptr));
+    EXPECT_CALL(*mockSharedClientManagerProxy_, DeleteClient(_)).WillRepeatedly(Return(Status::OK()));
+    messages::KillInstanceResponse killInstanceRsp;
+    killInstanceRsp.set_code(int32_t(common::ErrorCode::ERR_NONE));
+    EXPECT_CALL(*funcAgentMgr_, KillInstance).WillRepeatedly(Return(killInstanceRsp));
     litebus::Future<std::string> deleteInstance;
     EXPECT_CALL(*instanceControlView_, DelInstance).WillOnce(DoAll(FutureArg<0>(&deleteInstance), Return(Status::OK())));
 
@@ -6906,6 +6911,17 @@ TEST_F(InstanceCtrlTest, ForceDeleteInstanceWithoutAgent)
     auto stateMachine = std::make_shared<MockInstanceStateMachine>("nodeID");
     EXPECT_CALL(*instanceControlView_, GetInstance("instanceID"))
         .WillRepeatedly(Return(stateMachine));
+    auto resourceViewMgr = std::make_shared<resource_view::ResourceViewMgr>();
+    auto primary = MockResourceView::CreateMockResourceView();
+    resourceViewMgr->primary_ = primary;
+    resourceViewMgr->virtual_ = MockResourceView::CreateMockResourceView();
+    instanceCtrlWithMockObserver_->BindResourceView(resourceViewMgr);
+    EXPECT_CALL(*primary, DeleteInstances).WillRepeatedly(Return(Status::OK()));
+    EXPECT_CALL(*mockSharedClientManagerProxy_, GetControlInterfacePosixClient(_)).WillRepeatedly(Return(nullptr));
+    EXPECT_CALL(*mockSharedClientManagerProxy_, DeleteClient(_)).WillRepeatedly(Return(Status::OK()));
+    messages::KillInstanceResponse killInstanceRsp;
+    killInstanceRsp.set_code(int32_t(common::ErrorCode::ERR_NONE));
+    EXPECT_CALL(*funcAgentMgr_, KillInstance).WillRepeatedly(Return(killInstanceRsp));
     {
         EXPECT_CALL(*stateMachine, GetInstanceInfo).WillOnce(Return(InstanceInfo()));
         resource_view::InstanceInfo instance;
@@ -7262,6 +7278,16 @@ TEST_F(InstanceCtrlTest, ForwardCallResultRequestForLowReliability)
 
     auto instanceControlView = std::make_shared<InstanceControlView>("node1", false);
     actor->BindInstanceControlView(instanceControlView);
+    actor->BindResourceView(mockResourceViewMgr_);
+    actor->BindControlInterfaceClientManager(mockSharedClientManagerProxy_);
+    actor->BindFunctionAgentMgr(funcAgentMgr_);
+    actor->BindInternalIAM(mockInternalIAM_);
+    EXPECT_CALL(*primary_, DeleteInstances).WillRepeatedly(Return(Status::OK()));
+    EXPECT_CALL(*mockSharedClientManagerProxy_, GetControlInterfacePosixClient(_)).WillRepeatedly(Return(nullptr));
+    EXPECT_CALL(*mockSharedClientManagerProxy_, DeleteClient(_)).WillRepeatedly(Return(Status::OK()));
+    messages::KillInstanceResponse killInstanceRsp;
+    killInstanceRsp.set_code(int32_t(common::ErrorCode::ERR_NONE));
+    EXPECT_CALL(*funcAgentMgr_, KillInstance).WillRepeatedly(Return(killInstanceRsp));
 
     const std::string function = "default/0-test-helloWorld/$latest";
     const std::string instanceID = "instance id";

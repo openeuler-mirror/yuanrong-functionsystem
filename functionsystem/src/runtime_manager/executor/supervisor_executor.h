@@ -25,6 +25,7 @@
 #include "common/proto/pb/posix/sandbox_api.grpc.pb.h"
 #include "common/status/status.h"
 #include "config/build.h"
+#include "async_uds_client.h"
 #include "executor.h"
 #include "runtime_manager/config/command_builder.h"
 
@@ -130,6 +131,17 @@ private:
     litebus::Future<messages::StartInstanceResponse> OnStartInstanceCompleted(
         const std::string &runtimeID, const messages::StartInstanceResponse &response);
 
+    void OnCreateSandboxDone(const litebus::Future<nlohmann::json> &future, const std::string &runtimeID,
+                             litebus::Promise<runtime::v1::StartResponse> promise);
+    void OnStartRuntimeDone(const litebus::Future<runtime::v1::StartResponse> &future,
+                            const std::shared_ptr<messages::StartInstanceRequest> &request,
+                            litebus::Promise<messages::StartInstanceResponse> promise);
+    void OnDeleteSandboxDone(const litebus::Future<nlohmann::json> &future, const std::string &sandboxId,
+                             litebus::Promise<runtime::v1::DeleteResponse> promise);
+    void OnExecInSandboxDone(const litebus::Future<nlohmann::json> &future, const std::string &runtimeID,
+                             const std::string &sandboxId,
+                             litebus::Promise<runtime::v1::StartResponse> promise);
+
     std::map<std::string, messages::RuntimeInstanceInfo> runtimeInstanceInfoMap_;
     std::map<std::string, std::string> runtime2sandboxID_;
     std::unordered_map<std::string, litebus::Future<messages::StartInstanceResponse>> inProgressStarts_;
@@ -140,13 +152,9 @@ private:
     CommandBuilder cmdBuilder_{ false };
     std::string pkgType_;
 
-    void ParseResponse(litebus::Promise<nlohmann::json> promise, std::string response);
+    static nlohmann::json ParseRawResponse(const std::string &response);
     litebus::Future<nlohmann::json> SendRequestToSupervisor(const std::string &method, const std::string &path,
                                                             const nlohmann::json &body = nlohmann::json::object());
-    int ConnectUdsSocket(const std::string &socketPath);
-    std::string BuildUdsHttpRequest(const std::string &method, const std::string &path, const std::string &body);
-    bool SendUdsRequest(int fd, const std::string &httpRequest);
-    bool ReceiveUdsResponse(int fd, std::string &response);
 };
 
 class SupervisorExecutorProxy : public ExecutorProxy {

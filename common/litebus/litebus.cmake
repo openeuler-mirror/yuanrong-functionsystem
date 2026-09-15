@@ -26,6 +26,7 @@ set(litebus_LIB_DIR ${CMAKE_CURRENT_LIST_DIR}/output/lib)
 set(litebus_LIB ${litebus_LIB_DIR}/liblitebus.so)
 
 include_directories(${litebus_INCLUDE_DIR})
+include_directories(${CMAKE_CURRENT_LIST_DIR}/src)
 
 install(FILES ${litebus_LIB_DIR}/liblitebus.so DESTINATION lib)
 install(FILES ${litebus_LIB_DIR}/liblitebus.so.0.0.1 DESTINATION lib)
