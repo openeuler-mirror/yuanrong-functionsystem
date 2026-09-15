@@ -697,7 +697,7 @@ TEST_F(ConchExecutorTest, CreateRequest_BindMountsUnderConchFilesystemPolicy)
     // exist for conch, but CreateRequest only assembles the JSON here).
     (*runtimeInfo->mutable_deploymentconfig()->mutable_deployoptions())[CONTAINER_ROOTFS] =
         R"({"type":"image","imageurl":"sha256:abc","mounts":[)"
-        R"({"source":"/data/host","target":"/data","readonly":true})]}";
+        R"({"source":"/data/host","target":"/data","readonly":true}]})";
 
     auto req = executor_->TestCreateRequest(request);
 
@@ -729,10 +729,15 @@ TEST_F(ConchExecutorTest, CreateRequest_NoBindMountsOmitsFilesystemPolicy)
     (*runtimeInfo->mutable_deploymentconfig()->mutable_deployoptions())[CONTAINER_ROOTFS] =
         R"({"type":"image","imageurl":"sha256:abc"})";
 
+    // BindHostLogDir adds a mount whenever the host log dir exists (e.g. on yr_node_2),
+    // which would put filesystem_policy back. Point runtimeLogPath at a directory this
+    // test never creates so the omission assertion is environment-independent.
+    executor_->config_.runtimeLogPath = testDeployDir_ + "/no-such-log-dir";
+
     auto req = executor_->TestCreateRequest(request);
 
-    // With no rootfs mounts and no host log dir (config path doesn't exist in test),
-    // ParseBindMounts is empty -> conch.filesystem_policy is omitted (not an empty object).
+    // With no rootfs mounts and no host log dir, ParseBindMounts is empty ->
+    // conch.filesystem_policy is omitted (not an empty object).
     EXPECT_FALSE(req["policy"]["conch"].contains("filesystem_policy"));
 }
 
@@ -771,6 +776,72 @@ TEST_F(ConchExecutorTest, CreateRequest_PosixEnvsCoexistWithHostUser)
 
     EXPECT_EQ(req["policy"]["conch"]["env"]["AGENT_SERVER_PORT"], "18092");
     EXPECT_EQ(req["policy"]["conch"]["env"]["JIUWENSWARM_HOME"], "/home/User9876");
+}
+
+TEST_F(ConchExecutorTest, CreateRequest_MapsRuntimeResourcesToVcpuNumAndRamMb)
+{
+    // CPU is milli-cores (2000 -> 2 vCPU), Memory is MB (4096 -> ram_mb 4096). A positive
+    // scalar limit takes precedence over value (same semantics as docker BuildResources).
+    auto request = std::make_shared<messages::StartInstanceRequest>();
+    request->set_type(static_cast<int32_t>(EXECUTOR_TYPE::CONCH));
+    auto runtimeInfo = request->mutable_runtimeinstanceinfo();
+    runtimeInfo->set_runtimeid("rt");
+    auto *resMap = runtimeInfo->mutable_runtimeconfig()->mutable_resources()->mutable_resources();
+    auto &cpu = (*resMap)[resource_view::CPU_RESOURCE_NAME];
+    cpu.set_type(resource_view::ValueType::Value_Type_SCALAR);
+    cpu.mutable_scalar()->set_value(2000.0);
+    auto &mem = (*resMap)[resource_view::MEMORY_RESOURCE_NAME];
+    mem.set_type(resource_view::ValueType::Value_Type_SCALAR);
+    mem.mutable_scalar()->set_value(512.0);
+    mem.mutable_scalar()->set_limit(4096.0);
+
+    auto req = executor_->TestCreateRequest(request);
+
+    ASSERT_TRUE(req["policy"]["conch"].contains("vcpu_num"));
+    EXPECT_EQ(req["policy"]["conch"]["vcpu_num"], 2);
+    ASSERT_TRUE(req["policy"]["conch"].contains("ram_mb"));
+    EXPECT_EQ(req["policy"]["conch"]["ram_mb"], 4096);
+}
+
+TEST_F(ConchExecutorTest, CreateRequest_SubCoreCpuRoundsUpToOneVcpu)
+{
+    // vcpu_num must be an integer >= 1 (jiuwenbox ConchPolicy rejects < 1), so a sub-core
+    // request still maps to a single vCPU instead of being dropped.
+    auto request = std::make_shared<messages::StartInstanceRequest>();
+    request->set_type(static_cast<int32_t>(EXECUTOR_TYPE::CONCH));
+    auto runtimeInfo = request->mutable_runtimeinstanceinfo();
+    runtimeInfo->set_runtimeid("rt");
+    auto *resMap = runtimeInfo->mutable_runtimeconfig()->mutable_resources()->mutable_resources();
+    auto &cpu = (*resMap)[resource_view::CPU_RESOURCE_NAME];
+    cpu.set_type(resource_view::ValueType::Value_Type_SCALAR);
+    cpu.mutable_scalar()->set_value(500.0);
+    auto &mem = (*resMap)[resource_view::MEMORY_RESOURCE_NAME];
+    mem.set_type(resource_view::ValueType::Value_Type_SCALAR);
+    mem.mutable_scalar()->set_value(2048.5);
+
+    auto req = executor_->TestCreateRequest(request);
+
+    EXPECT_EQ(req["policy"]["conch"]["vcpu_num"], 1);
+    EXPECT_EQ(req["policy"]["conch"]["ram_mb"], 2049);
+}
+
+TEST_F(ConchExecutorTest, CreateRequest_OmitsResourcesWhenAbsentOrNonPositive)
+{
+    // No resources at all, or non-positive values: the keys are omitted so jiuwenbox /
+    // conchd apply their own defaults (mirrors docker BuildResources skipping them).
+    auto request = std::make_shared<messages::StartInstanceRequest>();
+    request->set_type(static_cast<int32_t>(EXECUTOR_TYPE::CONCH));
+    auto runtimeInfo = request->mutable_runtimeinstanceinfo();
+    runtimeInfo->set_runtimeid("rt");
+    auto *resMap = runtimeInfo->mutable_runtimeconfig()->mutable_resources()->mutable_resources();
+    auto &cpu = (*resMap)[resource_view::CPU_RESOURCE_NAME];
+    cpu.set_type(resource_view::ValueType::Value_Type_SCALAR);
+    cpu.mutable_scalar()->set_value(0.0);
+
+    auto req = executor_->TestCreateRequest(request);
+
+    EXPECT_FALSE(req["policy"]["conch"].contains("vcpu_num"));
+    EXPECT_FALSE(req["policy"]["conch"].contains("ram_mb"));
 }
 
 TEST_F(ConchExecutorTest, CreateRequest_OmitsSupervisorOnlyPolicySegments)
