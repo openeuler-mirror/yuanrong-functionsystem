@@ -822,37 +822,44 @@ litebus::Future<messages::KillInstanceResponse> FunctionAgentMgrActor::KillInsta
 
     auto fcAgent = funcAgentTable_.find(funcAgentID);
     if (fcAgent == funcAgentTable_.end()) {
-        messages::KillInstanceResponse response =
-            GenKillInstanceResponse(StatusCode::ERR_INNER_COMMUNICATION, "function agent not register", requestID);
-        YRLOG_ERROR("{}|failed to kill instance, function agent {} is not register.", requestID, funcAgentID);
-        return response;
+        fcAgent = std::find_if(funcAgentTable_.begin(), funcAgentTable_.end(),
+            [](const auto &p) { return p.second.isEnable; });
+        if (fcAgent == funcAgentTable_.end()) {
+            YRLOG_WARN("{}|kill instance({}) faid({}) not registered and no fallback agent; sandbox may leak",
+                requestID, request->instanceid(), funcAgentID);
+            return GenKillInstanceResponse(StatusCode::ERR_INNER_COMMUNICATION,
+                "function agent not register and no fallback agent available", requestID);
+        }
+        YRLOG_WARN("{}|kill instance({}) faid({}) not registered, fallback to agent {} for sandbox cleanup",
+            requestID, request->instanceid(), funcAgentID, fcAgent->first);
     }
 
     if (!fcAgent->second.isEnable && !isRecovering) {
         messages::KillInstanceResponse response =
             GenKillInstanceResponse(StatusCode::SUCCESS, "function agent may already exited", requestID);
-        YRLOG_DEBUG("{}|function agent {} may already exited", requestID, funcAgentID);
-        funcAgentTable_[funcAgentID].instanceIDs.erase(request->instanceid());
+        YRLOG_DEBUG("{}|function agent {} may already exited", requestID, fcAgent->first);
+        funcAgentTable_[fcAgent->first].instanceIDs.erase(request->instanceid());
         return response;
     }
 
+    const auto &routeAgentID = fcAgent->first;
     auto notifyPromise = std::make_shared<KillNotifyPromise>();
     auto notifyFuture = notifyPromise->GetFuture();
-    auto emplaceResult = killNotifyPromise_[funcAgentID].emplace(requestID, std::make_pair(notifyPromise, 0));
+    auto emplaceResult = killNotifyPromise_[routeAgentID].emplace(requestID, std::make_pair(notifyPromise, 0));
     if (!emplaceResult.second) {
         YRLOG_INFO("{}|{}|request ID is repeat.", request->traceid(), requestID);
-        return killNotifyPromise_[funcAgentID][requestID].first->GetFuture();
+        return killNotifyPromise_[routeAgentID][requestID].first->GetFuture();
     }
     YRLOG_DEBUG("{}|send instance({}) kill request, runtimeID({}), storage type({})", request->requestid(),
                 request->instanceid(), request->runtimeid(), request->storagetype());
     Send(fcAgent->second.aid, "KillInstance", request->SerializeAsString());
 
-    litebus::AsyncAfter(retryCycleMs_, GetAID(), &FunctionAgentMgrActor::RetryKill, requestID, funcAgentID, request);
+    litebus::AsyncAfter(retryCycleMs_, GetAID(), &FunctionAgentMgrActor::RetryKill, requestID, routeAgentID, request);
 
     YRLOG_INFO("{}|send request of kill instance({}) successfully on {}.", requestID, request->instanceid(),
-               funcAgentID);
+               routeAgentID);
     if (request->ismonopoly()) {
-        (void)monopolyAgents_.emplace(funcAgentID);
+        (void)monopolyAgents_.emplace(routeAgentID);
     }
     return notifyFuture;
 }

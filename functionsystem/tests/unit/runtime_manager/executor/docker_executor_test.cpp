@@ -47,17 +47,20 @@ public:
     // Expose protected/private members for testing
     std::string TestBuildDockerHttpRequest(const std::string &method, const std::string &path, const std::string &body)
     {
-        return BuildDockerHttpRequest(method, path, body);
+        return AsyncUdsClient::BuildHttpRequest(method, path, body);
     }
 
     void TestParseDockerResponse(litebus::Promise<nlohmann::json> promise, std::string response)
     {
-        ParseDockerResponse(promise, response);
+        promise.SetValue(ParseRawDockerResponse(response));
     }
 
-    int TestConnectDockerSocket()
+    litebus::Future<nlohmann::json> TestConnectViaSendRequest()
     {
-        return ConnectDockerSocket();
+        // Route through SendRequestToDocker so connect failure is surfaced exactly as in
+        // production: OnDockerReply turns a SetFailed Future into a value with
+        // __connect_failed=true and __http_status=0.
+        return SendRequestToDocker("GET", "/containers/json");
     }
 
     messages::StartInstanceResponse TestGenSuccessStartInstanceResponse(
@@ -456,14 +459,22 @@ TEST_F(DockerExecutorTest, TestSnapshotRuntimeUnsupported)
     EXPECT_THAT(result.message(), testing::HasSubstr("not supported"));
 }
 
-// ---- ConnectDockerSocket (will fail in test env without Docker) ----
+// ---- SendRequestToDocker connect failure (will fail in test env without Docker) ----
 
-TEST_F(DockerExecutorTest, TestConnectDockerSocketFailsWithoutDocker)
+TEST_F(DockerExecutorTest, TestConnectDockerFailsWithoutDocker)
 {
-    // Use a non-existent socket path
+    // Use a non-existent socket path; connection happens inside RequestAsync, and
+    // OnDockerReply surfaces the failure as a value with __connect_failed=true.
     executor_->SetDockerSocketPath("/tmp/nonexistent_docker.sock");
-    int fd = executor_->TestConnectDockerSocket();
-    EXPECT_LT(fd, 0);  // Should fail since socket doesn't exist
+    auto future = executor_->TestConnectViaSendRequest();
+    ASSERT_AWAIT_READY_FOR(future, TEST_AWAIT_TIMEOUT);
+    // OnDockerReply converts any failed Future into a value; if it somehow stayed
+    // failed, fail loudly here rather than letting Get() throw an opaque exception.
+    ASSERT_FALSE(future.IsError()) << "expected value with __connect_failed, got error "
+                                   << future.GetErrorCode();
+    auto result = future.Get();
+    EXPECT_TRUE(result.value("__connect_failed", false));
+    EXPECT_EQ(result.value("__http_status", -1), 0);
 }
 
 // ---- BuildShellCmdLine (tolerant redirect, issue #93) ----

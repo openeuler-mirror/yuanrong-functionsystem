@@ -25,6 +25,7 @@
 #include "common/proto/pb/message_pb.h"
 #include "common/status/status.h"
 #include "config/build.h"
+#include "async_uds_client.h"
 #include "executor.h"
 #include "runtime_manager/config/command_builder.h"
 
@@ -132,11 +133,11 @@ private:
         const std::string &port, const std::string &containerIP = "");
 
     // Docker Engine API communication (UDS HTTP, same pattern as SupervisorExecutor)
-    int ConnectDockerSocket();
-    std::string BuildDockerHttpRequest(const std::string &method, const std::string &path, const std::string &body);
-    void ParseDockerResponse(litebus::Promise<nlohmann::json> promise, std::string response);
+    static nlohmann::json ParseRawDockerResponse(const std::string &response);
     litebus::Future<nlohmann::json> SendRequestToDocker(const std::string &method, const std::string &path,
                                                          const nlohmann::json &body = nlohmann::json::object());
+    void OnDockerReply(const litebus::Future<nlohmann::json> &future, std::string method, std::string fullPath,
+        litebus::Promise<nlohmann::json> promise);
 
     // Returns the container internal IP (NetworkSettings.IPAddress) via inspect, "" on failure.
     litebus::Future<std::string> InspectContainerIP(const std::string &containerID);

@@ -129,6 +129,7 @@ install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/async DESTINATION include)
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/timer DESTINATION include)
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/exec DESTINATION include)
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/utils DESTINATION include)
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/src/evloop DESTINATION include)
 
 if(${HTTP_ENABLED} STREQUAL "on")
   install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/httpd DESTINATION include)
