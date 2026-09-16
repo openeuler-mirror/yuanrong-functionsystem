@@ -23,10 +23,39 @@
 
 namespace functionsystem {
 
+inline const std::string FATAL_TIME_STAMP = "fatalTimestamp";
+
+inline bool IsEvictionState(const resources::InstanceInfo &instance)
+{
+    auto state = static_cast<InstanceState>(instance.instancestatus().code());
+    return state == InstanceState::EVICTING || state == InstanceState::EVICTED;
+}
+
+inline uint64_t LifecycleTimestamp(const resources::InstanceInfo &instance, const std::string &name)
+{
+    auto value = instance.extensions().find(name);
+    if (value == instance.extensions().end() || value->second.empty()
+        || value->second.find_first_not_of("0123456789") != std::string::npos) {
+        return 0;
+    }
+    try {
+        return std::stoull(value->second);
+    } catch (const std::exception &) {
+        return 0;
+    }
+}
+
 inline bool IsPausedInstanceManagerOwned(const resources::InstanceInfo &instanceInfo)
 {
     return instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::PAUSED)
         && instanceInfo.functionproxyid() == INSTANCE_MANAGER_OWNER;
+}
+
+// Recognize records retained by older masters while waiting for local recovery.
+inline bool IsWaitingForLocalSnapshotRecovery(const resources::InstanceInfo &instanceInfo)
+{
+    return instanceInfo.failover()
+        && instanceInfo.instancestatus().msg() == "waiting for same-node local snapshot recovery";
 }
 
 inline bool ShouldDeleteWithoutScheduler(const resources::InstanceInfo &instanceInfo, int32_t signal)

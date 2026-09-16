@@ -35,6 +35,8 @@
                 "yr_cluster_storage_allocatable",
                 "yr_instance_count",
                 "yr_cluster_instance_total",
+                "yr_cluster_instance_recovering",
+                "yr_cluster_instance_unavailable",
                 "yr_sandbox_lifecycle_status",
                 "yr_sandbox_requested_cpu_cores",
                 "yr_sandbox_requested_memory_bytes",

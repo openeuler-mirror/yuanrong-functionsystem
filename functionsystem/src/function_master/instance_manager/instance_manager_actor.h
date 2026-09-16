@@ -320,6 +320,12 @@ private:
         const std::shared_ptr<internal::ForwardKillRequest> &killReq);
     void CompleteKillPromise(const std::string &requestID, const Status &status);
 
+    litebus::Future<Status> DeleteInstanceWithoutScheduler(
+        const std::string &instanceKey, const std::shared_ptr<InstanceInfo> &instance,
+        const std::shared_ptr<internal::ForwardKillRequest> &killReq);
+    Status OnInstanceDeletedWithoutScheduler(const litebus::Future<OperateResult> &result,
+                                            const std::string &requestID);
+
     void CompleteKillInstance(const litebus::Future<Status> &status, const std::string &requestID,
                               const std::string &instanceID);
 
@@ -377,6 +383,7 @@ private:
     size_t ReportNodeInstanceCountMetrics(std::unordered_set<std::string> &currentReportedNodeIDs);
     void ClearRemovedNodeInstanceCountMetrics(const std::unordered_set<std::string> &currentReportedNodeIDs);
     void ReportClusterInstanceTotalMetric(size_t totalInstanceCount, size_t nodeCount);
+    std::pair<size_t, size_t> CountUnavailableInstances() const;
 
     /**
      * Periodically garbage collect FATAL instances that exceed timeout
@@ -559,6 +566,8 @@ private:
 
         void KillAllInstances(const std::list<std::shared_ptr<InstanceInfo>> &allInstances, int32_t signal,
                               const std::string &msg);
+
+        litebus::Future<Status> DeleteFrontendInstance(const messages::ForwardKillRequest &req);
 
         litebus::Future<Status> KillInstance(const std::shared_ptr<InstanceInfo> &info, int32_t signal,
                                              const std::string &msg);

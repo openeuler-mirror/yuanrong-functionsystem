@@ -485,29 +485,31 @@ TEST_F(RuntimeReconcileActorTest, DeferredFirstPassCompletesAfterInFlightPeriodi
         {TEST_INSTANCE_ID_1, TEST_AGENT_ID, TEST_RUNTIME_ID_1, TEST_CONTAINER_ID_1},
     });
 
-    std::atomic<int> viewReads{0};
+    // Actor callbacks may still run after the test body returns, before TearDown
+    // stops the actor. Keep callback state alive through mock ownership.
+    auto viewReads = std::make_shared<std::atomic<int>>(0);
     EXPECT_CALL(*mockInstanceControlView_, GetInstances())
-        .WillRepeatedly(Invoke([&viewReads, &instances]() {
-            ++viewReads;
+        .WillRepeatedly(Invoke([viewReads, instances]() {
+            ++(*viewReads);
             return instances;
         }));
 
-    litebus::Promise<messages::ReconcileRuntimesResponse> periodicResponse;
-    std::atomic<int> reconcileCalls{0};
-    std::atomic<bool> statusUpdated{false};
-    std::string periodicRequestID;
+    auto periodicResponse = std::make_shared<litebus::Promise<messages::ReconcileRuntimesResponse>>();
+    auto reconcileCalls = std::make_shared<std::atomic<int>>(0);
+    auto statusUpdated = std::make_shared<std::atomic<bool>>(false);
+    auto periodicRequestID = std::make_shared<std::string>();
     EXPECT_CALL(*mockFunctionAgentMgr_, ReconcileRuntimes(TEST_AGENT_ID, _))
-        .WillRepeatedly(Invoke([&](const std::string &,
+        .WillRepeatedly(Invoke([reconcileCalls, periodicRequestID, periodicResponse](const std::string &,
                                    const std::shared_ptr<messages::ReconcileRuntimesRequest> &request) {
-            ++reconcileCalls;
-            periodicRequestID = request->requestid();
-            return periodicResponse.GetFuture();
+            *periodicRequestID = request->requestid();
+            ++(*reconcileCalls);
+            return periodicResponse->GetFuture();
         }));
 
     mockResourceView_ = MockResourceView::CreateMockResourceView();
     EXPECT_CALL(*mockResourceView_, UpdateUnitStatus(TEST_AGENT_ID, resource_view::UnitStatus::NORMAL))
-        .WillOnce(Invoke([&statusUpdated](const std::string &, resource_view::UnitStatus) {
-            statusUpdated = true;
+        .WillOnce(Invoke([statusUpdated](const std::string &, resource_view::UnitStatus) {
+            *statusUpdated = true;
             return AsyncReturn(Status::OK());
         }));
 
@@ -516,17 +518,17 @@ TEST_F(RuntimeReconcileActorTest, DeferredFirstPassCompletesAfterInFlightPeriodi
     // Keep a periodic request in flight, then deliver the registration first-pass
     // trigger for the same agent. The trigger is deduplicated but must remain owed.
     RunPeriodicCycleForTest();
-    ASSERT_AWAIT_TRUE([&reconcileCalls]() { return reconcileCalls.load() == 1; });
+    ASSERT_AWAIT_TRUE([reconcileCalls]() { return reconcileCalls->load() == 1; });
     reconcileActor_->TriggerOnce(TEST_AGENT_ID);
-    ASSERT_AWAIT_TRUE([&viewReads]() { return viewReads.load() >= 2; });
-    EXPECT_EQ(reconcileCalls.load(), 1);
+    ASSERT_AWAIT_TRUE([viewReads]() { return viewReads->load() >= 2; });
+    EXPECT_EQ(reconcileCalls->load(), 1);
 
     messages::ReconcileRuntimesResponse response;
-    response.set_requestid(periodicRequestID);
+    response.set_requestid(*periodicRequestID);
     response.set_code(0);
-    periodicResponse.SetValue(response);
+    periodicResponse->SetValue(response);
 
-    ASSERT_AWAIT_TRUE([&statusUpdated]() { return statusUpdated.load(); });
+    ASSERT_AWAIT_TRUE([statusUpdated]() { return statusUpdated->load(); });
 }
 
 /**

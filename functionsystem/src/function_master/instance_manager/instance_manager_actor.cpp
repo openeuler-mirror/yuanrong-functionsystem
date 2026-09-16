@@ -598,6 +598,12 @@ void InstanceManagerActor::UpdateTraefikRouteCache(const std::shared_ptr<resourc
 bool InstanceManagerActor::HandleFaultedInstancePut(
     const std::string &key, const std::shared_ptr<resource_view::InstanceInfo> &instance)
 {
+    if (instance->functionproxyid() == INSTANCE_MANAGER_OWNER
+        && (IsEvictionState(*instance) || (IsWaitingForLocalSnapshotRecovery(*instance)
+            && instance->instancestatus().code() == static_cast<int32_t>(InstanceState::RUNNING)))) {
+        business_->OnFaultLocalInstancePut(key, instance, "instance has no runtime owner");
+        return true;
+    }
     if (member_->abnormalScheduler->find(instance->functionproxyid()) != member_->abnormalScheduler->end()
         && !member_->runtimeRecoverEnable) {
         YRLOG_INFO("change instance({}) state to FATAL, because scheduler({}) is abnormal.", instance->instanceid(),
@@ -646,19 +652,11 @@ void InstanceManagerActor::OnInstanceDelete(const std::string &key,
         }
     }
 
-    auto instances = member_->instances.find(instance->functionproxyid());
-    if (instances == member_->instances.end()) {
-        return;
-    }
-
-    auto iterator = instances->second.find(key);
-    if (iterator == instances->second.end()) {
-        return;
-    }
-
-    (void)instances->second.erase(iterator);
-    if (instances->second.empty()) {
-        (void)member_->instances.erase(instance->functionproxyid());
+    // DELETE/previous-value watches must also remove aliases left by older
+    // masters whose in-memory owner differed from the stored owner.
+    for (auto it = member_->instances.begin(); it != member_->instances.end();) {
+        it->second.erase(key);
+        it = it->second.empty() ? member_->instances.erase(it) : std::next(it);
     }
 }
 
@@ -1315,6 +1313,37 @@ Status InstanceManagerActor::CompletePausedInstanceDelete(
     return result.status;
 }
 
+litebus::Future<Status> InstanceManagerActor::DeleteInstanceWithoutScheduler(
+    const std::string &instanceKey, const std::shared_ptr<InstanceInfo> &instance,
+    const std::shared_ptr<internal::ForwardKillRequest> &killReq)
+{
+    auto instanceInfo = std::make_shared<StoreInfo>(instanceKey, "");
+    auto routeInfo = std::make_shared<StoreInfo>(GenInstanceRouteKey(instance->instanceid()), "");
+    std::shared_ptr<StoreInfo> debugInfo = nullptr;
+    if (IsDebugInstance(instance->createoptions())) {
+        debugInfo = std::make_shared<StoreInfo>(DEBUG_INSTANCE_PREFIX + instance->instanceid(), "");
+    }
+    // Recovery commits use the same instance version. Whichever transaction
+    // wins fences the other; never replay this as an unconditional ForceDelete.
+    auto result = member_->instanceOpt->Delete(instanceInfo, routeInfo, debugInfo,
+                                               instance->version(), IsLowReliabilityInstance(*instance));
+    result.OnComplete(litebus::Defer(GetAID(), &InstanceManagerActor::OnInstanceDeletedWithoutScheduler,
+                                    std::placeholders::_1, killReq->requestid()));
+    return member_->killReqPromises.at(killReq->requestid())->GetFuture();
+}
+
+Status InstanceManagerActor::OnInstanceDeletedWithoutScheduler(
+    const litebus::Future<OperateResult> &result, const std::string &requestID)
+{
+    auto status = result.IsError()
+        ? Status(StatusCode::ERR_ETCD_OPERATION_ERROR, "offline instance deletion failed") : result.Get().status;
+    // The ordinary DELETE watch performs route-cache, family and index cleanup.
+    // A conflict or storage failure is returned to the caller, never acknowledged
+    // early or added to the unconditional deletion replay queue.
+    CompleteKillPromise(requestID, status);
+    return status;
+}
+
 litebus::Future<Status> InstanceManagerActor::KillInstanceWithRetry(
     const std::string &instanceID, const std::shared_ptr<internal::ForwardKillRequest> &killReq)
 {
@@ -1332,6 +1361,16 @@ litebus::Future<Status> InstanceManagerActor::KillInstanceWithRetry(
         return Status::OK();
     }
 
+    const auto signal = killReq->req().signal();
+    if ((signal == SHUT_DOWN_SIGNAL || signal == SHUT_DOWN_SIGNAL_SYNC)
+        && !info->issystemfunc() && info->failover()
+        && info->instancestatus().code() == static_cast<int32_t>(InstanceState::RUNNING)
+        && !info->functionproxyid().empty() && info->functionproxyid() != INSTANCE_MANAGER_OWNER
+        && info->version() > 0 && business_ != nullptr
+        && !business_->NodeExists(info->functionproxyid())) {
+        return DeleteInstanceWithoutScheduler(instanceKey, info, killReq);
+    }
+
     if (ShouldDeleteWithoutScheduler(*info, killReq->req().signal())) {
         YRLOG_INFO("instance({}) with proxy({}) is killing with signal({}), now in status({}), will kill the instance.",
                    instanceID, info->functionproxyid(), killReq->req().signal(), info->instancestatus().code());
@@ -1344,33 +1383,11 @@ litebus::Future<Status> InstanceManagerActor::KillInstanceWithRetry(
                 litebus::Defer(GetAID(), &InstanceManagerActor::DeletePausedInstanceAfterSnapshotCleanup,
                                std::placeholders::_1, instanceKey, info, killReq));
         }
-        // FATAL instances without a live owner have no FunctionProxy scheduler
-        // to contact. Delete their control-plane records here.
-        promise->SetValue(Status::OK());
-        member_->killReqPromises.erase(killReq->requestid());
-
-        if (info->functionproxyid() != INSTANCE_MANAGER_OWNER && !info->functionproxyid().empty()) {  // force delete
+        if (info->functionproxyid() != INSTANCE_MANAGER_OWNER && !info->functionproxyid().empty()) {
+            CompleteKillPromise(killReq->requestid(), Status::OK());
             return Status::OK();
         }
-        auto routePath = GenInstanceRouteKey(info->instanceid());
-        std::shared_ptr<StoreInfo> routePutInfo = std::make_shared<StoreInfo>(routePath, "");
-        std::shared_ptr<StoreInfo> instancePutInfo = std::make_shared<StoreInfo>(instanceKey, "");
-        std::shared_ptr<StoreInfo> debugInstPutInfo = nullptr;
-        if (IsDebugInstance(info->createoptions())) {
-            debugInstPutInfo = std::make_shared<StoreInfo>(DEBUG_INSTANCE_PREFIX + info->instanceid(), "");
-        }
-        return member_->instanceOpt
-            ->ForceDelete(instancePutInfo, routePutInfo, debugInstPutInfo, IsLowReliabilityInstance(*info))
-            .Then([key(instanceKey), cacher(member_->operateCacher), instance(info)](const OperateResult &result) {
-                if (result.status.IsError()) {
-                    YRLOG_ERROR("failed to Delete instance({}) from MetaStore, err status is {}.",
-                                instance->instanceid(), fmt::underlying(result.status.StatusCode()));
-                    if (TransactionFailedForEtcd(result.status.StatusCode())) {
-                        cacher->AddDeleteEvent(INSTANCE_PATH_PREFIX, key);
-                    }
-                }
-                return result.status;
-            });
+        return DeleteInstanceWithoutScheduler(instanceKey, info, killReq);
     }
 
     promise->GetFuture()
@@ -1685,7 +1702,8 @@ void InstanceManagerActor::MasterBusiness::ProcessInstanceOnFaultLocal(const std
             return;
         }
 
-        if (!IsRuntimeRecoverEnable(*instance.second)) {
+        if (IsEvictionState(*instance.second) || instance.second->failover()
+            || !IsRuntimeRecoverEnable(*instance.second)) {
             ProcessInstanceNotReSchedule(instance, nodeName, reason);
             continue;
         }
@@ -1730,16 +1748,6 @@ void InstanceManagerActor::MasterBusiness::ProcessInstanceNotReSchedule(
     const std::string &nodeName, const std::string &reason)
 {
     RETURN_IF_NULL(instance.second);
-    if (instance.second->failover()) {
-        auto *status = instance.second->mutable_instancestatus();
-        const auto previous = status->code();
-        status->set_code(static_cast<int32_t>(InstanceState::RUNNING));
-        status->set_msg("waiting for same-node local snapshot recovery");
-        YRLOG_INFO("keep failover instance({}) RUNNING from state({}) while its same-node scheduler({}) "
-                   "is unavailable: {}",
-                   instance.second->instanceid(), previous, nodeName, reason);
-        return;
-    }
     YRLOG_INFO("change instance({}) status to FATAL because {}.", instance.second->instanceid(), reason);
 
     OnFaultLocalInstancePut(instance.first, instance.second, reason);
@@ -1913,16 +1921,6 @@ void InstanceManagerActor::MasterBusiness::OnFaultLocalInstancePut(
     // 2. container(proxy, agent) fault: No processing is required.
     // 3. pod or node fault: force delete instance
     RETURN_IF_NULL(instance);
-    if (instance->failover()) {
-        auto *status = instance->mutable_instancestatus();
-        const auto previous = status->code();
-        status->set_code(static_cast<int32_t>(InstanceState::RUNNING));
-        status->set_msg("waiting for same-node local snapshot recovery");
-        member_->instances[INSTANCE_MANAGER_OWNER][key] = instance;
-        YRLOG_INFO("keep failover instance({}) RUNNING from state({}) instead of fault cleanup: {}",
-                   instance->instanceid(), previous, reason);
-        return;
-    }
     if (instance->instancestatus().code() == static_cast<int32_t>(InstanceState::EXITING) || IsDriver(instance)
         || IsStaticFunctionInstance(*instance)) {
         YRLOG_INFO("instance({}) is driver or exiting, delete directly when {}", key, reason);
@@ -1931,8 +1929,13 @@ void InstanceManagerActor::MasterBusiness::OnFaultLocalInstancePut(
     }
     std::shared_ptr<StoreInfo> routePutInfo = std::make_shared<StoreInfo>();
     std::shared_ptr<StoreInfo> instancePutInfo = std::make_shared<StoreInfo>(key, "");
+    auto updated = std::make_shared<resource_view::InstanceInfo>(*instance);
+    if (LifecycleTimestamp(*updated, FATAL_TIME_STAMP) == 0
+        || LifecycleTimestamp(*updated, FATAL_TIME_STAMP) > static_cast<uint64_t>(std::time(nullptr))) {
+        (*updated->mutable_extensions())[FATAL_TIME_STAMP] = std::to_string(std::time(nullptr));
+    }
     auto version = instance->version(); // version will +1 in GeneratePutInfo
-    if (!GeneratePutInfo(instance, instancePutInfo, routePutInfo, InstanceState::FATAL, reason)) {
+    if (!GeneratePutInfo(updated, instancePutInfo, routePutInfo, InstanceState::FATAL, reason)) {
         YRLOG_ERROR("{}|failed to generate put info", instance->instanceid());
         return;
     }
@@ -1951,6 +1954,55 @@ void InstanceManagerActor::MasterBusiness::OnFaultLocalInstancePut(
     member_->instances[INSTANCE_MANAGER_OWNER][key] = instance;
 }
 
+litebus::Future<Status> InstanceManagerActor::MasterBusiness::DeleteFrontendInstance(
+    const messages::ForwardKillRequest &req)
+{
+    const auto &tenant = req.frontendtenantid();
+    const auto &id = req.req().instanceid();
+    const auto signal = req.req().signal();
+    if (tenant.empty() || tenant.find('/') != std::string::npos || id.empty()
+        || (signal != SHUT_DOWN_SIGNAL && signal != SHUT_DOWN_SIGNAL_SYNC)) {
+        return Status(StatusCode::ERR_AUTHORIZE_FAILED, "invalid frontend shutdown identity");
+    }
+    auto actor = actor_.lock();
+    RETURN_STATUS_IF_NULL(actor, StatusCode::FAILED, "InstanceManagerActor is nullptr");
+    auto [key, info] = actor->GetInstanceInfoByInstanceID(id);
+    if (info != nullptr) {
+        if (info->tenantid() != tenant || info->issystemfunc() || IsDriver(info)) {
+            return Status(StatusCode::ERR_AUTHORIZE_FAILED, "frontend shutdown tenant or instance mismatch");
+        }
+        return KillInstance(info, signal, req.req().payload());
+    }
+    if (member_->client == nullptr) {
+        return Status(StatusCode::ERR_ETCD_OPERATION_ERROR, "instance store unavailable");
+    }
+    // A cache miss is not proof of deletion. Read the tenant's authoritative
+    // instance keys and the route before acknowledging an already absent ID.
+    auto client = member_->client;
+    return client->Get(INSTANCE_PATH_PREFIX + "/" + tenant + "/", { .prefix = true })
+        .Then([client, id](const litebus::Future<std::shared_ptr<GetResponse>> &future) -> litebus::Future<Status> {
+            if (future.IsError() || future.Get() == nullptr || future.Get()->status.IsError()) {
+                return Status(StatusCode::ERR_ETCD_OPERATION_ERROR, "failed to verify instance deletion");
+            }
+            for (const auto &kv : future.Get()->kvs) {
+                const auto slash = kv.key().rfind('/');
+                if (slash != std::string::npos && kv.key().substr(slash + 1) == id) {
+                    return Status(StatusCode::ERR_INNER_SYSTEM_ERROR, "instance metadata is not yet reconciled");
+                }
+            }
+            return client->Get(GenInstanceRouteKey(id), {}).Then(
+                [](const litebus::Future<std::shared_ptr<GetResponse>> &route) -> Status {
+                    if (route.IsError() || route.Get() == nullptr || route.Get()->status.IsError()) {
+                        return Status(StatusCode::ERR_ETCD_OPERATION_ERROR, "failed to verify route deletion");
+                    }
+                    if (!route.Get()->kvs.empty()) {
+                        return Status(StatusCode::ERR_INNER_SYSTEM_ERROR, "instance route is not yet removed");
+                    }
+                    return Status::OK();
+                });
+        });
+}
+
 void InstanceManagerActor::MasterBusiness::ForwardKill(const litebus::AID &from, std::string &&name, std::string &&msg)
 {
     messages::ForwardKillRequest req;
@@ -1960,6 +2012,11 @@ void InstanceManagerActor::MasterBusiness::ForwardKill(const litebus::AID &from,
     }
     auto actor = actor_.lock();
     ASSERT_IF_NULL(actor);
+    if (!req.frontendtenantid().empty()) {
+        DeleteFrontendInstance(req).OnComplete(
+            litebus::Defer(actor->GetAID(), &InstanceManagerActor::OnKillInstance, std::placeholders::_1, req, from));
+        return;
+    }
     if (req.req().signal() == SHUT_DOWN_SIGNAL_ALL) {
         YRLOG_INFO("{}|receive kill job({}) request from {}", req.requestid(), req.req().instanceid(),
                    std::string(from));
@@ -2044,7 +2101,7 @@ litebus::Future<Status> InstanceManagerActor::MasterBusiness::KillInstance(const
 
 bool InstanceManagerActor::MasterBusiness::IsInstanceShouldBeKilled(const std::shared_ptr<InstanceInfo> &info)
 {
-    if (info->failover()) {
+    if (info->failover() && info->instancestatus().code() != static_cast<int32_t>(InstanceState::FATAL)) {
         YRLOG_INFO("keep failover instance({}) for same-node local snapshot recovery", info->instanceid());
         return false;
     }
@@ -2270,59 +2327,48 @@ litebus::Future<messages::QueryDebugInstanceInfosResponse> InstanceManagerActor:
 
 void InstanceManagerActor::MasterBusiness::GarbageCollectFatalInstances()
 {
-    auto nowTimestamp = static_cast<uint64_t>(std::time(nullptr));
-    std::vector<std::pair<std::string, std::shared_ptr<resource_view::InstanceInfo>>> instancesToDelete;
-
-    // 查找 INSTANCE_MANAGER_OWNER 中状态为 FATAL 且超过 1 小时的实例
-    if (member_->instances.find(INSTANCE_MANAGER_OWNER) != member_->instances.end()) {
-        const auto &ownerInstances = member_->instances[INSTANCE_MANAGER_OWNER];
-
-        for (const auto &[key, instance] : ownerInstances) {
-            if (!instance) {
-                continue;
-            }
-
-            // 检查是否为 FATAL 状态
-            if (instance->instancestatus().code() != static_cast<int32_t>(InstanceState::FATAL) &&
-                instance->instancestatus().code() != static_cast<int32_t>(InstanceState::EVICTED)) {
-                continue;
-            }
-
-            // 检查是否有 CREATE_TIME_STAMP
-            auto extIter = instance->extensions().find(CREATE_TIME_STAMP);
-            if (extIter == instance->extensions().end()) {
-                YRLOG_WARN("Instance({}) in FATAL state has no CREATE_TIME_STAMP, skip garbage collection",
-                           instance->instanceid());
-                continue;
-            }
-
-            // 解析创建时间戳
-            uint64_t createTimestamp = 0;
-            try {
-                createTimestamp = std::stoull(extIter->second);
-            } catch (const std::exception &e) {
-                YRLOG_ERROR("Failed to parse CREATE_TIME_STAMP for instance({}): {}",
-                            instance->instanceid(), e.what());
-                continue;
-            }
-
-            // 检查是否超过 1 小时
-            if (nowTimestamp > createTimestamp && (nowTimestamp - createTimestamp) > FATAL_INSTANCE_TIMEOUT) {
-                YRLOG_INFO("Found FATAL instance({}) exceeding timeout, created at {}, now {}, age {} seconds",
-                           instance->instanceid(), createTimestamp, nowTimestamp,
-                           nowTimestamp - createTimestamp);
-                instancesToDelete.emplace_back(key, instance);
-            }
+    auto actor = actor_.lock();
+    RETURN_IF_NULL(actor);
+    const auto nowTimestamp = static_cast<uint64_t>(std::time(nullptr));
+    // Canonical records cover both original-node and master takeover buckets.
+    // Do not collect an old alias of a newer, live generation.
+    for (const auto &[id, entry] : member_->instID2Instance) {
+        const auto &[key, instance] = entry;
+        if (instance == nullptr || instance->issystemfunc() || IsDriver(instance)
+            || instance->version() <= 0 || member_->isUpgrading) {
+            continue;
         }
-    }
-
-    if (instancesToDelete.empty()) {
-        return;
-    }
-    YRLOG_INFO("Garbage collecting {} FATAL instances that exceeded timeout", instancesToDelete.size());
-    for (const auto &[key, instance] : instancesToDelete) {
-        YRLOG_INFO("Force deleting FATAL instance({}) key({})", instance->instanceid(), key);
-        ForceDelete(key, instance);
+        const auto state = static_cast<InstanceState>(instance->instancestatus().code());
+        const bool masterOwned = instance->functionproxyid() == INSTANCE_MANAGER_OWNER;
+        const bool offline = !instance->functionproxyid().empty() && !NodeExists(instance->functionproxyid());
+        if ((IsEvictionState(*instance) && (masterOwned || offline))
+            || (state == InstanceState::RUNNING && instance->failover()
+                && (offline || (masterOwned && IsWaitingForLocalSnapshotRecovery(*instance))))
+            || (state == InstanceState::FATAL && !masterOwned && offline)) {
+            OnFaultLocalInstancePut(key, instance, "owner unavailable during lifecycle reconciliation");
+            continue;
+        }
+        if (!masterOwned || state != InstanceState::FATAL) {
+            continue;
+        }
+        auto timestamp = LifecycleTimestamp(*instance, CREATE_TIME_STAMP);
+        if (timestamp == 0 || timestamp > nowTimestamp) {
+            timestamp = LifecycleTimestamp(*instance, FATAL_TIME_STAMP);
+        }
+        if (timestamp == 0 || timestamp > nowTimestamp) {
+            // Persist a fallback time; a restart must not reset the retention window.
+            OnFaultLocalInstancePut(key, instance, instance->instancestatus().msg());
+            continue;
+        }
+        if (nowTimestamp > timestamp && nowTimestamp - timestamp > FATAL_INSTANCE_TIMEOUT) {
+            YRLOG_INFO("Garbage collecting FATAL instance({}) with version({})", id, instance->version());
+            // Bind deletion to the generation selected by this scan. The
+            // general KillInstance path resolves the ID again asynchronously
+            // and could otherwise target a newer, live generation.
+            auto request = actor->MakeKillReq(instance, "", SHUT_DOWN_SIGNAL, "fatal instance retention expired");
+            member_->killReqPromises.emplace(request->requestid(), std::make_shared<litebus::Promise<Status>>());
+            actor->DeleteInstanceWithoutScheduler(key, instance, request);
+        }
     }
 }
 
@@ -2695,19 +2741,29 @@ void InstanceManagerActor::ReplayFailedPutOperation(std::list<litebus::Future<St
                 continue;
             }
             auto &instance = iter->second.second;
+            if (event.second == "FATAL" && instance->functionproxyid() != INSTANCE_MANAGER_OWNER
+                && business_->NodeExists(instance->functionproxyid())
+                && !business_->IsLocalAbnormal(instance->functionproxyid())) {
+                // Reconciliation may have observed a successful recovery after
+                // the original fault write timed out. Do not terminate it by
+                // replaying the old fault against its new generation.
+                erasePutKeys->emplace(event.first);
+                continue;
+            }
             auto promise = std::make_shared<litebus::Promise<Status>>();
             futures.emplace_back(promise->GetFuture());
 
             auto tranState = event.second == "FATAL" ? InstanceState::FATAL : InstanceState::SCHEDULING;
             std::shared_ptr<StoreInfo> routePutInfo = std::make_shared<StoreInfo>();
             std::shared_ptr<StoreInfo> instancePutInfo = std::make_shared<StoreInfo>();
+            auto updated = std::make_shared<resource_view::InstanceInfo>(*instance);
             auto version = instance->version();  // version will +1 in GeneratePutInfo
-            if (!GeneratePutInfo(instance, instancePutInfo, routePutInfo, tranState, "local scheduler is abnormal")) {
+            if (!GeneratePutInfo(updated, instancePutInfo, routePutInfo, tranState, "local scheduler is abnormal")) {
                 YRLOG_ERROR("{}|failed to generate put info", instance->instanceid());
                 promise->SetValue(Status(StatusCode::FAILED, "failed to generate put info"));
                 continue;
             }
-            auto onModify = [aid(GetAID()), key(event.first), erasePutKeys, promise, tranState, instancePtr(instance),
+            auto onModify = [aid(GetAID()), key(event.first), erasePutKeys, promise, tranState, instancePtr(updated),
                              instanceKey(instancePutInfo->key)](const OperateResult &result) {
                 if (result.status.IsOk()) {
                     erasePutKeys->emplace(key);
@@ -2925,8 +2981,16 @@ size_t InstanceManagerActor::ReportNodeInstanceCountMetrics(std::unordered_set<s
         }
         size_t count = 0;
         for (const auto &[key, instance] : instanceMap) {
-            if (instance && instance->instancestatus().code() == static_cast<int32_t>(InstanceState::RUNNING)
-                && !instance->issystemfunc()) {
+            if (!instance || instance->issystemfunc() || instance->functionproxyid() != nodeID) {
+                continue;
+            }
+            const auto canonical = member_->instID2Instance.find(instance->instanceid());
+            if (canonical == member_->instID2Instance.end() || canonical->second.second != instance) {
+                continue;
+            }
+            if (instance->instancestatus().code() == static_cast<int32_t>(InstanceState::RUNNING)
+                && !IsWaitingForLocalSnapshotRecovery(*instance)
+                && business_->NodeExists(nodeID) && !business_->IsLocalAbnormal(nodeID)) {
                 count++;
             }
         }
@@ -2935,6 +2999,31 @@ size_t InstanceManagerActor::ReportNodeInstanceCountMetrics(std::unordered_set<s
         ReportInstanceCountMetric(nodeID, static_cast<double>(count));
     }
     return totalInstanceCount;
+}
+
+std::pair<size_t, size_t> InstanceManagerActor::CountUnavailableInstances() const
+{
+    size_t recovering = 0;
+    size_t unavailable = 0;
+    // Count canonical records once, including those taken over by the master.
+    for (const auto &[id, entry] : member_->instID2Instance) {
+        const auto &instance = entry.second;
+        if (!instance || instance->issystemfunc()) {
+            continue;
+        }
+        const auto state = static_cast<InstanceState>(instance->instancestatus().code());
+        if (IsWaitingForLocalSnapshotRecovery(*instance)) {
+            ++recovering;
+        } else if (state == InstanceState::FATAL || state == InstanceState::EVICTED
+                   || state == InstanceState::EXITED
+                   || (state == InstanceState::RUNNING
+                       && (instance->functionproxyid() == INSTANCE_MANAGER_OWNER
+                           || !business_->NodeExists(instance->functionproxyid())
+                           || business_->IsLocalAbnormal(instance->functionproxyid())))) {
+            ++unavailable;
+        }
+    }
+    return { recovering, unavailable };
 }
 
 void InstanceManagerActor::ClearRemovedNodeInstanceCountMetrics(
@@ -2959,6 +3048,16 @@ void InstanceManagerActor::ReportClusterInstanceTotalMetric(size_t totalInstance
         {}
     };
     functionsystem::metrics::MetricsAdapter::GetInstance().ReportDoubleGauge(totalMeterTitle, totalMeterData, {});
+
+    const auto [recovering, unavailable] = CountUnavailableInstances();
+    functionsystem::metrics::MeterData recoveringData{ static_cast<double>(recovering), {} };
+    functionsystem::metrics::MeterData unavailableData{ static_cast<double>(unavailable), {} };
+    functionsystem::metrics::MetricsAdapter::GetInstance().ReportDoubleGauge(
+        { "yr_cluster_instance_recovering", "Instances waiting for same-node local snapshot recovery", "count" },
+        recoveringData, {});
+    functionsystem::metrics::MetricsAdapter::GetInstance().ReportDoubleGauge(
+        { "yr_cluster_instance_unavailable", "Terminal instances or running records without an available owner", "count" },
+        unavailableData, {});
 
     YRLOG_DEBUG("Report running instance count metrics: total={}, nodes={}", totalInstanceCount, nodeCount);
 }

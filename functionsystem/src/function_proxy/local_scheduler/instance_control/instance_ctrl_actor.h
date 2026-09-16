@@ -388,7 +388,8 @@ public:
 
     // Forwards a kill to function_master so it can resolve the instance owner from
     // the global view (or report that the instance does not exist).
-    litebus::Future<KillResponse> ForwardKillToMaster(const std::shared_ptr<KillRequest> &killReq);
+    litebus::Future<KillResponse> ForwardKillToMaster(const std::shared_ptr<KillRequest> &killReq,
+                                                const std::string &frontendTenantID = "");
 
     void BindControlInterfaceClientManager(const std::shared_ptr<ControlInterfaceClientManagerProxy> &mgr)
     {

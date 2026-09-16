@@ -229,9 +229,7 @@ OperateResult InstanceOperator::OnDelete(const OperateInfo &operateInfo)
     }
     auto getResponse = std::get<GetResponse>(operateInfo.response->responses[0].response);
     if (getResponse.kvs.empty()) {
-        YRLOG_ERROR("get response KV is empty, key: {}", operateInfo.key);
-        return OperateResult{ Status(StatusCode::INSTANCE_TRANSACTION_GET_INFO_FAILED, "get response KV is empty"), "",
-                              0, 0 };
+        return OperateResult{ Status::OK(), "", 0, operateInfo.response->header.revision };
     }
     return OperateResult{ Status(StatusCode::INSTANCE_TRANSACTION_WRONG_VERSION, "version is incorrect"),
                           getResponse.kvs.front().value(), 0, getResponse.kvs.front().mod_revision() };

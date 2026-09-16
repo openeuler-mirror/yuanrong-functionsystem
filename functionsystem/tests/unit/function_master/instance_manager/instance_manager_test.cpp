@@ -31,6 +31,7 @@
 #include "common/utils/struct_transfer.h"
 #include "function_master/instance_manager/group_manager.h"
 #include "function_master/instance_manager/instance_manager_actor.h"
+#include "function_master/instance_manager/instance_owner.h"
 #include "function_master/instance_manager/instance_manager_driver.h"
 #include "mocks/mock_global_schd.h"
 #include "mocks/mock_instance_operator.h"
@@ -138,35 +139,25 @@ public:
     int fatalWrites{ 0 };
 };
 
-TEST(InstanceManagerActorTest, LocalFailoverInstanceStaysRunningWhenNodeTemporarilyExits)
+TEST(InstanceManagerActorTest, LocalFailoverInstanceUsesFaultCleanupWhenNodeExits)
 {
     auto member = std::make_shared<InstanceManagerActor::Member>();
-    auto business = std::make_shared<RecordingMasterBusiness>(
-        member, nullptr);
+    auto business = std::make_shared<RecordingMasterBusiness>(member, nullptr);
     auto instance = std::make_shared<resource_view::InstanceInfo>();
     instance->set_instanceid("failover-instance");
     instance->set_failover(true);
-    instance->mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::CREATING));
-    const std::pair<const std::string, std::shared_ptr<resource_view::InstanceInfo>> entry(
-        "instance-key", instance);
-
-    business->ProcessInstanceNotReSchedule(entry, "stable-node", "stable-node is exited");
-    EXPECT_EQ(business->fatalWrites, 0);
-    EXPECT_EQ(instance->instancestatus().code(), static_cast<int32_t>(InstanceState::RUNNING));
-
-    instance->set_failover(false);
+    instance->mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::RUNNING));
+    const std::pair<const std::string, std::shared_ptr<resource_view::InstanceInfo>> entry("instance-key", instance);
     business->ProcessInstanceNotReSchedule(entry, "stable-node", "stable-node is exited");
     EXPECT_EQ(business->fatalWrites, 1);
+    instance->set_failover(false);
+    business->ProcessInstanceNotReSchedule(entry, "stable-node", "stable-node is exited");
+    EXPECT_EQ(business->fatalWrites, 2);
 
     instance->set_failover(true);
     instance->set_lowreliability(true);
     instance->mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::FATAL));
-    EXPECT_FALSE(business->IsInstanceShouldBeKilled(instance));
-
-    auto baseBusiness = std::make_shared<InstanceManagerActor::MasterBusiness>(member, nullptr);
-    baseBusiness->OnFaultLocalInstancePut(
-        "instance-key", instance, "stable-node is unavailable");
-    EXPECT_EQ(instance->instancestatus().code(), static_cast<int32_t>(InstanceState::RUNNING));
+    EXPECT_TRUE(business->IsInstanceShouldBeKilled(instance));
 }
 
 class DISABLED_InstanceManagerTest : public ::testing::Test {
@@ -2586,12 +2577,524 @@ public:
 
     void Init() override
     {
+        Receive("ForwardKill", &InstanceManagerActor::ForwardKill);
         Receive("FinalizePausedSnapshotDeleteResponse",
                 &InstanceManagerActor::FinalizePausedSnapshotDeleteResponse);
         Receive("DeleteReusableSnapshotArtifactResponse",
                 &InstanceManagerActor::DeleteReusableSnapshotArtifactResponse);
     }
 };
+
+class InstanceManagerOfflineRecoveryTest : public ::testing::Test {
+protected:
+    void SetUp() override
+    {
+        scheduler = std::make_shared<MockGlobalSched>();
+        actor = std::make_shared<PausedDeleteInstanceManagerActor>(
+            nullptr, scheduler, nullptr, nullptr, InstanceManagerStartParam{});
+        business = std::make_shared<InstanceManagerActor::MasterBusiness>(actor->member_, actor);
+        business->nodeSynced_ = true;
+        actor->business_ = business;
+        instanceOperator = std::make_shared<MockInstanceOperator>();
+        actor->member_->instanceOpt = instanceOperator;
+        ASSERT_TRUE(litebus::Spawn(actor).OK());
+    }
+
+    void TearDown() override
+    {
+        litebus::Terminate(actor->GetAID());
+        litebus::Await(actor->GetAID());
+    }
+
+    std::shared_ptr<resource_view::InstanceInfo> AddInstance(const std::string &id, bool waiting = true)
+    {
+        auto info = std::make_shared<resource_view::InstanceInfo>();
+        info->set_instanceid(id);
+        info->set_requestid("request-" + id);
+        info->set_function("tenant/function/$latest");
+        info->set_functionproxyid("old-node");
+        info->set_failover(true);
+        info->set_version(7);
+        info->mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::RUNNING));
+        info->mutable_instancestatus()->set_msg(waiting ? "waiting for same-node local snapshot recovery" : "running");
+        const auto key = GenInstanceKey(info->function(), id, info->requestid()).Get();
+        actor->member_->instID2Instance[id] = { key, info };
+        actor->member_->instances["old-node"][key] = info;
+        return info;
+    }
+
+    litebus::Future<Status> Delete(const std::shared_ptr<resource_view::InstanceInfo> &info,
+                                  int32_t signal = SHUT_DOWN_SIGNAL)
+    {
+        auto kill = std::make_shared<internal::ForwardKillRequest>();
+        kill->set_requestid("delete-" + info->instanceid());
+        kill->mutable_req()->set_instanceid(info->instanceid());
+        kill->mutable_req()->set_signal(signal);
+        completion = std::make_shared<litebus::Promise<Status>>();
+        actor->member_->killReqPromises[kill->requestid()] = completion;
+        return litebus::Async(actor->GetAID(), &InstanceManagerActor::KillInstanceWithRetry,
+                              info->instanceid(), kill);
+    }
+
+    std::shared_ptr<MockGlobalSched> scheduler;
+    std::shared_ptr<PausedDeleteInstanceManagerActor> actor;
+    std::shared_ptr<InstanceManagerActor::MasterBusiness> business;
+    std::shared_ptr<MockInstanceOperator> instanceOperator;
+    std::shared_ptr<litebus::Promise<Status>> completion;
+};
+
+TEST_F(InstanceManagerOfflineRecoveryTest, FaultPersistsFatalAndMasterOwnershipWithVersionCheck)
+{
+    auto info = AddInstance("faulted");
+    const auto key = actor->member_->instID2Instance.at("faulted").first;
+    EXPECT_CALL(*instanceOperator, Modify(testing::_, testing::_, 7, false))
+        .WillOnce([&](const auto &instance, const auto &route, int64_t, bool) {
+            resources::InstanceInfo stored;
+            EXPECT_TRUE(TransToInstanceInfoFromJson(stored, instance->value));
+            EXPECT_EQ(stored.instancestatus().code(), static_cast<int32_t>(InstanceState::FATAL));
+            EXPECT_EQ(stored.functionproxyid(), INSTANCE_MANAGER_OWNER);
+            EXPECT_EQ(stored.version(), 8);
+            EXPECT_EQ(route->key, GenInstanceRouteKey("faulted"));
+            EXPECT_NE(stored.instancestatus().msg(), "waiting for same-node local snapshot recovery");
+            return OperateResult{ Status::OK(), "", 7, 10 };
+        });
+    (*info->mutable_createoptions())[RECOVER_RETRY_TIMES_KEY] = "3";
+    business->ProcessInstanceOnFaultLocal("old-node", "old-node is exited");
+    // Only the authoritative watch may replace the in-memory generation.
+    EXPECT_EQ(info->version(), 7);
+    EXPECT_EQ(info->functionproxyid(), "old-node");
+}
+
+TEST_F(InstanceManagerOfflineRecoveryTest, RestoredRunningRecordOnMissingNodeBecomesFatal)
+{
+    auto info = AddInstance("after-master-restart", false);
+    const auto key = actor->member_->instID2Instance.at(info->instanceid()).first;
+    EXPECT_CALL(*instanceOperator, Modify(testing::_, testing::_, 7, false))
+        .WillOnce([](const auto &instance, const auto &, int64_t, bool) {
+            resources::InstanceInfo stored;
+            EXPECT_TRUE(TransToInstanceInfoFromJson(stored, instance->value));
+            EXPECT_EQ(stored.instancestatus().code(), static_cast<int32_t>(InstanceState::FATAL));
+            EXPECT_EQ(stored.functionproxyid(), INSTANCE_MANAGER_OWNER);
+            return OperateResult{ Status::OK(), "", 7, 10 };
+        });
+    EXPECT_TRUE(actor->HandleFaultedInstancePut(key, info));
+}
+
+TEST_F(InstanceManagerOfflineRecoveryTest, BothEvictionStatesBecomeFatalAfterRegisteredNodeLoss)
+{
+    for (const auto state : { InstanceState::EVICTING, InstanceState::EVICTED }) {
+        auto info = AddInstance("eviction-" + std::to_string(static_cast<int>(state)), false);
+        info->mutable_instancestatus()->set_code(static_cast<int32_t>(state));
+        info->set_failover(false);
+        (*info->mutable_createoptions())[RECOVER_RETRY_TIMES_KEY] = "3";
+    }
+    EXPECT_CALL(*instanceOperator, Modify(testing::_, testing::_, 7, false)).Times(2)
+        .WillRepeatedly([](const auto &instance, const auto &, int64_t, bool) {
+            resources::InstanceInfo stored;
+            EXPECT_TRUE(TransToInstanceInfoFromJson(stored, instance->value));
+            EXPECT_EQ(stored.instancestatus().code(), static_cast<int32_t>(InstanceState::FATAL));
+            EXPECT_EQ(stored.functionproxyid(), INSTANCE_MANAGER_OWNER);
+            EXPECT_GT(LifecycleTimestamp(stored, FATAL_TIME_STAMP), 0u);
+            return OperateResult{ Status::OK(), "", 7, 10 };
+        });
+    business->ProcessInstanceOnFaultLocal("old-node", "owner exited during eviction");
+}
+
+TEST_F(InstanceManagerOfflineRecoveryTest, StartupTakesOverEvictingEvictedAndLegacyMasterWait)
+{
+    EXPECT_CALL(*instanceOperator, Modify(testing::_, testing::_, 7, false)).Times(3)
+        .WillRepeatedly([](const auto &instance, const auto &, int64_t, bool) {
+            resources::InstanceInfo stored;
+            EXPECT_TRUE(TransToInstanceInfoFromJson(stored, instance->value));
+            EXPECT_EQ(stored.instancestatus().code(), static_cast<int32_t>(InstanceState::FATAL));
+            EXPECT_EQ(stored.functionproxyid(), INSTANCE_MANAGER_OWNER);
+            EXPECT_EQ(stored.version(), 8);
+            return OperateResult{ Status::OK(), "", 7, 10 };
+        });
+    for (const auto state : { InstanceState::EVICTING, InstanceState::EVICTED, InstanceState::RUNNING }) {
+        auto info = AddInstance("restored-" + std::to_string(static_cast<int>(state)));
+        info->mutable_instancestatus()->set_code(static_cast<int32_t>(state));
+        if (state == InstanceState::RUNNING) { info->set_functionproxyid(INSTANCE_MANAGER_OWNER); }
+        EXPECT_TRUE(actor->HandleFaultedInstancePut(actor->member_->instID2Instance.at(info->instanceid()).first, info));
+        EXPECT_EQ(info->instancestatus().code(), static_cast<int32_t>(state));
+    }
+}
+
+TEST_F(InstanceManagerOfflineRecoveryTest, GarbageCollectionReconcilesOfflineBucketsButProtectsLiveEviction)
+{
+    auto offline = AddInstance("orphan-evicting", false);
+    offline->mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::EVICTING));
+    auto live = AddInstance("live-evicting", false);
+    live->set_functionproxyid("live-node");
+    live->mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::EVICTING));
+    business->AddNode("live-node");
+    auto lease = AddInstance("leased-evicted", false);
+    lease->set_functionproxyid("leased-node");
+    lease->mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::EVICTED));
+    actor->member_->proxyRouteSet.insert("/yr/busproxy/business/yrk/tenant/0/node/leased-node");
+    EXPECT_CALL(*instanceOperator, Modify(testing::_, testing::_, 7, false)).Times(1)
+        .WillOnce([](const auto &stored, const auto &, int64_t, bool) {
+            resources::InstanceInfo value;
+            EXPECT_TRUE(TransToInstanceInfoFromJson(value, stored->value));
+            EXPECT_EQ(value.instanceid(), "orphan-evicting");
+            EXPECT_EQ(value.instancestatus().code(), static_cast<int32_t>(InstanceState::FATAL));
+            return OperateResult{ Status::OK(), "", 7, 10 };
+        });
+    EXPECT_CALL(*instanceOperator, Delete).Times(0);
+    EXPECT_CALL(*instanceOperator, ForceDelete).Times(0);
+    business->GarbageCollectFatalInstances();
+    EXPECT_FALSE(actor->HandleFaultedInstancePut(actor->member_->instID2Instance.at(live->instanceid()).first, live));
+}
+
+TEST_F(InstanceManagerOfflineRecoveryTest, MissingOrMalformedTimestampGetsPersistedFallback)
+{
+    for (const auto &value : { std::string(""), std::string("broken"), std::string("-1") }) {
+        auto info = AddInstance("missing-time-" + value, false);
+        info->set_functionproxyid(INSTANCE_MANAGER_OWNER);
+        info->mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::FATAL));
+        (*info->mutable_extensions())[CREATE_TIME_STAMP] = value;
+    }
+    EXPECT_CALL(*instanceOperator, Modify(testing::_, testing::_, 7, false)).Times(3)
+        .WillRepeatedly([](const auto &instance, const auto &, int64_t, bool) {
+            resources::InstanceInfo stored;
+            EXPECT_TRUE(TransToInstanceInfoFromJson(stored, instance->value));
+            EXPECT_GT(LifecycleTimestamp(stored, FATAL_TIME_STAMP), 0u);
+            return OperateResult{ Status::OK(), "", 7, 10 };
+        });
+    EXPECT_CALL(*instanceOperator, Delete).Times(0);
+    business->GarbageCollectFatalInstances();
+}
+
+TEST_F(InstanceManagerOfflineRecoveryTest, GarbageCollectionUsesCanonicalVersionedDelete)
+{
+    auto info = AddInstance("expired-fatal", false);
+    info->set_functionproxyid(INSTANCE_MANAGER_OWNER);
+    info->mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::FATAL));
+    (*info->mutable_extensions())[FATAL_TIME_STAMP] = std::to_string(std::time(nullptr) - 7200);
+    auto completed = std::make_shared<litebus::Promise<bool>>();
+    EXPECT_CALL(*instanceOperator, ForceDelete).Times(0);
+    EXPECT_CALL(*instanceOperator, Delete(testing::_, testing::_, testing::_, 7, false))
+        .WillOnce([completed](const auto &, const auto &, const auto &, int64_t, bool) {
+            completed->SetValue(true);
+            return OperateResult{ Status(StatusCode::INSTANCE_TRANSACTION_WRONG_VERSION), "", 0, 0 };
+        });
+    business->GarbageCollectFatalInstances();
+    ASSERT_AWAIT_READY(completed->GetFuture());
+    EXPECT_EQ(info->version(), 7);
+}
+
+TEST_F(InstanceManagerOfflineRecoveryTest, GarbageCollectionDoesNotResolveANewerGenerationByID)
+{
+    auto old = AddInstance("recreated-during-gc", false);
+    old->set_functionproxyid(INSTANCE_MANAGER_OWNER);
+    old->mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::FATAL));
+    (*old->mutable_extensions())[FATAL_TIME_STAMP] = std::to_string(std::time(nullptr) - 7200);
+    auto current = std::make_shared<resource_view::InstanceInfo>(*old);
+    current->set_version(8);
+    current->set_functionproxyid("live-node");
+    current->mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::RUNNING));
+    business->AddNode("live-node");
+    auto transaction = std::make_shared<litebus::Promise<OperateResult>>();
+    EXPECT_CALL(*instanceOperator, ForceDelete).Times(0);
+    EXPECT_CALL(*scheduler, GetLocalAddress(testing::_)).Times(0);
+    EXPECT_CALL(*instanceOperator, Delete(testing::_, testing::_, testing::_, 7, false))
+        .WillOnce(testing::Return(transaction->GetFuture()));
+    // Publish the new generation before another queued actor task can run.
+    std::function<Status()> scan = [this, old, current]() {
+        business->GarbageCollectFatalInstances();
+        actor->member_->instID2Instance.at(old->instanceid()).second = current;
+        EXPECT_EQ(actor->member_->exitingInstances.count(old->instanceid()), 0u);
+        return Status::OK();
+    };
+    auto scanned = litebus::Async(actor->GetAID(), &InstanceManagerActor::Execute, scan);
+    ASSERT_AWAIT_READY(scanned);
+    transaction->SetValue(OperateResult{ Status(StatusCode::INSTANCE_TRANSACTION_WRONG_VERSION), "", 0, 0 });
+    std::function<Status()> verify = [this, current]() {
+        EXPECT_EQ(actor->member_->instID2Instance.at(current->instanceid()).second, current);
+        EXPECT_EQ(current->instancestatus().code(), static_cast<int32_t>(InstanceState::RUNNING));
+        EXPECT_EQ(actor->member_->exitingInstances.count(current->instanceid()), 0u);
+        return Status::OK();
+    };
+    auto verified = litebus::Async(actor->GetAID(), &InstanceManagerActor::Execute, verify);
+    ASSERT_AWAIT_READY(verified);
+}
+
+TEST_F(InstanceManagerOfflineRecoveryTest, DeleteWatchClearsStaleNodeAliasForMasterOwnedRecord)
+{
+    auto info = AddInstance("stale-node-alias", false);
+    const auto key = actor->member_->instID2Instance.at(info->instanceid()).first;
+    info->set_functionproxyid(INSTANCE_MANAGER_OWNER);
+    actor->member_->instances[INSTANCE_MANAGER_OWNER][key] = info;
+    actor->OnInstanceDelete(key, info);
+    EXPECT_TRUE(actor->member_->instances.empty());
+    EXPECT_TRUE(actor->member_->instID2Instance.empty());
+}
+
+TEST_F(InstanceManagerOfflineRecoveryTest, FrontendDeleteValidatesTenantAndUsesOfflineTransaction)
+{
+    auto info = AddInstance("frontend-fatal", false);
+    info->set_tenantid("tenant");
+    info->set_functionproxyid(INSTANCE_MANAGER_OWNER);
+    info->mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::FATAL));
+    messages::ForwardKillRequest req;
+    req.mutable_req()->set_instanceid(info->instanceid());
+    req.mutable_req()->set_signal(SHUT_DOWN_SIGNAL);
+    req.set_frontendtenantid("other-tenant");
+    auto rejected = business->DeleteFrontendInstance(req);
+    ASSERT_AWAIT_READY(rejected);
+    EXPECT_EQ(rejected.Get().StatusCode(), StatusCode::ERR_AUTHORIZE_FAILED);
+    req.set_frontendtenantid("tenant");
+    EXPECT_CALL(*instanceOperator, Delete(testing::_, testing::_, testing::_, 7, false))
+        .WillOnce(testing::Return(OperateResult{ Status::OK(), "", 0, 0 }));
+    auto deleted = business->DeleteFrontendInstance(req);
+    ASSERT_AWAIT_READY(deleted);
+    EXPECT_TRUE(deleted.Get().IsOk());
+}
+
+TEST_F(InstanceManagerOfflineRecoveryTest, FrontendRepeatedDeleteRequiresAuthoritativeAbsence)
+{
+    auto client = std::make_shared<MockMetaStoreClient>("");
+    actor->member_->client = client;
+    messages::ForwardKillRequest req;
+    req.mutable_req()->set_instanceid("absent");
+    req.mutable_req()->set_signal(SHUT_DOWN_SIGNAL);
+    req.set_frontendtenantid("tenant");
+    auto empty = std::make_shared<GetResponse>();
+    empty->status = Status::OK();
+    EXPECT_CALL(*client, Get(INSTANCE_PATH_PREFIX + "/tenant/", testing::_)).WillOnce(testing::Return(empty));
+    EXPECT_CALL(*client, Get(GenInstanceRouteKey("absent"), testing::_)).WillOnce(testing::Return(empty));
+    auto result = business->DeleteFrontendInstance(req);
+    ASSERT_AWAIT_READY(result);
+    EXPECT_TRUE(result.Get().IsOk());
+}
+
+TEST_F(InstanceManagerOfflineRecoveryTest, FrontendCacheMissDoesNotHideStoreFailureOrUnreconciledRecord)
+{
+    auto client = std::make_shared<MockMetaStoreClient>("");
+    actor->member_->client = client;
+    messages::ForwardKillRequest req;
+    req.mutable_req()->set_instanceid("not-reconciled");
+    req.mutable_req()->set_signal(SHUT_DOWN_SIGNAL);
+    req.set_frontendtenantid("tenant");
+    auto failure = std::make_shared<GetResponse>();
+    failure->status = Status(StatusCode::GRPC_UNAVAILABLE);
+    auto present = std::make_shared<GetResponse>();
+    present->status = Status::OK();
+    KeyValue kv;
+    kv.set_key(INSTANCE_PATH_PREFIX + "/tenant/function/f/version/v/defaultaz/r/not-reconciled");
+    present->kvs.push_back(kv);
+    EXPECT_CALL(*client, Get(INSTANCE_PATH_PREFIX + "/tenant/", testing::_))
+        .WillOnce(testing::Return(failure)).WillOnce(testing::Return(present));
+    EXPECT_CALL(*client, Get(GenInstanceRouteKey("not-reconciled"), testing::_)).Times(0);
+    for (auto code : { StatusCode::ERR_ETCD_OPERATION_ERROR, StatusCode::ERR_INNER_SYSTEM_ERROR }) {
+        auto result = business->DeleteFrontendInstance(req);
+        ASSERT_AWAIT_READY(result);
+        EXPECT_EQ(result.Get().StatusCode(), code);
+    }
+}
+
+TEST_F(InstanceManagerOfflineRecoveryTest, FaultWriteConflictPreservesOriginalGeneration)
+{
+    auto info = AddInstance("fault-conflict", false);
+    const auto key = actor->member_->instID2Instance.at(info->instanceid()).first;
+    EXPECT_CALL(*instanceOperator, Modify(testing::_, testing::_, 7, false))
+        .WillOnce(testing::Return(OperateResult{ Status(StatusCode::INSTANCE_TRANSACTION_WRONG_VERSION), "", 0, 0 }));
+    business->OnFaultLocalInstancePut(key, info, "old-node is exited");
+    EXPECT_EQ(info->instancestatus().code(), static_cast<int32_t>(InstanceState::RUNNING));
+    EXPECT_EQ(info->version(), 7);
+    EXPECT_EQ(info->functionproxyid(), "old-node");
+}
+
+TEST_F(InstanceManagerOfflineRecoveryTest, FaultReplayDoesNotTerminateRecoveredOwner)
+{
+    auto info = AddInstance("recovered", false);
+    business->AddNode("old-node");
+    actor->member_->operateCacher->AddPutEvent(INSTANCE_PATH_PREFIX, "recovered", "FATAL");
+    EXPECT_CALL(*instanceOperator, Modify).Times(0);
+    std::list<litebus::Future<Status>> futures;
+    auto erased = std::make_shared<std::set<std::string>>();
+    actor->ReplayFailedPutOperation(futures, erased);
+    EXPECT_TRUE(futures.empty());
+    EXPECT_EQ(erased->count("recovered"), 1u);
+    EXPECT_EQ(info->version(), 7);
+}
+
+TEST_F(InstanceManagerOfflineRecoveryTest, RouteLessKillDoesNotAcknowledgeMissingMetadata)
+{
+    auto caller = std::make_shared<MockBootstrapStubActor>("offline-delete-caller");
+    ASSERT_TRUE(litebus::Spawn(caller).OK());
+    messages::ForwardKillRequest request;
+    request.set_requestid("repeat-delete");
+    request.mutable_req()->set_instanceid("already-deleted");
+    for (auto signal : { SHUT_DOWN_SIGNAL, SHUT_DOWN_SIGNAL_SYNC, INSTANCE_RELOAD_SIGNAL }) {
+        request.mutable_req()->set_signal(signal);
+        auto result = litebus::Async(caller->GetAID(), &MockBootstrapStubActor::SendForwardKill,
+                                     actor->GetAID(), request);
+        ASSERT_AWAIT_READY(result);
+        EXPECT_EQ(result.Get().StatusCode(), StatusCode::ERR_INSTANCE_NOT_FOUND);
+    }
+    litebus::Terminate(caller->GetAID());
+    litebus::Await(caller->GetAID());
+}
+
+TEST_F(InstanceManagerOfflineRecoveryTest, FatalOwnerDeleteWaitsForStoreResult)
+{
+    auto info = AddInstance("fatal-delete", false);
+    info->mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::FATAL));
+    info->set_functionproxyid(INSTANCE_MANAGER_OWNER);
+    EXPECT_CALL(*scheduler, GetLocalAddress(testing::_)).Times(0);
+    EXPECT_CALL(*instanceOperator, ForceDelete).Times(0);
+    EXPECT_CALL(*instanceOperator, Delete(testing::_, testing::_, testing::_, 7, false))
+        .WillOnce(testing::Return(OperateResult{ Status(StatusCode::GRPC_UNAVAILABLE), "", 0, 0 }));
+    auto deletion = Delete(info);
+    ASSERT_AWAIT_READY(deletion);
+    ASSERT_AWAIT_READY(completion->GetFuture());
+    EXPECT_EQ(completion->GetFuture().Get().StatusCode(), StatusCode::GRPC_UNAVAILABLE);
+}
+
+TEST_F(InstanceManagerOfflineRecoveryTest, MetricsSeparateRecoveryAndUnavailableRecords)
+{
+    auto live = AddInstance("live", false);
+    live->set_functionproxyid("live-node");
+    const auto liveKey = actor->member_->instID2Instance.at("live").first;
+    actor->member_->instances["live-node"][liveKey] = live;
+    business->AddNode("live-node");
+    auto waiting = AddInstance("waiting");
+    const auto waitingKey = actor->member_->instID2Instance.at("waiting").first;
+    actor->member_->instances[INSTANCE_MANAGER_OWNER][waitingKey] = waiting;
+    AddInstance("system")->set_issystemfunc(true);
+    AddInstance("lost-without-marker", false);
+    auto fatal = AddInstance("fatal", false);
+    fatal->mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::FATAL));
+    std::unordered_set<std::string> nodes;
+    EXPECT_EQ(actor->ReportNodeInstanceCountMetrics(nodes), 1u);
+    EXPECT_EQ(actor->CountUnavailableInstances(), std::make_pair(size_t{1}, size_t{2}));
+    // A recovered PUT replaces the marker and transfers the master alias away.
+    waiting->mutable_instancestatus()->set_msg("running");
+    business->AddNode("old-node");
+    EXPECT_EQ(actor->CountUnavailableInstances(), std::make_pair(size_t{0}, size_t{1}));
+    EXPECT_EQ(actor->ReportNodeInstanceCountMetrics(nodes), 3u);
+}
+
+TEST_F(InstanceManagerOfflineRecoveryTest, DeleteWaitsForVersionedTransactionAndNeverContactsScheduler)
+{
+    auto info = AddInstance("offline");
+    litebus::Promise<OperateResult> transaction;
+    EXPECT_CALL(*scheduler, GetLocalAddress(testing::_)).Times(0);
+    EXPECT_CALL(*instanceOperator, ForceDelete).Times(0);
+    EXPECT_CALL(*instanceOperator, Delete(testing::_, testing::_, testing::_, 7, false))
+        .WillOnce([&](const auto &instance, const auto &route, const auto &, int64_t, bool) {
+            EXPECT_EQ(instance->key, actor->member_->instID2Instance.at("offline").first);
+            EXPECT_EQ(route->key, GenInstanceRouteKey("offline"));
+            return transaction.GetFuture();
+        });
+    auto deletion = Delete(info);
+    // A mailbox barrier confirms the delete was dispatched before checking the promise.
+    auto barrier = litebus::Async(actor->GetAID(), &InstanceManagerActor::Execute, [] { return Status::OK(); });
+    ASSERT_AWAIT_READY(barrier);
+    EXPECT_TRUE(completion->GetFuture().IsInit());
+    transaction.SetValue(OperateResult{ Status::OK(), "", 0, 10 });
+    ASSERT_AWAIT_READY(deletion);
+    ASSERT_AWAIT_READY(completion->GetFuture());
+    EXPECT_TRUE(completion->GetFuture().Get().IsOk());
+}
+
+TEST_F(InstanceManagerOfflineRecoveryTest, OfflineFailoverDeleteDoesNotDependOnStatusMessage)
+{
+    auto info = AddInstance("offline-without-marker", false);
+    EXPECT_CALL(*scheduler, GetLocalAddress(testing::_)).Times(0);
+    EXPECT_CALL(*instanceOperator, ForceDelete).Times(0);
+    EXPECT_CALL(*instanceOperator, Delete(testing::_, testing::_, testing::_, 7, false))
+        .WillOnce(testing::Return(OperateResult{ Status::OK(), "", 0, 10 }));
+    auto deletion = Delete(info);
+    ASSERT_AWAIT_READY(deletion);
+    ASSERT_AWAIT_READY(completion->GetFuture());
+    EXPECT_TRUE(completion->GetFuture().Get().IsOk());
+}
+
+TEST_F(InstanceManagerOfflineRecoveryTest, RecoveryVersionConflictPreservesMetadata)
+{
+    auto info = AddInstance("conflict");
+    EXPECT_CALL(*instanceOperator, ForceDelete).Times(0);
+    EXPECT_CALL(*instanceOperator, Delete).WillOnce(testing::Return(
+        OperateResult{ Status(StatusCode::INSTANCE_TRANSACTION_WRONG_VERSION), "", 0, 11 }));
+    auto deletion = Delete(info);
+    ASSERT_AWAIT_READY(deletion);
+    ASSERT_AWAIT_READY(completion->GetFuture());
+    EXPECT_EQ(completion->GetFuture().Get().StatusCode(), StatusCode::INSTANCE_TRANSACTION_WRONG_VERSION);
+    EXPECT_EQ(actor->member_->instID2Instance.count("conflict"), 1u);
+}
+
+TEST_F(InstanceManagerOfflineRecoveryTest, StorageFailureIsReturnedWithoutSuccessOrUnconditionalReplay)
+{
+    auto info = AddInstance("storage-failure");
+    EXPECT_CALL(*instanceOperator, ForceDelete).Times(0);
+    EXPECT_CALL(*instanceOperator, Delete).WillOnce(testing::Return(
+        OperateResult{ Status(StatusCode::GRPC_UNAVAILABLE), "", 0, 0 }));
+    auto deletion = Delete(info);
+    ASSERT_AWAIT_READY(deletion);
+    ASSERT_AWAIT_READY(completion->GetFuture());
+    EXPECT_EQ(completion->GetFuture().Get().StatusCode(), StatusCode::GRPC_UNAVAILABLE);
+    EXPECT_EQ(actor->member_->instID2Instance.count("storage-failure"), 1u);
+}
+
+TEST_F(InstanceManagerOfflineRecoveryTest, FutureFailureCompletesDeleteRequest)
+{
+    auto info = AddInstance("future-failure");
+    litebus::Promise<OperateResult> transaction;
+    transaction.SetFailed(static_cast<int32_t>(StatusCode::GRPC_UNAVAILABLE));
+    EXPECT_CALL(*instanceOperator, Delete).WillOnce(testing::Return(transaction.GetFuture()));
+    auto deletion = Delete(info);
+    ASSERT_AWAIT_READY(deletion);
+    ASSERT_AWAIT_READY(completion->GetFuture());
+    EXPECT_EQ(completion->GetFuture().Get().StatusCode(), StatusCode::ERR_ETCD_OPERATION_ERROR);
+}
+
+TEST_F(InstanceManagerOfflineRecoveryTest, LiveOwnerAndLeaseAndCustomSignalsDoNotUseOfflineDelete)
+{
+    EXPECT_CALL(*instanceOperator, Delete).Times(0);
+    EXPECT_CALL(*scheduler, GetLocalAddress(testing::_))
+        .WillRepeatedly(testing::Return(litebus::Option<std::string>()));
+    business->AddNode("old-node");
+    auto request = Delete(AddInstance("live-owner"));
+    ASSERT_AWAIT_READY(request);
+    business->nodes_.clear();
+    actor->member_->proxyRouteSet.insert("/yr/busproxy/business/yrk/tenant/0/node/old-node");
+    request = Delete(AddInstance("leased-owner"));
+    ASSERT_AWAIT_READY(request);
+    actor->member_->proxyRouteSet.clear();
+    request = Delete(AddInstance("custom-signal"), INSTANCE_RELOAD_SIGNAL);
+    ASSERT_AWAIT_READY(request);
+    auto system = AddInstance("system-instance");
+    system->set_issystemfunc(true);
+    request = Delete(system);
+    ASSERT_AWAIT_READY(request);
+    business->nodeSynced_ = false;
+    request = Delete(AddInstance("before-node-sync"));
+    ASSERT_AWAIT_READY(request);
+}
+
+TEST_F(InstanceManagerOfflineRecoveryTest, DeleteEventClearsBothOwnerIndexesAndIsIdempotent)
+{
+    auto info = AddInstance("aliases");
+    const auto key = actor->member_->instID2Instance.at("aliases").first;
+    actor->member_->instances[INSTANCE_MANAGER_OWNER][key] = info;
+    actor->member_->jobID2InstanceIDs["job"] = { "aliases" };
+    info->set_jobid("job");
+    actor->OnInstanceDelete(key, info);
+    EXPECT_EQ(actor->member_->instID2Instance.count("aliases"), 0u);
+    EXPECT_EQ(actor->member_->instances.count("old-node"), 0u);
+    EXPECT_EQ(actor->member_->instances.count(INSTANCE_MANAGER_OWNER), 0u);
+    EXPECT_EQ(actor->member_->jobID2InstanceIDs.count("job"), 0u);
+    std::unordered_set<std::string> nodes;
+    EXPECT_EQ(actor->ReportNodeInstanceCountMetrics(nodes), 0u);
+    EXPECT_EQ(actor->CountUnavailableInstances(), std::make_pair(size_t{0}, size_t{0}));
+    actor->OnInstanceDelete(key, info);
+    auto deletion = Delete(info);
+    ASSERT_AWAIT_READY(deletion);
+    ASSERT_AWAIT_READY(completion->GetFuture());
+    EXPECT_TRUE(completion->GetFuture().Get().IsOk());
+}
 
 class ReusableDeleteProxyStub final : public litebus::ActorBase {
 public:

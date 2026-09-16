@@ -2801,20 +2801,38 @@ TEST_F(InstanceCtrlTest, KillForwardedToMasterRelaysNotFound)
     EXPECT_EQ(killRsp.Get().code(), common::ErrorCode::ERR_NONE);
 }
 
-TEST_F(InstanceCtrlTest, FrontendKillLocalMissNeverRelaysOrClaimsAuthoritativeDeletion)
+TEST_F(InstanceCtrlTest, FrontendKillLocalMissRelaysTenantAndPreservesMasterError)
 {
-    auto guard = DirectRoutingConfig::EnableForTest();
     auto killReq = GenKillRequest("InstanceOwnedByAnotherProxy", SHUT_DOWN_SIGNAL);
     auto localSchedSrv = std::make_shared<MockLocalSchedSrv>();
     instanceCtrl_->BindLocalSchedSrv(localSchedSrv);
-
     EXPECT_CALL(*instanceControlView_, GetInstance).WillOnce(Return(nullptr));
-    EXPECT_CALL(*localSchedSrv, ForwardKillToInstanceManager).Times(0);
-
+    EXPECT_CALL(*localSchedSrv, ForwardKillToInstanceManager).WillOnce([](const auto &request) {
+        EXPECT_EQ(request->frontendtenantid(), "tenant-a");
+        EXPECT_EQ(request->req().instanceid(), "InstanceOwnedByAnotherProxy");
+        messages::ForwardKillResponse response;
+        response.set_code(common::ERR_INSTANCE_NOT_FOUND);
+        return response;
+    });
     auto killRsp = instanceCtrl_->KillFrontend("tenant-a", killReq);
     ASSERT_AWAIT_READY(killRsp);
     EXPECT_EQ(killRsp.Get().code(), common::ERR_INSTANCE_NOT_FOUND);
-    EXPECT_EQ(killRsp.Get().message(), "frontend proxy is not the owning proxy for this instance");
+}
+
+TEST_F(InstanceCtrlTest, FrontendKillLocalMissRejectsEmptyTenantAndCustomSignal)
+{
+    auto killReq = GenKillRequest("missing", SHUT_DOWN_SIGNAL);
+    auto localSchedSrv = std::make_shared<MockLocalSchedSrv>();
+    instanceCtrl_->BindLocalSchedSrv(localSchedSrv);
+    EXPECT_CALL(*instanceControlView_, GetInstance).WillRepeatedly(Return(nullptr));
+    EXPECT_CALL(*localSchedSrv, ForwardKillToInstanceManager).Times(0);
+    auto noTenant = instanceCtrl_->KillFrontend("", killReq);
+    ASSERT_AWAIT_READY(noTenant);
+    EXPECT_EQ(noTenant.Get().code(), common::ERR_AUTHORIZE_FAILED);
+    killReq->set_signal(64);
+    auto custom = instanceCtrl_->KillFrontend("tenant-a", killReq);
+    ASSERT_AWAIT_READY(custom);
+    EXPECT_EQ(custom.Get().code(), common::ERR_INSTANCE_NOT_FOUND);
 }
 
 TEST_F(InstanceCtrlTest, FrontendKillRejectsInstanceWithoutMatchingTenant)

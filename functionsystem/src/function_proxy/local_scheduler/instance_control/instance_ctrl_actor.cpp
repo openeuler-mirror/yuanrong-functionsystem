@@ -1374,12 +1374,15 @@ litebus::Future<KillResponse> InstanceCtrlActor::KillFrontend(const std::string 
 {
     ASSERT_IF_NULL(instanceControlView_);
     auto stateMachine = instanceControlView_->GetInstance(killReq->instanceid());
-    // The unary frontend path is already routed to the advertised owning proxy.
-    // A local miss therefore means that this endpoint cannot authoritatively
-    // prove deletion. Do not relay through master here: the legacy relay folds
-    // ERR_INSTANCE_NOT_FOUND into success for shutdown signals, which would turn
-    // a stale route into a false idempotent-delete acknowledgement.
     if (stateMachine == nullptr) {
+        if (tenantID.empty()) {
+            return GenKillResponse(common::ERR_AUTHORIZE_FAILED, "frontend kill requires a tenant");
+        }
+        if (killReq->signal() == SHUT_DOWN_SIGNAL || killReq->signal() == SHUT_DOWN_SIGNAL_SYNC) {
+            // Master validates the tenant and authoritative metadata. Return its
+            // result directly; legacy OnKill folds a cache miss into success.
+            return ForwardKillToMaster(killReq, tenantID);
+        }
         return GenKillResponse(common::ERR_INSTANCE_NOT_FOUND,
                                "frontend proxy is not the owning proxy for this instance");
     }
@@ -2289,12 +2292,14 @@ bool InstanceCtrlActor::ShouldForwardKillToMaster(const std::shared_ptr<KillRequ
     return instanceControlView_->GetInstance(killReq->instanceid()) == nullptr;
 }
 
-litebus::Future<KillResponse> InstanceCtrlActor::ForwardKillToMaster(const std::shared_ptr<KillRequest> &killReq)
+litebus::Future<KillResponse> InstanceCtrlActor::ForwardKillToMaster(
+    const std::shared_ptr<KillRequest> &killReq, const std::string &frontendTenantID)
 {
     YRLOG_INFO("forward kill of instance({}) to function_master", killReq->instanceid());
     auto req = std::make_shared<messages::ForwardKillRequest>();
     req->set_requestid(litebus::uuid_generator::UUID::GetRandomUUID().ToString());
     req->mutable_req()->CopyFrom(*killReq);
+    req->set_frontendtenantid(frontendTenantID);
     ASSERT_IF_NULL(localSchedSrv_);
     return localSchedSrv_->ForwardKillToInstanceManager(req).Then([](const messages::ForwardKillResponse &response) {
         KillResponse killResp;

@@ -656,6 +656,8 @@ message ForwardKillRequest {
   string requestID = 1;
   resources.InstanceInfo instance = 2;
   core_service.KillRequest req = 3;
+  // Set only by the authenticated frontend proxy shutdown path.
+  string frontendTenantID = 4;
 }
 
 message ForwardKillResponse {

@@ -481,13 +481,12 @@ TEST_F(InstanceOperatorTest, DeleteInstanceNotExist)
 
     auto fut = instanceOpt.Delete(instancePutInfo, routePutInfo, nullptr, 1, false);
     EXPECT_AWAIT_READY(fut);
-    EXPECT_EQ(fut.Get().status.StatusCode(), StatusCode::INSTANCE_TRANSACTION_GET_INFO_FAILED);
+    EXPECT_EQ(fut.Get().status.StatusCode(), StatusCode::SUCCESS);
 
     routePutInfo = std::make_shared<StoreInfo>(routeKey, value1);
     fut = instanceOpt.Delete(instancePutInfo, routePutInfo, nullptr, 1, false);
     EXPECT_AWAIT_READY(fut);
-    EXPECT_EQ(fut.Get().status.StatusCode(), StatusCode::INSTANCE_TRANSACTION_GET_INFO_FAILED);
-    EXPECT_EQ(fut.Get().status.GetMessage(), "[get response KV is empty]");
+    EXPECT_EQ(fut.Get().status.StatusCode(), StatusCode::SUCCESS);
 }
 
 TEST_F(InstanceOperatorTest, DeleteInstanceRevisionUnmatched)
