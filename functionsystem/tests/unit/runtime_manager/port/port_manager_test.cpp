@@ -158,6 +158,26 @@ TEST_F(DISABLED_PortManagerTest, ReleasePorts_ReAlloc)
     EXPECT_EQ(2u, ports2.size());
 }
 
+class PortManagerRangeTest : public ::testing::Test {
+public:
+    void TearDown() override
+    {
+        PortManager::GetInstance().Clear();
+    }
+};
+
+TEST_F(PortManagerRangeTest, InitClampsPoolAtMaximumPort)
+{
+    PortManager::GetInstance().InitPortResource(65534, 4);
+    PortManager::GetInstance().BeginReconcile();
+    ASSERT_TRUE(PortManager::GetInstance().RebuildPorts({{"runtime-a", {65534, 65535}}}));
+    EXPECT_EQ(PortManager::GetInstance().GetPorts("runtime-a"), (std::vector<int>{65534, 65535}));
+
+    PortManager::GetInstance().InitPortResource(65534, 4);
+    PortManager::GetInstance().BeginReconcile();
+    EXPECT_FALSE(PortManager::GetInstance().RebuildPorts({{"runtime-a", {65536}}}));
+}
+
 class PortManagerRecoveryTest : public ::testing::Test {
 public:
     void SetUp() override

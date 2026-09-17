@@ -32,11 +32,12 @@ void PortManager::InitPortResource(int initialPort, int portNum)
     portMap_.clear();
     nextPort_ = -1;
     ready_ = false;
-    while (portNum > 0) {
-        if (portNum > MAX_PORT_NUM) {
-            YRLOG_ERROR("exceed port number limit. number is {}", portNum);
-            return;
-        }
+    if (portNum > MAX_PORT_NUM) {
+        YRLOG_ERROR("exceed port number limit. number is {}", portNum);
+        return;
+    }
+    const int maxPort = std::min(initialPort + portNum - 1, MAX_PORT_NUM);
+    while (portNum > 0 && initialPort <= maxPort) {
         RuntimeInfo info;
         info.port = initialPort;
         portMap_[initialPort] = info;
