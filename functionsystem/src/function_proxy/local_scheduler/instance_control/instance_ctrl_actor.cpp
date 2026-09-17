@@ -3487,6 +3487,16 @@ litebus::Future<Status> InstanceCtrlActor::UpdateInstance(const DeployInstanceRe
             static_cast<int64_t>(errCode), "deploy", message});
         auto status = IsRuntimeRecoverEnable(instanceInfo, stateMachine->GetCancelFuture()) ? InstanceState::FAILED
                                                                                             : InstanceState::FATAL;
+        // Notify the creator of the deploy failure, same as the schedule-stage failure path in
+        // ScheduleEnd; otherwise the waiters are only released by the client-side get timeout.
+        auto callResult = std::make_shared<functionsystem::CallResult>();
+        callResult->set_instanceid(request->instance().parentid());
+        callResult->set_requestid(request->requestid());
+        callResult->set_code(Status::GetPosixErrorCode(response.code()));
+        callResult->set_message(fmt::format("deploy instance failed: {}", message));
+        (void)SendCallResult(request->instance().instanceid(),
+                             GetCreateResultDstInstance(request->instance(), request->requestid()),
+                             request->instance().parentfunctionproxyaid(), callResult);
         // monopoly need to send kill to avoid pod reused
         if (instanceInfo.scheduleoption().schedpolicyname() == MONOPOLY_SCHEDULE) {
             KillRuntime(instanceInfo, false);

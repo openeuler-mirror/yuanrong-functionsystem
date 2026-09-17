@@ -86,9 +86,9 @@ public:
         return BuildCreateContainerRequest(spec);
     }
 
-    std::string TestGetRuntimeImage(const std::shared_ptr<messages::StartInstanceRequest> &request)
+    Status TestGetRuntimeImage(const std::shared_ptr<messages::StartInstanceRequest> &request, std::string &image)
     {
-        return GetRuntimeImage(request);
+        return GetRuntimeImage(request, image);
     }
 
     std::string TestGetDockerApiPrefix()
@@ -429,15 +429,44 @@ TEST_F(DockerExecutorTest, TestGetRuntimeImageFromDeployOptions)
     auto *opts = request->mutable_runtimeinstanceinfo()->mutable_deploymentconfig()->mutable_deployoptions();
     (*opts)[CONTAINER_ROOTFS] = R"({"type":"image","imageurl":"custom/python:v2"})";
 
-    std::string image = executor_->TestGetRuntimeImage(request);
+    std::string image;
+    Status status = executor_->TestGetRuntimeImage(request, image);
+    EXPECT_TRUE(status.IsOk());
     EXPECT_EQ(image, "custom/python:v2");
+}
+
+TEST_F(DockerExecutorTest, TestGetRuntimeImageInvalidRootfsIsError)
+{
+    // A configured-but-invalid rootfs JSON must fail, not fall back to the default image.
+    auto request = CreateStartInstanceRequest("rt-001", "python3");
+    auto *opts = request->mutable_runtimeinstanceinfo()->mutable_deploymentconfig()->mutable_deployoptions();
+    (*opts)[CONTAINER_ROOTFS] = R"({"type":"image","imageurl":)";
+
+    std::string image;
+    Status status = executor_->TestGetRuntimeImage(request, image);
+    EXPECT_TRUE(status.IsError());
+    EXPECT_EQ(status.StatusCode(), StatusCode::RUNTIME_MANAGER_PARAMS_INVALID);
+}
+
+TEST_F(DockerExecutorTest, TestGetRuntimeImageNonImageTypeIsError)
+{
+    auto request = CreateStartInstanceRequest("rt-001", "python3");
+    auto *opts = request->mutable_runtimeinstanceinfo()->mutable_deploymentconfig()->mutable_deployoptions();
+    (*opts)[CONTAINER_ROOTFS] = R"({"type":"s3","url":"bucket/path"})";
+
+    std::string image;
+    Status status = executor_->TestGetRuntimeImage(request, image);
+    EXPECT_TRUE(status.IsError());
+    EXPECT_EQ(status.StatusCode(), StatusCode::RUNTIME_MANAGER_PARAMS_INVALID);
 }
 
 TEST_F(DockerExecutorTest, TestGetRuntimeImageEmptyWithoutConfig)
 {
-    // No deployOptions["rootfs"] and no DOCKER_RUNTIME_IMAGE env (unset in CI) -> empty.
+    // No deployOptions["rootfs"] and no DOCKER_RUNTIME_IMAGE env (unset in CI) -> error.
     auto request = CreateStartInstanceRequest("rt-001", "python3");
-    std::string image = executor_->TestGetRuntimeImage(request);
+    std::string image;
+    Status status = executor_->TestGetRuntimeImage(request, image);
+    EXPECT_TRUE(status.IsError());
     EXPECT_TRUE(image.empty());
 }
 

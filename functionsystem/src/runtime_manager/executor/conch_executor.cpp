@@ -468,7 +468,11 @@ nlohmann::json ConchExecutor::CreateRequest(const std::shared_ptr<messages::Star
     nlohmann::json conch = nlohmann::json::object();
 
     // template_name from rootfs imageurl; empty -> jiuwenbox env / conchd default fallback.
-    conch["template_name"] = ParseRootfsImageUrl(rootfsJson);
+    // Tolerant on purpose: unlike the docker path, an empty/missing template name is a valid
+    // configuration here (jiuwenbox/conchd default), so parse errors just leave it empty.
+    std::string templateName;
+    (void)ParseRootfsImageUrl(rootfsJson, templateName);
+    conch["template_name"] = templateName;
 
     // bind_mounts under conch.filesystem_policy.bind_mounts. BindMount element shape
     // {host_path, sandbox_path, mode} is shared with the process backend. Note
