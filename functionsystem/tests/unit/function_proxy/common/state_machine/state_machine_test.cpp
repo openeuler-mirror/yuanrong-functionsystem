@@ -665,6 +665,9 @@ TEST_F(InstanceStateMachineTest, ChangeSameStateTest)
     auto future = promise.GetFuture();
     ASSERT_AWAIT_READY(future);
     EXPECT_EQ(future.Get().instancestatus().code(), static_cast<int32_t>(InstanceState::RUNNING));
+    // Spawned actor's Init() registered the global fall-through exitHandler; clear it so later
+    // bare-state-machine tests transitioning to EXITING don't hit ASSERT_IF_NULL on unbound members.
+    InstanceStateMachine::SetExitHandler(nullptr);
 }
 
 TEST_F(InstanceStateMachineTest, TransitionFromFatalToFailed)
