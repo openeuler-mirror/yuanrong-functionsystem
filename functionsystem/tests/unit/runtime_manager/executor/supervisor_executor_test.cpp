@@ -47,17 +47,24 @@ public:
     // Expose protected/private members for testing
     std::string TestBuildUdsHttpRequest(const std::string &method, const std::string &path, const std::string &body)
     {
-        return BuildUdsHttpRequest(method, path, body);
+        return AsyncUdsClient::BuildHttpRequest(method, path, body);
     }
 
     void TestParseResponse(litebus::Promise<nlohmann::json> promise, std::string response)
     {
-        ParseResponse(promise, response);
+        try {
+            promise.SetValue(ParseRawResponse(response));
+        } catch (std::exception const &) {
+            promise.SetFailed(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+        }
     }
 
-    int TestConnectUdsSocket(const std::string &socketPath)
+    litebus::Future<nlohmann::json> TestRequestAsync(const std::string &socketPath)
     {
-        return ConnectUdsSocket(socketPath);
+        // parser exceptions are caught by CompleteRequest and converted to a failed Future
+        // (FailStage::PARSE), so no try/catch is needed here — matches SendRequestToSupervisor.
+        return AsyncUdsClient::RequestAsync({ socketPath, "GET", "/", nlohmann::json::object(), "Supervisor",
+            [](const std::string &rawResponse) { return ParseRawResponse(rawResponse); } });
     }
 
     nlohmann::json TestBuildCommand(const std::shared_ptr<runtime::v1::StartRequest> &start)
@@ -167,6 +174,7 @@ protected:
     {
         executor_ = std::make_shared<MockSupervisorExecutor>("TestSupervisorExecutor",
                                                              litebus::AID("FunctionAgent", "127.0.0.1:8080"));
+        litebus::Spawn(executor_, false);
 
         // Create test deploy directory
         testDeployDir_ = "/tmp/test-supervisor-executor";
@@ -185,6 +193,8 @@ protected:
     void TearDown() override
     {
         litebus::os::Rmdir(testDeployDir_);
+        litebus::Terminate(executor_->GetAID());
+        litebus::Await(executor_->GetAID());
     }
 
     std::shared_ptr<messages::StartInstanceRequest> GenStartInstanceRequest(const std::string &language = "python3",
@@ -349,27 +359,35 @@ TEST_F(SupervisorExecutorTest, ParseResponse_InvalidJson)
 }
 
 /**
- * Feature: ConnectUdsSocket
- * Description: Test UDS socket connection with various scenarios
+ * Feature: RequestAsync connect failure
+ * Description: With no supervisor listening, RequestAsync must resolve the Future to an
+ *              error (SetFailed) rather than hanging. Connection is now internal to the
+ *              async client, so the failure is observed at the Future boundary.
  */
-TEST_F(SupervisorExecutorTest, ConnectUdsSocket_InvalidPath)
+TEST_F(SupervisorExecutorTest, RequestAsync_FailsWhenSupervisorUnavailable)
 {
-    int fd = executor_->TestConnectUdsSocket("/nonexistent/socket/path");
-    EXPECT_EQ(fd, -1);
+    auto future = executor_->TestRequestAsync("/nonexistent/socket/path");
+    ASSERT_AWAIT_SET_FOR(future, TEST_AWAIT_TIMEOUT);
+    EXPECT_TRUE(future.IsError());
+    EXPECT_EQ(AsyncUdsClient::DecodeErrorStage(future.GetErrorCode()), AsyncUdsClient::RequestErrorStage::CONNECT);
 }
 
-TEST_F(SupervisorExecutorTest, ConnectUdsSocket_PathTooLong)
+TEST_F(SupervisorExecutorTest, RequestAsync_FailsWhenPathTooLong)
 {
     std::string longPath(500, 'a');  // Exceeds sockaddr_un sun_path length
-    int fd = executor_->TestConnectUdsSocket(longPath);
-    EXPECT_EQ(fd, -1);
+    auto future = executor_->TestRequestAsync(longPath);
+    ASSERT_AWAIT_SET_FOR(future, TEST_AWAIT_TIMEOUT);
+    EXPECT_TRUE(future.IsError());
+    EXPECT_EQ(AsyncUdsClient::DecodeErrorStage(future.GetErrorCode()), AsyncUdsClient::RequestErrorStage::CONNECT);
 }
 
-TEST_F(SupervisorExecutorTest, ConnectUdsSocket_NoServer)
+TEST_F(SupervisorExecutorTest, RequestAsync_FailsWhenNoServer)
 {
     std::string socketPath = "/tmp/test_supervisor_socket_" + std::to_string(getpid());
-    int fd = executor_->TestConnectUdsSocket(socketPath);
-    EXPECT_EQ(fd, -1);
+    auto future = executor_->TestRequestAsync(socketPath);
+    ASSERT_AWAIT_SET_FOR(future, TEST_AWAIT_TIMEOUT);
+    EXPECT_TRUE(future.IsError());
+    EXPECT_EQ(AsyncUdsClient::DecodeErrorStage(future.GetErrorCode()), AsyncUdsClient::RequestErrorStage::CONNECT);
 }
 
 /**

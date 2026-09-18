@@ -101,6 +101,9 @@ DockerExecutor::DockerExecutor(const std::string &name, const litebus::AID &func
 void DockerExecutor::Init()
 {
     YRLOG_INFO("Start init DockerExecutor, socket={}, apiVersion={}", dockerSocketPath_, dockerApiVersion_);
+    if (!AsyncUdsClient::InitEvLoop()) {
+        YRLOG_ERROR("DockerExecutor: AsyncUdsClient EvLoop init failed; UDS requests will error out");
+    }
 }
 
 void DockerExecutor::Finalize()
@@ -110,6 +113,7 @@ void DockerExecutor::Finalize()
     runtime2containerID_.clear();
     runtimeInstanceInfoMap_.clear();
     runtime2dockerErr_.clear();
+    AsyncUdsClient::FinishEvLoop();
     Executor::Finalize();
 }
 
@@ -125,51 +129,6 @@ std::string DockerExecutor::GetDockerApiPrefix() const
 
 // ---- Docker Engine API communication (same UDS HTTP pattern as SupervisorExecutor) ----
 
-int DockerExecutor::ConnectDockerSocket()
-{
-    int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) {
-        YRLOG_ERROR("failed to create UDS socket: {}", std::strerror(errno));
-        return -1;
-    }
-
-    struct sockaddr_un addr;
-    (void)memset_s(&addr, sizeof(addr), 0, sizeof(addr));
-    addr.sun_family = AF_UNIX;
-    if (dockerSocketPath_.length() >= sizeof(addr.sun_path)) {
-        YRLOG_ERROR("socket path too long: {}", dockerSocketPath_);
-        (void)close(fd);
-        return -1;
-    }
-    (void)strncpy_s(addr.sun_path, sizeof(addr.sun_path), dockerSocketPath_.c_str(), dockerSocketPath_.length());
-    if (::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0) {
-        YRLOG_ERROR("failed to connect to Docker socket {}: {}", dockerSocketPath_, std::strerror(errno));
-        (void)close(fd);
-        return -1;
-    }
-
-    YRLOG_DEBUG("connected to Docker socket: {}", dockerSocketPath_);
-    return fd;
-}
-
-std::string DockerExecutor::BuildDockerHttpRequest(const std::string &method, const std::string &path,
-    const std::string &body)
-{
-    if (path.find_first_of("\r\n") != std::string::npos) {
-        YRLOG_ERROR("invalid Docker API path with CRLF, refuse to build request: {}", path);
-        return "";
-    }
-    std::ostringstream oss;
-    oss << method << " " << path << " HTTP/1.1\r\n";
-    oss << "Host: localhost\r\n";
-    oss << "Content-Type: application/json\r\n";
-    oss << "Content-Length: " << body.length() << "\r\n";
-    oss << "Connection: close\r\n";
-    oss << "\r\n";
-    oss << body;
-    return oss.str();
-}
-
 namespace {
 struct RawHttpResponse {
     bool ok{false};
@@ -183,7 +142,7 @@ bool IsChunked(const std::string &headers);
 std::string DecodeChunkedBody(const std::string &chunked);
 } // namespace
 
-void DockerExecutor::ParseDockerResponse(litebus::Promise<nlohmann::json> promise, std::string response)
+nlohmann::json DockerExecutor::ParseRawDockerResponse(const std::string &response)
 {
     auto parsed = SplitHttpResponse(response);
     if (!parsed.ok) {
@@ -191,8 +150,7 @@ void DockerExecutor::ParseDockerResponse(litebus::Promise<nlohmann::json> promis
         nlohmann::json errResp = nlohmann::json::object();
         errResp["__http_status"] = 0;
         errResp["__parse_failed"] = true;
-        promise.SetValue(errResp);
-        return;
+        return errResp;
     }
     int statusCode = parsed.statusCode;
     std::string respBody = parsed.body;
@@ -205,8 +163,7 @@ void DockerExecutor::ParseDockerResponse(litebus::Promise<nlohmann::json> promis
             nlohmann::json errResp = nlohmann::json::object();
             errResp["__http_status"] = statusCode;
             errResp["__parse_failed"] = true;
-            promise.SetValue(errResp);
-            return;
+            return errResp;
         }
         respBody = decoded;
     }
@@ -225,78 +182,58 @@ void DockerExecutor::ParseDockerResponse(litebus::Promise<nlohmann::json> promis
             YRLOG_DEBUG("Docker API response: {}", respBody);
             auto jsonResp = nlohmann::json::parse(respBody);
             jsonResp["__http_status"] = statusCode;
-            promise.SetValue(jsonResp);
-            return;
+            return jsonResp;
         } catch (std::exception const &e) {
             YRLOG_WARN("non-JSON Docker response (status={}): {}", statusCode, e.what());
         }
     } else {
         YRLOG_WARN("parse docker response: status ok but body empty (only __http_status kept)", statusCode);
     }
-    promise.SetValue(resp);
+    return resp;
 }
 
 litebus::Future<nlohmann::json> DockerExecutor::SendRequestToDocker(const std::string &method,
     const std::string &path, const nlohmann::json &body)
 {
-    // Request start timestamp — used to compute elapsed={}ms in the recv-failure and success
-    // logs below, so a hung daemon (no reply at all) can be told apart from an instant 4xx by
-    // how long we waited, since the daemon sends nothing to log when it truly hangs.
-    auto t0 = std::chrono::steady_clock::now();
-    // Full daemon API path (apiPrefix + path, e.g. "/v1.41/containers/<id>/start"); logged in
-    // every exit so a failure/hang line is self-contained: it names which Docker API and, for
-    // /containers/<id>..., which container — no need to infer the step from neighbouring logs.
     std::string fullPath = GetDockerApiPrefix() + path;
     litebus::Promise<nlohmann::json> promise;
     litebus::Future<nlohmann::json> result = promise.GetFuture();
-    int fd = ConnectDockerSocket();
-    if (fd < 0) {
-        YRLOG_ERROR("Docker daemon connect failed: {} {} ({})", method, fullPath, dockerSocketPath_);
-        nlohmann::json errResp = nlohmann::json::object();
-        errResp["__http_status"] = 0;
-        errResp["__connect_failed"] = true;
-        promise.SetValue(errResp);
-        return result;
-    }
-    std::string httpRequest = BuildDockerHttpRequest(method, fullPath, body.dump());
-    if (ssize_t sent = send(fd, httpRequest.c_str(), httpRequest.length(), 0);
-        sent < 0 || static_cast<size_t>(sent) != httpRequest.length()) {
-        YRLOG_ERROR("Docker daemon send failed: {} {} ({})", method, fullPath, std::strerror(errno));
-        (void)close(fd);
-        nlohmann::json errResp = nlohmann::json::object();
-        errResp["__http_status"] = 0;
-        errResp["__send_failed"] = true;
-        promise.SetValue(errResp);
-        return result;
-    }
-    // Receive the full response. The request uses Connection: close, so the daemon closes the
-    // socket when done; reading until EOF yields the complete raw response (headers + body).
-    // Chunked bodies are decoded from that raw response in ParseDockerResponse.
-    std::string response;
-    char buf[4096];
-    ssize_t received = 0;
-    while ((received = recv(fd, buf, sizeof(buf) - 1, 0)) > 0) {
-        response.append(buf, static_cast<size_t>(received));
-    }
-    if (received < 0) {
-        YRLOG_ERROR("Docker daemon recv failed: {} {} ({}, elapsed={}ms)", method, fullPath,
-                    std::strerror(errno),
-                    std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::steady_clock::now() - t0).count());
-        (void)close(fd);
-        nlohmann::json errResp = nlohmann::json::object();
-        errResp["__http_status"] = 0;
-        errResp["__recv_failed"] = true;
-        promise.SetValue(errResp);
-        return result;
-    }
-    (void)close(fd);
-    YRLOG_DEBUG("Docker daemon request done: {} {} (elapsed={}ms, bytes={})", method, fullPath,
-                std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - t0).count(),
-                response.size());
-    ParseDockerResponse(promise, response);
+    AsyncUdsClient::RequestAsync({ dockerSocketPath_, method, fullPath, body, "Docker daemon",
+        [](const std::string &rawResponse) { return ParseRawDockerResponse(rawResponse); } })
+        .OnComplete(litebus::Defer(GetAID(), &DockerExecutor::OnDockerReply, std::placeholders::_1,
+                                   std::string(method), std::move(fullPath), std::move(promise)));
     return result;
+}
+
+void DockerExecutor::OnDockerReply(const litebus::Future<nlohmann::json> &future, std::string method,
+    std::string fullPath, litebus::Promise<nlohmann::json> promise)
+{
+    if (future.IsError()) {
+        int32_t errCode = future.GetErrorCode();
+        nlohmann::json errResp = nlohmann::json::object();
+        errResp["__http_status"] = 0;
+        switch (AsyncUdsClient::DecodeErrorStage(errCode)) {
+            case AsyncUdsClient::RequestErrorStage::SEND:
+                YRLOG_ERROR("Docker daemon send failed: {} {} (errCode={})", method, fullPath, errCode);
+                errResp["__send_failed"] = true;
+                break;
+            case AsyncUdsClient::RequestErrorStage::RECV:
+                YRLOG_ERROR("Docker daemon recv failed: {} {} (errCode={})", method, fullPath, errCode);
+                errResp["__recv_failed"] = true;
+                break;
+            case AsyncUdsClient::RequestErrorStage::PARSE:
+                YRLOG_ERROR("Docker daemon response parse failed: {} {} (errCode={})", method, fullPath, errCode);
+                errResp["__parse_failed"] = true;
+                break;
+            default:
+                YRLOG_ERROR("Docker daemon connect/transport failed: {} {} (errCode={})", method, fullPath, errCode);
+                errResp["__connect_failed"] = true;
+                break;
+        }
+        promise.SetValue(errResp);
+        return;
+    }
+    promise.SetValue(future.Get());
 }
 
 // ---- Image management ----

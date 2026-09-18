@@ -205,9 +205,8 @@ void InstanceCtrlActor::Init()
                            instanceInfo.jobid());
         }
         if (instanceInfo.functionagentid().empty()) {
-            YRLOG_INFO("{}|function agent ID of instance({}) is empty, delete instance in control view",
+            YRLOG_INFO("{}|function agent ID of instance({}) is empty, proceed with full cleanup",
                        instanceInfo.requestid(), instanceInfo.instanceid());
-            return litebus::Async(aid, &InstanceCtrlActor::DeleteInstanceInControlView, Status::OK(), instanceInfo);
         }
         return litebus::Async(aid, &InstanceCtrlActor::DeleteInstanceInResourceView, Status::OK(), instanceInfo)
             .Then(litebus::Defer(aid, &InstanceCtrlActor::ShutDownInstance, instanceInfo,
@@ -3519,6 +3518,11 @@ litebus::Future<Status> InstanceCtrlActor::UpdateInstance(const DeployInstanceRe
     if (!response.portmappings().empty() && traefikRegistry_) {
         (void)litebus::Async(GetAID(), &InstanceCtrlActor::RegisterTraefikRoute, request->instance());
     }
+
+    // deep copy: a shallow UpdateScheduleReq would alias instanceContext_->scheduleRequest_
+    // with request, so PrepareTransitionInfo's set_code(newState) pollutes the previousInfo
+    // snapshot used for rollback on persistence failure.
+    stateMachine->UpdateScheduleReq(std::make_shared<messages::ScheduleRequest>(*request));
 
     // instance force-FATAL'd by the kill chain during deploy. kill again with the real runtimeid
     // (the kill chain ran with an empty one and missed the sandbox), and skip CheckReadiness to
