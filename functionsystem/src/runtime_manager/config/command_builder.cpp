@@ -73,6 +73,8 @@ const std::unordered_set<std::string> SYSTEM_ENV_BLACKLIST = {
     "GOPATH", "GOROOT", "GOBIN", "GOCACHE", "GOMODCACHE", "GOENV",
     "GOFLAGS", "GONOPROXY", "GONOSUMDB", "GOPRIVATE", "GOPROXY", "GOSUMDB",
     "GOTMPDIR", "GOTOOLDIR", "GOTELEMETRY", "GOTELEMETRYDIR",
+    // systemd related
+    "SYSTEMD_EXEC_PID", "INVOCATION_ID", "NOTIFY_SOCKET", "JOURNAL_STREAM",
 };
 
 }  // namespace
