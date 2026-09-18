@@ -108,6 +108,7 @@ const uint32_t MAX_FORWARD_SCHEDULE_RETRY_TIMES = 3;
 const uint32_t MAX_NOTIFICATION_SIGNAL_RETRY_TIMES = 3;
 
 const uint32_t INSTANCE_CREATE_GC_TIMEOUT_MS = 5000;  // 5 seconds timeout for GC orphaned state machine
+const uint32_t AGENT_CREATE_FORWARD_TIMEOUT_MS = 55 * 1000;
 
 struct InstanceCtrlConfig {
     // maxInstanceReconnectTimes is max number of times to reconnect an instance.
@@ -393,6 +394,7 @@ public:
     void BindMetaStoreClient(const std::shared_ptr<MetaStoreClient> &metaStoreClient)
     {
         ASSERT_IF_NULL(instanceControlView_);
+        metaStoreClient_ = metaStoreClient;
         instanceControlView_->BindMetaStoreClient(metaStoreClient);
         instanceOpt_ = std::make_shared<InstanceOperator>(metaStoreClient);
     }
@@ -1179,6 +1181,30 @@ private:
     void ClearCreateConflictCallResultTombstone(
         const std::string &instanceID, const std::string &contenderRequestID);
 
+    bool IsAgentReuseCreate(const std::shared_ptr<messages::ScheduleRequest> &scheduleReq) const;
+    litebus::Future<messages::ScheduleResponse> ContinueSchedule(
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+        const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise);
+    litebus::Future<messages::ScheduleResponse> ResolveAgentCreateOwner(
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+        const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise);
+    void OnAgentCreateRouteResolved(
+        const litebus::Future<std::shared_ptr<GetResponse>> &future,
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+        const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise);
+    litebus::Future<messages::ScheduleResponse> HandleAgentCreateOnOwner(
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+        const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise);
+    void SendForwardAgentCreateRequest(
+        const litebus::Future<litebus::Option<litebus::AID>> &future, const std::string &owner,
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+        const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise);
+    void ForwardAgentCreateRequest(const litebus::AID &from, std::string &&, std::string &&msg);
+    void ForwardAgentCreateResponse(const litebus::AID &from, std::string &&, std::string &&msg);
+    void SendForwardAgentCreateResponse(
+        const litebus::AID &to, const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+        const litebus::Future<messages::ScheduleResponse> &future);
+
     bool CheckExistInstanceState(const InstanceState &state,
                                  const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise,
                                  const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
@@ -1410,6 +1436,7 @@ private:
         const Status &status, const std::shared_ptr<InstanceExitStatus> &info,
         const std::string &sourceRuntimeID);
 
+    std::shared_ptr<MetaStoreClient> metaStoreClient_;
     std::shared_ptr<InstanceOperator> instanceOpt_;
     std::set<std::string> connectingDriver_;
     std::unordered_map<std::string, std::string> connectedDriver_;
@@ -1428,6 +1455,8 @@ private:
     std::unordered_map<std::string, std::pair<std::string, std::string>> frontendKillRuntimeEvidence_;
 
     BACK_OFF_RETRY_HELPER(InstanceCtrlActor, litebus::Option<InstanceState>, checkStateHelper_);
+    REQUEST_SYNC_HELPER(InstanceCtrlActor, messages::ScheduleResponse, AGENT_CREATE_FORWARD_TIMEOUT_MS,
+                        forwardAgentCreateHelper_);
 
     std::shared_ptr<TraefikRegistry> traefikRegistry_;
 

@@ -101,6 +101,7 @@ const int64_t DRIVER_RECONNECTED_TIMEOUT = 3;
 const int64_t CANCEL_TIMEOUT = 5000;
 const int64_t CHECK_STATE_TIMEOUT = 1000;
 const int64_t CHECK_RETRY_TIMES = 5;
+const std::string AGENT_REUSE_EXISTING_INSTANCE = "AGENT_REUSE_EXISTING_INSTANCE";
 
 // OS path
 const char* OIDC_TOKEN_PATH = "/var/run/secrets/tokens/oidc-token";
@@ -149,6 +150,15 @@ static AddressInfo GenerateAddressInfo(const std::string &instanceID, const std:
 {
     AddressInfo info{ .instanceID = instanceID, .runtimeID = runtimeID, .address = address, .isDriver = isDriver };
     return info;
+}
+
+static messages::ScheduleResponse GenAgentReuseUnavailableResponse(
+    const messages::ScheduleRequest &request, const std::string &owner, const std::string &reason)
+{
+    const auto resolvedOwner = owner.empty() ? "unknown" : owner;
+    const auto message = "agent instance reuse state unavailable: instance_id=" + request.instance().instanceid()
+                         + ", owner=" + resolvedOwner + ", reason=" + reason;
+    return GenScheduleResponse(StatusCode::ERR_STATE_MACHINE_ERROR, message, request);
 }
 
 KillResponse StatusToKillResponse(const Status &status)
@@ -241,6 +251,8 @@ void InstanceCtrlActor::Init()
 
     Receive("CheckInstanceState", &InstanceCtrlActor::CheckInstanceState);
     Receive("CheckInstanceStateResponse", &InstanceCtrlActor::CheckInstanceStateResponse);
+    Receive("ForwardAgentCreateRequest", &InstanceCtrlActor::ForwardAgentCreateRequest);
+    Receive("ForwardAgentCreateResponse", &InstanceCtrlActor::ForwardAgentCreateResponse);
     Receive("TenantQuotaExceeded", &InstanceCtrlActor::OnTenantQuotaExceededMsg);
 }
 
@@ -2063,17 +2075,60 @@ litebus::Future<ScheduleResponse> InstanceCtrlActor::Schedule(
         }
     }
 
+    const bool isNewRequest =
+        scheduleReq->instance().instancestatus().code() == static_cast<uint32_t>(InstanceState::NEW);
+    if (isNewRequest && IsAgentReuseCreate(scheduleReq)) {
+        const auto &instanceID = scheduleReq->instance().instanceid();
+        if (instanceID.empty()) {
+            auto response = GenAgentReuseUnavailableResponse(*scheduleReq, "", "instance id is empty");
+            YRLOG_ERROR("{}|{}|{}", scheduleReq->traceid(), scheduleReq->requestid(), response.message());
+            runtimePromise->SetValue(response);
+            return response;
+        }
+        auto stateMachine = instanceControlView_->GetInstance(instanceID);
+        if (stateMachine == nullptr) {
+            return ResolveAgentCreateOwner(scheduleReq, runtimePromise);
+        }
+        const auto &owner = stateMachine->GetOwner();
+        if (owner == nodeID_) {
+            return HandleAgentCreateOnOwner(scheduleReq, runtimePromise);
+        }
+        if (owner.empty() || observer_ == nullptr) {
+            auto response = GenAgentReuseUnavailableResponse(
+                *scheduleReq, owner, owner.empty() ? "owner is empty" : "owner resolver is unavailable");
+            YRLOG_ERROR("{}|{}|{}", scheduleReq->traceid(), scheduleReq->requestid(), response.message());
+            runtimePromise->SetValue(response);
+            return response;
+        }
+        observer_->GetLocalSchedulerAID(owner).OnComplete(
+            litebus::Defer(GetAID(), &InstanceCtrlActor::SendForwardAgentCreateRequest, _1, owner, scheduleReq,
+                           runtimePromise));
+        return runtimePromise->GetFuture();
+    }
+
     if (!scheduleReq->instance().instanceid().empty()) {
         auto stateMachine = instanceControlView_->GetInstance(scheduleReq->instance().instanceid());
-        if (scheduleReq->instance().instancestatus().code() == static_cast<uint32_t>(InstanceState::NEW)
-            && stateMachine != nullptr) {
-            if (CheckExistInstanceState(static_cast<InstanceState>(stateMachine->GetInstanceState()), runtimePromise,
-                                        scheduleReq)) {
-                return runtimePromise->GetFuture();
-            }
+        if (isNewRequest && stateMachine != nullptr
+            && CheckExistInstanceState(static_cast<InstanceState>(stateMachine->GetInstanceState()), runtimePromise,
+                                       scheduleReq)) {
+            return runtimePromise->GetFuture();
         }
     }
 
+    return ContinueSchedule(scheduleReq, runtimePromise);
+}
+
+bool InstanceCtrlActor::IsAgentReuseCreate(const std::shared_ptr<messages::ScheduleRequest> &scheduleReq) const
+{
+    const auto &createOptions = scheduleReq->instance().createoptions();
+    const auto option = createOptions.find(AGENT_REUSE_EXISTING_INSTANCE);
+    return option != createOptions.end() && option->second == "true";
+}
+
+litebus::Future<ScheduleResponse> InstanceCtrlActor::ContinueSchedule(
+    const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+    const std::shared_ptr<litebus::Promise<ScheduleResponse>> &runtimePromise)
+{
     ASSERT_IF_NULL(observer_);
     YRLOG_INFO("{}|{}|receive a schedule request, instance version({})", scheduleReq->traceid(),
                scheduleReq->requestid(), scheduleReq->instance().version());
@@ -2085,6 +2140,247 @@ litebus::Future<ScheduleResponse> InstanceCtrlActor::Schedule(
     // Check whether the function meta information corresponding to requestID exists.
     return GetFuncMeta(scheduleReq->instance().function())
         .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::DoAuthorizeCreate, _1, scheduleReq, runtimePromise));
+}
+
+litebus::Future<ScheduleResponse> InstanceCtrlActor::ResolveAgentCreateOwner(
+    const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+    const std::shared_ptr<litebus::Promise<ScheduleResponse>> &runtimePromise)
+{
+    if (metaStoreClient_ == nullptr) {
+        auto response = GenAgentReuseUnavailableResponse(*scheduleReq, "", "metastore client is unavailable");
+        YRLOG_ERROR("{}|{}|{}", scheduleReq->traceid(), scheduleReq->requestid(), response.message());
+        runtimePromise->SetValue(response);
+        return response;
+    }
+    (void)metaStoreClient_->Get(GenInstanceRouteKey(scheduleReq->instance().instanceid()), {})
+        .OnComplete(litebus::Defer(GetAID(), &InstanceCtrlActor::OnAgentCreateRouteResolved, _1, scheduleReq,
+                                   runtimePromise));
+    return runtimePromise->GetFuture();
+}
+
+void InstanceCtrlActor::OnAgentCreateRouteResolved(
+    const litebus::Future<std::shared_ptr<GetResponse>> &future,
+    const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+    const std::shared_ptr<litebus::Promise<ScheduleResponse>> &runtimePromise)
+{
+    if (future.IsError() || future.Get() == nullptr || future.Get()->status.IsError()) {
+        std::string reason;
+        if (future.IsError()) {
+            reason = "metastore query failed with code " + std::to_string(future.GetErrorCode());
+        } else if (future.Get() == nullptr) {
+            reason = "metastore returned an empty response";
+        } else {
+            reason = "metastore query failed: " + future.Get()->status.ToString();
+        }
+        auto response = GenAgentReuseUnavailableResponse(*scheduleReq, "", reason);
+        YRLOG_ERROR("{}|{}|{}", scheduleReq->traceid(), scheduleReq->requestid(), response.message());
+        runtimePromise->SetValue(response);
+        return;
+    }
+
+    const auto &response = future.Get();
+    if (response->count == 0 && response->kvs.empty()) {
+        (void)ContinueSchedule(scheduleReq, runtimePromise);
+        return;
+    }
+    if (response->count != 1 || response->kvs.size() != 1) {
+        auto error = GenAgentReuseUnavailableResponse(*scheduleReq, "", "metastore route result is invalid");
+        YRLOG_ERROR("{}|{}|{}", scheduleReq->traceid(), scheduleReq->requestid(), error.message());
+        runtimePromise->SetValue(error);
+        return;
+    }
+
+    resources::RouteInfo routeInfo;
+    if (!TransToRouteInfoFromJson(routeInfo, response->kvs.front().value())
+        || routeInfo.instanceid() != scheduleReq->instance().instanceid() || routeInfo.functionproxyid().empty()) {
+        auto error = GenAgentReuseUnavailableResponse(*scheduleReq, routeInfo.functionproxyid(),
+                                                      "metastore route cannot be parsed");
+        YRLOG_ERROR("{}|{}|{}", scheduleReq->traceid(), scheduleReq->requestid(), error.message());
+        runtimePromise->SetValue(error);
+        return;
+    }
+
+    const auto &owner = routeInfo.functionproxyid();
+    if (owner == nodeID_) {
+        auto error = GenAgentReuseUnavailableResponse(*scheduleReq, owner, "local state machine is missing");
+        YRLOG_ERROR("{}|{}|{}", scheduleReq->traceid(), scheduleReq->requestid(), error.message());
+        runtimePromise->SetValue(error);
+        return;
+    }
+    if (observer_ == nullptr) {
+        auto error = GenAgentReuseUnavailableResponse(*scheduleReq, owner, "owner resolver is unavailable");
+        YRLOG_ERROR("{}|{}|{}", scheduleReq->traceid(), scheduleReq->requestid(), error.message());
+        runtimePromise->SetValue(error);
+        return;
+    }
+    observer_->GetLocalSchedulerAID(owner).OnComplete(
+        litebus::Defer(GetAID(), &InstanceCtrlActor::SendForwardAgentCreateRequest, _1, owner, scheduleReq,
+                       runtimePromise));
+}
+
+litebus::Future<ScheduleResponse> InstanceCtrlActor::HandleAgentCreateOnOwner(
+    const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+    const std::shared_ptr<litebus::Promise<ScheduleResponse>> &runtimePromise)
+{
+    const auto &instanceID = scheduleReq->instance().instanceid();
+    if (!IsAgentReuseCreate(scheduleReq) || instanceID.empty()) {
+        auto response = GenAgentReuseUnavailableResponse(*scheduleReq, nodeID_, "invalid agent create request");
+        YRLOG_ERROR("{}|{}|{}", scheduleReq->traceid(), scheduleReq->requestid(), response.message());
+        runtimePromise->SetValue(response);
+        return response;
+    }
+
+    auto stateMachine = instanceControlView_->GetInstance(instanceID);
+    if (stateMachine == nullptr || stateMachine->GetOwner() != nodeID_) {
+        const auto owner = stateMachine == nullptr ? std::string() : stateMachine->GetOwner();
+        auto response = GenAgentReuseUnavailableResponse(
+            *scheduleReq, owner, stateMachine == nullptr ? "owner state machine is missing" : "owner has changed");
+        YRLOG_ERROR("{}|{}|{}", scheduleReq->traceid(), scheduleReq->requestid(), response.message());
+        runtimePromise->SetValue(response);
+        return response;
+    }
+
+    auto existingScheduleReq = stateMachine->GetScheduleRequest();
+    if (existingScheduleReq == nullptr) {
+        auto response = GenAgentReuseUnavailableResponse(*scheduleReq, nodeID_, "owner instance context is missing");
+        YRLOG_ERROR("{}|{}|{}", scheduleReq->traceid(), scheduleReq->requestid(), response.message());
+        runtimePromise->SetValue(response);
+        return response;
+    }
+    const auto &existingOptions = existingScheduleReq->instance().createoptions();
+    const auto &requestedOptions = scheduleReq->instance().createoptions();
+    const auto existingSandboxType = existingOptions.find("sandbox_type");
+    const auto requestedSandboxType = requestedOptions.find("sandbox_type");
+    const bool sandboxTypeMismatch =
+        (existingSandboxType == existingOptions.end()) != (requestedSandboxType == requestedOptions.end())
+        || (existingSandboxType != existingOptions.end() && requestedSandboxType != requestedOptions.end()
+            && existingSandboxType->second != requestedSandboxType->second);
+    if (sandboxTypeMismatch) {
+        const auto existingType =
+            existingSandboxType == existingOptions.end() ? std::string("<unset>") : existingSandboxType->second;
+        const auto requestedType =
+            requestedSandboxType == requestedOptions.end() ? std::string("<unset>") : requestedSandboxType->second;
+        const auto message = fmt::format(
+            "agent instance {} already exists with sandbox_type {}; delete the existing instance before creating it "
+            "with sandbox_type {}",
+            instanceID, existingType, requestedType);
+        YRLOG_WARN("{}|{}|{}", scheduleReq->traceid(), scheduleReq->requestid(), message);
+        auto response = GenScheduleResponse(StatusCode::ERR_INSTANCE_INFO_INVALID, message, *scheduleReq);
+        runtimePromise->SetValue(response);
+        return response;
+    }
+
+    const auto state = stateMachine->GetInstanceState();
+    switch (state) {
+        case InstanceState::NEW:
+        case InstanceState::SCHEDULING:
+        case InstanceState::CREATING:
+        case InstanceState::RUNNING:
+        case InstanceState::SUB_HEALTH:
+        case InstanceState::SUSPEND:
+        case InstanceState::PAUSED: {
+            YRLOG_INFO("{}|{}|reuse agent instance({}) in state({}) on owner({})", scheduleReq->traceid(),
+                       scheduleReq->requestid(), instanceID, static_cast<int32_t>(state), nodeID_);
+            auto response = GenScheduleResponse(StatusCode::ERR_INSTANCE_DUPLICATED,
+                                                "agent instance already exists", *scheduleReq);
+            runtimePromise->SetValue(response);
+            return response;
+        }
+        case InstanceState::FAILED:
+        case InstanceState::SCHEDULE_FAILED:
+            YRLOG_INFO("{}|{}|retry agent instance({}) from state({}) on owner({})", scheduleReq->traceid(),
+                       scheduleReq->requestid(), instanceID, static_cast<int32_t>(state), nodeID_);
+            return ContinueSchedule(scheduleReq, runtimePromise);
+        case InstanceState::EXITING:
+        case InstanceState::EVICTING:
+        case InstanceState::EXITED:
+        case InstanceState::EVICTED:
+        case InstanceState::FATAL: {
+            YRLOG_WARN("{}|{}|reject agent instance({}) reuse in terminal state({}) on owner({})",
+                       scheduleReq->traceid(), scheduleReq->requestid(), instanceID, static_cast<int32_t>(state),
+                       nodeID_);
+            auto response = GenScheduleResponse(StatusCode::ERR_INSTANCE_EXITED,
+                                                "agent instance is terminating or terminated", *scheduleReq);
+            runtimePromise->SetValue(response);
+            return response;
+        }
+        default: {
+            auto response = GenAgentReuseUnavailableResponse(
+                *scheduleReq, nodeID_, "unknown instance state " + std::to_string(static_cast<int32_t>(state)));
+            YRLOG_ERROR("{}|{}|{}", scheduleReq->traceid(), scheduleReq->requestid(), response.message());
+            runtimePromise->SetValue(response);
+            return response;
+        }
+    }
+}
+
+void InstanceCtrlActor::SendForwardAgentCreateRequest(
+    const litebus::Future<litebus::Option<litebus::AID>> &future, const std::string &owner,
+    const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+    const std::shared_ptr<litebus::Promise<ScheduleResponse>> &runtimePromise)
+{
+    if (future.IsError() || future.Get().IsNone()) {
+        const auto reason = future.IsError()
+                                ? "owner AID resolution failed with code " + std::to_string(future.GetErrorCode())
+                                : "owner AID is unavailable";
+        auto response = GenAgentReuseUnavailableResponse(*scheduleReq, owner, reason);
+        YRLOG_ERROR("{}|{}|{}", scheduleReq->traceid(), scheduleReq->requestid(), response.message());
+        runtimePromise->SetValue(response);
+        return;
+    }
+    YRLOG_INFO("{}|{}|forward agent create for instance({}) to owner({})", scheduleReq->traceid(),
+               scheduleReq->requestid(), scheduleReq->instance().instanceid(), owner);
+    auto responseFuture = forwardAgentCreateHelper_.AddSynchronizer(scheduleReq->requestid());
+    (void)Send(future.Get().Get(), "ForwardAgentCreateRequest", scheduleReq->SerializeAsString());
+    responseFuture.OnComplete([owner, scheduleReq, runtimePromise](const litebus::Future<ScheduleResponse> &future) {
+        if (future.IsError()) {
+            auto response = GenAgentReuseUnavailableResponse(
+                *scheduleReq, owner, "owner request failed with code " + std::to_string(future.GetErrorCode()));
+            YRLOG_ERROR("{}|{}|{}", scheduleReq->traceid(), scheduleReq->requestid(), response.message());
+            runtimePromise->SetValue(response);
+            return;
+        }
+        runtimePromise->SetValue(future.Get());
+    });
+}
+
+void InstanceCtrlActor::ForwardAgentCreateRequest(const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
+    if (!scheduleReq->ParseFromString(msg)) {
+        YRLOG_ERROR("failed to parse forwarded agent create request from({})", from.HashString());
+        return;
+    }
+    auto runtimePromise = std::make_shared<litebus::Promise<ScheduleResponse>>();
+    (void)HandleAgentCreateOnOwner(scheduleReq, runtimePromise);
+    runtimePromise->GetFuture().OnComplete(
+        litebus::Defer(GetAID(), &InstanceCtrlActor::SendForwardAgentCreateResponse, from, scheduleReq, _1));
+}
+
+void InstanceCtrlActor::SendForwardAgentCreateResponse(
+    const litebus::AID &to, const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+    const litebus::Future<ScheduleResponse> &future)
+{
+    auto response = future.IsError()
+                        ? GenAgentReuseUnavailableResponse(
+                              *scheduleReq, nodeID_,
+                              "owner processing failed with code " + std::to_string(future.GetErrorCode()))
+                        : future.Get();
+    YRLOG_INFO("{}|{}|send forwarded agent create response for instance({}), code({})", scheduleReq->traceid(),
+               scheduleReq->requestid(), scheduleReq->instance().instanceid(), response.code());
+    Send(to, "ForwardAgentCreateResponse", response.SerializeAsString());
+}
+
+void InstanceCtrlActor::ForwardAgentCreateResponse(const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    messages::ScheduleResponse response;
+    if (!response.ParseFromString(msg) || response.requestid().empty()) {
+        YRLOG_ERROR("failed to parse forwarded agent create response from({})", from.HashString());
+        return;
+    }
+    YRLOG_INFO("{}|received forwarded agent create response from({}), instance({}), code({})", response.requestid(),
+               from.HashString(), response.instanceid(), response.code());
+    (void)forwardAgentCreateHelper_.Synchronized(response.requestid(), response);
 }
 
 void InstanceCtrlActor::AddTenantToScheduleAffinity(const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
@@ -2372,8 +2668,24 @@ litebus::Future<ScheduleResponse> InstanceCtrlActor::DoCreateInstance(
                                              std::placeholders::_1, requestID, scheduleReq));
     }
 
-    auto schedResult = CheckGeneratedInstanceID(instanceControlView_->TryGenerateNewInstance(scheduleReq), scheduleReq,
-                                                runtimePromise);
+    GeneratedInstanceStates generated;
+    if (IsAgentReuseCreate(scheduleReq)) {
+        auto stateMachine = instanceControlView_->GetInstance(scheduleReq->instance().instanceid());
+        if (stateMachine != nullptr) {
+            const auto state = stateMachine->GetInstanceState();
+            if (stateMachine->GetOwner() != nodeID_ ||
+                (state != InstanceState::FAILED && state != InstanceState::SCHEDULE_FAILED)) {
+                return HandleAgentCreateOnOwner(scheduleReq, runtimePromise);
+            }
+            scheduleReq->mutable_instance()->set_functionproxyid(nodeID_);
+            generated = GeneratedInstanceStates{ scheduleReq->instance().instanceid(), state, true };
+        } else {
+            generated = instanceControlView_->TryGenerateNewInstance(scheduleReq);
+        }
+    } else {
+        generated = instanceControlView_->TryGenerateNewInstance(scheduleReq);
+    }
+    auto schedResult = CheckGeneratedInstanceID(generated, scheduleReq, runtimePromise);
     // The scheduling result follows the instance life cycle.
     // In the future, the lock mechanism needs to be improved to avoid deduplication of scheduling results.
     instanceControlView_->InsertRequestFuture(requestID, schedResult, runtimePromise);
@@ -2653,6 +2965,17 @@ litebus::Future<messages::ScheduleResponse> InstanceCtrlActor::HandleDispatchWit
     const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise,
     const TransitionResult &result)
 {
+    if (IsAgentReuseCreate(scheduleReq)) {
+        const std::string msg = "agent instance create conflict: instance_id="
+                                + scheduleReq->instance().instanceid()
+                                + ", another request won persistence; retry later";
+        YRLOG_ERROR("{}|{}|{}", scheduleReq->traceid(), scheduleReq->requestid(), msg);
+        auto response = GenScheduleResponse(StatusCode::ERR_ETCD_OPERATION_ERROR, msg, *scheduleReq);
+        runtimePromise->SetValue(response);
+        instanceControlView_->OnDelInstance(scheduleReq->instance().instanceid(), scheduleReq->requestid(), true);
+        return response;
+    }
+
     if (result.savedInfo.instanceid().empty()) {
         const std::string msg = "failed to update instance info of " + scheduleReq->instance().instanceid()
                                 + " to metastore, err: " + result.status.GetMessage();
