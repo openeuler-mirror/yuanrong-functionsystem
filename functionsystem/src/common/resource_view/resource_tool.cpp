@@ -58,6 +58,62 @@ const std::unordered_map<ValueType, ValueLessFunc> GLOBAL_VALUE_LESS_FUNCS = {
     { ValueType::Value_Type_SCALAR, ScalaValueLess },
     { ValueType::Value_Type_VECTORS, VectorsValueLess }
 };
+
+namespace {
+using ResourceGetter = const Resources &(ResourceUnit::*)() const;
+
+void CollectSchedulableResources(const ResourceUnit &unit, ResourceGetter getter, Resources &resources,
+                                 bool &initialized)
+{
+    if (unit.status() != static_cast<uint32_t>(UnitStatus::NORMAL)) {
+        return;
+    }
+
+    if (unit.fragment().empty()) {
+        const auto &unitResources = (unit.*getter)();
+        if (unitResources.resources_size() == 0 || !IsValid(unitResources)) {
+            return;
+        }
+        if (!initialized) {
+            resources = unitResources;
+            initialized = true;
+            return;
+        }
+        resources = resources + unitResources;
+        return;
+    }
+
+    for (const auto &[id, fragment] : unit.fragment()) {
+        (void)id;
+        CollectSchedulableResources(fragment, getter, resources, initialized);
+    }
+}
+
+Resources GetSchedulableResources(const ResourceUnit &unit, ResourceGetter getter)
+{
+    Resources resources;
+    bool initialized = false;
+    CollectSchedulableResources(unit, getter, resources, initialized);
+    if (initialized) {
+        return resources;
+    }
+    const auto &unitResources = (unit.*getter)();
+    if (unitResources.resources_size() > 0 && IsValid(unitResources)) {
+        return unitResources - unitResources;
+    }
+    return resources;
+}
+}  // namespace
+
+Resources GetSchedulableCapacity(const ResourceUnit &unit)
+{
+    return GetSchedulableResources(unit, &ResourceUnit::capacity);
+}
+
+Resources GetSchedulableAllocatable(const ResourceUnit &unit)
+{
+    return GetSchedulableResources(unit, &ResourceUnit::allocatable);
+}
 }  // namespace functionsystem::resource_view
 
 namespace functionsystem {

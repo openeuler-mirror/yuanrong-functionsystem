@@ -315,6 +315,9 @@ inline bool HasDiskResource(const ResourceUnit &unit)
     return true;
 }
 
+Resources GetSchedulableCapacity(const ResourceUnit &unit);
+Resources GetSchedulableAllocatable(const ResourceUnit &unit);
+
 }  // namespace functionsystem::resource_view
 
 namespace functionsystem {

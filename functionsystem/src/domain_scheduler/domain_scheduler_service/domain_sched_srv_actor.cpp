@@ -27,6 +27,7 @@
 #include "common/explorer/explorer.h"
 #include "common/logs/logging.h"
 #include "common/metrics/metrics_adapter.h"
+#include "common/resource_view/resource_tool.h"
 #include "common/resource_view/resource_type.h"
 
 namespace functionsystem::domain_scheduler {
@@ -797,6 +798,8 @@ void DomainSchedSrvActor::QueryResourcesInfoCallBack(
     ASSERT_IF_NULL(resource);
     resource->clear_instances();
     resource->clear_bucketindexs();
+    *resource->mutable_capacity() = resource_view::GetSchedulableCapacity(*resource);
+    *resource->mutable_allocatable() = resource_view::GetSchedulableAllocatable(*resource);
     (*rsp.mutable_resource()) = std::move(*resource);
     std::set<std::string> toFiltered;
     for (auto fragment : rsp.mutable_resource()->fragment()) {

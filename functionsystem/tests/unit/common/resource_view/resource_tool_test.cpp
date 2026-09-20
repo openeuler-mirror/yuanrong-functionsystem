@@ -684,4 +684,53 @@ TEST_F(ResourceToolTest, ValidateResourceunitDiskResource)
     EXPECT_TRUE(HasDiskResource(unit));
 }
 
+TEST_F(ResourceToolTest, GetSchedulableResourcesOnlyCountNormalFragments)
+{
+    auto root = Get1DResourceUnit("root");
+    auto normal = Get1DResourceUnit("normal");
+    auto evicting = Get1DResourceUnit("evicting");
+    evicting.set_status(static_cast<uint32_t>(UnitStatus::EVICTING));
+    auto recovering = Get1DResourceUnit("recovering");
+    recovering.set_status(static_cast<uint32_t>(UnitStatus::RECOVERING));
+    auto toBeDeleted = Get1DResourceUnit("to-be-deleted");
+    toBeDeleted.set_status(static_cast<uint32_t>(UnitStatus::TO_BE_DELETED));
+
+    *root.mutable_capacity() = normal.capacity() + evicting.capacity() + recovering.capacity() +
+                               toBeDeleted.capacity();
+    *root.mutable_allocatable() = normal.allocatable() + evicting.allocatable() + recovering.allocatable() +
+                                  toBeDeleted.allocatable();
+    (*root.mutable_fragment())[normal.id()] = normal;
+    (*root.mutable_fragment())[evicting.id()] = evicting;
+    (*root.mutable_fragment())[recovering.id()] = recovering;
+    (*root.mutable_fragment())[toBeDeleted.id()] = toBeDeleted;
+
+    EXPECT_TRUE(GetSchedulableCapacity(root) == normal.capacity());
+    EXPECT_TRUE(GetSchedulableAllocatable(root) == normal.allocatable());
+}
+
+TEST_F(ResourceToolTest, GetSchedulableResourcesTraverseNormalDomains)
+{
+    auto root = Get1DResourceUnit("root");
+    auto domain = Get1DResourceUnit("domain");
+    auto normal = Get1DResourceUnit("normal");
+    auto recovering = Get1DResourceUnit("recovering");
+    recovering.set_status(static_cast<uint32_t>(UnitStatus::RECOVERING));
+
+    *domain.mutable_capacity() = normal.capacity() + recovering.capacity();
+    *domain.mutable_allocatable() = normal.allocatable() + recovering.allocatable();
+    (*domain.mutable_fragment())[normal.id()] = normal;
+    (*domain.mutable_fragment())[recovering.id()] = recovering;
+    *root.mutable_capacity() = domain.capacity();
+    *root.mutable_allocatable() = domain.allocatable();
+    (*root.mutable_fragment())[domain.id()] = domain;
+
+    EXPECT_TRUE(GetSchedulableCapacity(root) == normal.capacity());
+    EXPECT_TRUE(GetSchedulableAllocatable(root) == normal.allocatable());
+
+    domain.set_status(static_cast<uint32_t>(UnitStatus::EVICTING));
+    (*root.mutable_fragment())[domain.id()] = domain;
+    EXPECT_TRUE(IsEmpty(GetSchedulableCapacity(root)));
+    EXPECT_TRUE(IsEmpty(GetSchedulableAllocatable(root)));
+}
+
 }  // namespace functionsystem::test

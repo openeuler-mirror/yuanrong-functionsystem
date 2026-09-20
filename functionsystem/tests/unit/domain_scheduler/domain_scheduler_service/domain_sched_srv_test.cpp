@@ -1061,8 +1061,15 @@ TEST_F(DomainSchedSrvTest, QueryResourceInfo)
 
     std::string unitId = "test";
     auto unit = view_utils::Get1DResourceUnit(unitId);
+    auto normal = view_utils::Get1DResourceUnit("normal");
+    auto evicting = view_utils::Get1DResourceUnit("evicting");
+    evicting.set_status(static_cast<uint32_t>(UnitStatus::EVICTING));
     auto invalid = view_utils::Get1DResourceUnit("invalid");
     invalid.set_status(static_cast<uint32_t>(UnitStatus::TO_BE_DELETED));
+    *unit.mutable_capacity() = normal.capacity() + evicting.capacity() + invalid.capacity();
+    *unit.mutable_allocatable() = normal.allocatable() + evicting.allocatable() + invalid.allocatable();
+    (*unit.mutable_fragment())["normal"] = normal;
+    (*unit.mutable_fragment())["evicting"] = evicting;
     (*unit.mutable_fragment())["invalid"] = invalid;
     EXPECT_CALL(*primary_, GetResourceViewCopy())
         .WillRepeatedly(Return(AsyncReturn(std::make_shared<resource_view::ResourceUnit>(unit))));
@@ -1079,7 +1086,16 @@ TEST_F(DomainSchedSrvTest, QueryResourceInfo)
     EXPECT_TRUE(rsp.ParseFromString(msg.Get()));
     EXPECT_EQ(rsp.requestid(), "request");
     ASSERT_EQ(rsp.resource().id(), unitId);
-    ASSERT_EQ(rsp.resource().fragment_size(), 0);
+    ASSERT_EQ(rsp.resource().fragment_size(), 2);
+    EXPECT_TRUE(rsp.resource().fragment().contains("normal"));
+    EXPECT_TRUE(rsp.resource().fragment().contains("evicting"));
+    EXPECT_FALSE(rsp.resource().fragment().contains("invalid"));
+    for (const auto *resourceName : { &resource_view::CPU_RESOURCE_NAME, &resource_view::MEMORY_RESOURCE_NAME }) {
+        EXPECT_DOUBLE_EQ(rsp.resource().capacity().resources().at(*resourceName).scalar().value(),
+                         normal.capacity().resources().at(*resourceName).scalar().value());
+        EXPECT_DOUBLE_EQ(rsp.resource().allocatable().resources().at(*resourceName).scalar().value(),
+                         normal.allocatable().resources().at(*resourceName).scalar().value());
+    }
 
     litebus::Terminate(globalStub->GetAID());
     litebus::Await(globalStub);

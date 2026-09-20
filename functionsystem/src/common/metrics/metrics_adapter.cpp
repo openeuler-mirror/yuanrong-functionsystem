@@ -1575,36 +1575,38 @@ void MetricsAdapter::TransformGaugeParam(const std::string &name, const std::str
 void MetricsAdapter::ReportClusterSourceState(const std::shared_ptr<resource_view::ResourceUnit> &unit)
 {
     RETURN_IF_NULL(unit);
+    const auto capacity = resource_view::GetSchedulableCapacity(*unit);
+    const auto allocatable = resource_view::GetSchedulableAllocatable(*unit);
 
-    if (functionsystem::resource_view::HasValidCPU(unit->capacity())) {
+    if (functionsystem::resource_view::HasValidCPU(capacity)) {
         double capacityCPU =
-            unit->capacity().resources().at(functionsystem::resource_view::CPU_RESOURCE_NAME).scalar().value();
+            capacity.resources().at(functionsystem::resource_view::CPU_RESOURCE_NAME).scalar().value();
         TransformGaugeParam("yr_cluster_cpu_capacity", "", "vmillicore", capacityCPU);
     }
 
-    if (functionsystem::resource_view::HasValidCPU(unit->allocatable())) {
+    if (functionsystem::resource_view::HasValidCPU(allocatable)) {
         double allocatableCPU =
-            unit->allocatable().resources().at(functionsystem::resource_view::CPU_RESOURCE_NAME).scalar().value();
+            allocatable.resources().at(functionsystem::resource_view::CPU_RESOURCE_NAME).scalar().value();
         TransformGaugeParam("yr_cluster_cpu_allocatable", "", "vmillicore", allocatableCPU);
     }
 
-    if (functionsystem::resource_view::HasValidMemory(unit->capacity())) {
+    if (functionsystem::resource_view::HasValidMemory(capacity)) {
         double capacityMemory =
-            unit->capacity().resources().at(functionsystem::resource_view::MEMORY_RESOURCE_NAME).scalar().value();
+            capacity.resources().at(functionsystem::resource_view::MEMORY_RESOURCE_NAME).scalar().value();
         TransformGaugeParam("yr_cluster_memory_capacity", "", "mb", capacityMemory);
     }
 
-    if (functionsystem::resource_view::HasValidMemory(unit->allocatable())) {
+    if (functionsystem::resource_view::HasValidMemory(allocatable)) {
         double allocatableMemory =
-            unit->allocatable().resources().at(functionsystem::resource_view::MEMORY_RESOURCE_NAME).scalar().value();
+            allocatable.resources().at(functionsystem::resource_view::MEMORY_RESOURCE_NAME).scalar().value();
         TransformGaugeParam("yr_cluster_memory_allocatable", "", "mb", allocatableMemory);
     }
 
-    if (const auto *storage = FindScalarResource(unit->capacity(), STORAGE_RESOURCE_NAME); storage != nullptr) {
+    if (const auto *storage = FindScalarResource(capacity, STORAGE_RESOURCE_NAME); storage != nullptr) {
         TransformGaugeParam("yr_cluster_storage_capacity", "", "bytes", storage->scalar().value());
     }
 
-    if (const auto *storage = FindScalarResource(unit->allocatable(), STORAGE_RESOURCE_NAME); storage != nullptr) {
+    if (const auto *storage = FindScalarResource(allocatable, STORAGE_RESOURCE_NAME); storage != nullptr) {
         TransformGaugeParam("yr_cluster_storage_allocatable", "", "bytes", storage->scalar().value());
     }
 
