@@ -41,6 +41,48 @@
 #include "utils/os_utils.hpp"
 
 namespace functionsystem::runtime_manager {
+// Max length of the error detail extracted from a non-2xx HTTP body.
+constexpr size_t MAX_HTTP_ERROR_DETAIL_LEN = 512;
+
+namespace {
+// Extract a human-readable root cause from a non-2xx HTTP body. Recognizes the
+// error shapes jiuwenbox emits ({"error": ...} from its exception handlers,
+// conchd's {"message": ...}, FastAPI/Pydantic's {"detail": str | [...]}) and
+// falls back to the raw body when nothing matches.
+std::string ExtractHttpErrorDetail(int httpStatus, const std::string &body)
+{
+    std::string detail;
+    try {
+        auto json = nlohmann::json::parse(body);
+        if (json.is_object()) {
+            for (const char *key : { "error", "message", "detail" }) {
+                if (!json.contains(key) || json[key].is_null()) {
+                    continue;
+                }
+                detail = json[key].is_string() ? json[key].get<std::string>() : json[key].dump();
+                if (!detail.empty()) {
+                    break;
+                }
+            }
+        }
+    } catch (const std::exception &) {
+        // Not JSON: fall through to the raw-body fallback below.
+    }
+    if (detail.empty()) {
+        detail = body;
+    }
+    std::replace(detail.begin(), detail.end(), '\n', ' ');
+    if (detail.size() > MAX_HTTP_ERROR_DETAIL_LEN) {
+        detail.resize(MAX_HTTP_ERROR_DETAIL_LEN);
+        detail += "...(truncated)";
+    }
+    if (detail.empty()) {
+        detail = "HTTP " + std::to_string(httpStatus);
+    }
+    return detail;
+}
+}
+
 constexpr int64_t RECONNECT_SUPERVISOR_INTERVAL_MS = 5000;
 constexpr int64_t HEALTH_CHECK_INTERVAL_MS = 100;
 constexpr int64_t HTTP_TIMEOUT_MS = 30000;
@@ -93,8 +135,9 @@ void ConchExecutor::ParseResponse(litebus::Promise<nlohmann::json> promise, std:
     // Parse HTTP status code from the first line (e.g. "HTTP/1.1 200 OK"); non-2xx is a failure.
     // Note: jiuwenbox's conch backend returns 201 + phase=error + error_message on soft failures
     // (e.g. conchd unreachable, SDK not installed). 201 is 2xx, so it passes this status gate and
-    // is then handled below in CreateSandbox via the error_message field — do not treat 201 as a
-    // transport failure here.
+    // is then handled below in CreateSandbox via the error_message field. Non-2xx is also
+    // surfaced as a synthesized {"error_message": ...} value (see the branch below) rather than
+    // SetFailed, so the root cause in the body reaches upstream callers.
     int httpStatus = HTTP_STATUS_UNPARSED;
     size_t firstLineEnd = response.find("\r\n");
     if (firstLineEnd != std::string::npos && firstLineEnd < headerEnd) {
@@ -115,7 +158,11 @@ void ConchExecutor::ParseResponse(litebus::Promise<nlohmann::json> promise, std:
     if (httpStatus != HTTP_STATUS_UNPARSED &&
         (httpStatus < HTTP_STATUS_OK_MIN || httpStatus >= HTTP_STATUS_OK_MAX)) {
         YRLOG_ERROR("conch returned non-2xx status: {}, body: {}", httpStatus, respBody);
-        promise.SetFailed(static_cast<int32_t>(ERR_INNER_COMMUNICATION));
+        // Surface the root cause from the body; the error_message branch in
+        // CreateSandbox/ExecInSandbox propagates it upstream.
+        promise.SetValue(nlohmann::json{
+            { "error_message", ExtractHttpErrorDetail(httpStatus, respBody) },
+        });
         return;
     }
     if (respBody.empty()) {
@@ -517,16 +564,17 @@ litebus::Future<runtime::v1::StartResponse> ConchExecutor::CreateSandbox(
 
             if (future.IsError()) {
                 YRLOG_ERROR("{}|Create sandbox request failed with error code: {}", runtimeID, future.GetErrorCode());
-                failWith("Failed to create sandbox");   // transport failure: no error_message
+                // Transport/protocol failure only: no error_message exists.
+                failWith("Failed to create sandbox");
                 return;
             }
 
             const nlohmann::json &createResp = future.Get();
 
             // error_message set means create failed; if a valid id is also returned (orphan sandbox),
-            // delete it first then fail. Covers the conch 201+phase=error soft-failure path (SDK not installed / conchd
-            // unreachable / template missing): jiuwenbox returns 201 with error_message set,
-            // which ParseResponse admits as 2xx, so we reach here and treat it as a failure.
+            // delete it first then fail. Covers the conch 201+phase=error soft-failure path (SDK not
+            // installed / conchd unreachable / template missing) and non-2xx HTTP errors, which
+            // ParseResponse synthesizes as {"error_message": ...} carrying the body's root cause.
             if (createResp.contains("error_message") && !createResp["error_message"].is_null()) {
                 std::string errorMsg = createResp["error_message"].get<std::string>();
                 YRLOG_ERROR("{}|Create sandbox failed with error_message: {}", runtimeID, errorMsg);
@@ -639,7 +687,8 @@ litebus::Future<runtime::v1::StartResponse> ConchExecutor::ExecInSandbox(
             if (future.IsError()) {
                 YRLOG_ERROR("{}|Failed to exec command in sandbox {}: {}", runtimeID, sandboxId,
                             static_cast<int>(future.GetErrorCode()));
-                failWith("Failed to execute command in sandbox");   // transport failure: no error_message
+                // Transport/protocol failure only: no error_message exists.
+                failWith("Failed to execute command in sandbox");
                 return;
             }
 
@@ -745,6 +794,14 @@ litebus::Future<runtime::v1::DeleteResponse> ConchExecutor::DoDeleteSandbox(
         .OnComplete([promise](const litebus::Future<nlohmann::json> &future) mutable {
             if (future.IsError()) {
                 promise.SetFailed(future.GetErrorCode());
+                return;
+            }
+            // Non-2xx arrives as a value carrying error_message; a failed delete
+            // must not be reported as success.
+            const auto &resp = future.Get();
+            if (resp.contains("error_message") && !resp["error_message"].is_null()) {
+                YRLOG_ERROR("Failed to delete sandbox: {}", resp["error_message"].get<std::string>());
+                promise.SetFailed(static_cast<int32_t>(ERR_INNER_COMMUNICATION));
                 return;
             }
             promise.SetValue(runtime::v1::DeleteResponse{});

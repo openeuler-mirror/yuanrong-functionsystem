@@ -23,6 +23,8 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <cstring>
+
 #include "common/constants/constants.h"
 #include "common/proto/pb/message_pb.h"
 #include "common/proto/pb/posix/sandbox_api.grpc.pb.h"
@@ -354,23 +356,126 @@ TEST_F(ConchExecutorTest, ParseResponse_Admits201SoftFailure)
     EXPECT_EQ(json["error_message"], "conchd unreachable");
 }
 
-TEST_F(ConchExecutorTest, ParseResponse_Non2xxIsFailure)
+TEST_F(ConchExecutorTest, ParseResponse_Non2xxCarriesErrorMessage)
 {
     litebus::Promise<nlohmann::json> promise;
     litebus::Future<nlohmann::json> future = promise.GetFuture();
 
-    // 400 (invalid bind mount / invalid sandbox_runtime) -> transport failure here.
+    // 400: the body's root cause reaches callers via error_message, not as a
+    // transport failure.
+    std::string body = R"({"error":"conch bind mount host_path does not exist: /tmp/bad_mount"})";
     std::string response =
         "HTTP/1.1 400 Bad Request\r\n"
-        "Content-Length: 12\r\n"
-        "\r\n"
-        "{\"detail\":\"\"}";
+        "Content-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(body.length()) + "\r\n\r\n" + body;
 
     executor_->TestParseResponse(promise, response);
 
-    ASSERT_AWAIT_SET(future);
-    EXPECT_TRUE(future.IsError());
-    EXPECT_EQ(future.GetErrorCode(), static_cast<int>(StatusCode::ERR_INNER_COMMUNICATION));
+    ASSERT_AWAIT_READY(future);
+    EXPECT_FALSE(future.IsError());
+    auto json = future.Get();
+    ASSERT_TRUE(json.contains("error_message"));
+    EXPECT_EQ(json["error_message"], "conch bind mount host_path does not exist: /tmp/bad_mount");
+}
+
+TEST_F(ConchExecutorTest, ParseResponse_Non2xxMessageFieldFallback)
+{
+    litebus::Promise<nlohmann::json> promise;
+    litebus::Future<nlohmann::json> future = promise.GetFuture();
+
+    // conchd's apperror envelope uses "error"; {"message": ...} is also accepted.
+    std::string body = R"({"status":"error","code":"internal","message":"volume source not accessible"})";
+    std::string response =
+        "HTTP/1.1 500 Internal Server Error\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(body.length()) + "\r\n\r\n" + body;
+
+    executor_->TestParseResponse(promise, response);
+
+    ASSERT_AWAIT_READY(future);
+    auto json = future.Get();
+    EXPECT_EQ(json["error_message"], "volume source not accessible");
+}
+
+TEST_F(ConchExecutorTest, ParseResponse_Non2xxNonJsonBodyFallback)
+{
+    litebus::Promise<nlohmann::json> promise;
+    litebus::Future<nlohmann::json> future = promise.GetFuture();
+
+    // Gateway-style plain-text error page: raw body becomes the detail.
+    std::string response =
+        "HTTP/1.1 502 Bad Gateway\r\n"
+        "Content-Length: 11\r\n"
+        "\r\n"
+        "Bad Gateway";
+
+    executor_->TestParseResponse(promise, response);
+
+    ASSERT_AWAIT_READY(future);
+    auto json = future.Get();
+    EXPECT_EQ(json["error_message"], "Bad Gateway");
+}
+
+TEST_F(ConchExecutorTest, ParseResponse_Non2xxEmptyBodyGeneric)
+{
+    litebus::Promise<nlohmann::json> promise;
+    litebus::Future<nlohmann::json> future = promise.GetFuture();
+
+    // Nothing usable in the body: at least surface the status code.
+    std::string response =
+        "HTTP/1.1 503 Service Unavailable\r\n"
+        "Content-Length: 0\r\n"
+        "\r\n";
+
+    executor_->TestParseResponse(promise, response);
+
+    ASSERT_AWAIT_READY(future);
+    auto json = future.Get();
+    EXPECT_EQ(json["error_message"], "HTTP 503");
+}
+
+TEST_F(ConchExecutorTest, ParseResponse_Non2xxDetailArrayDumped)
+{
+    litebus::Promise<nlohmann::json> promise;
+    litebus::Future<nlohmann::json> future = promise.GetFuture();
+
+    // FastAPI/Pydantic validation errors carry "detail" as an array.
+    std::string body = R"({"detail":[{"loc":["body","policy"],"msg":"field required"}]})";
+    std::string response =
+        "HTTP/1.1 422 Unprocessable Entity\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(body.length()) + "\r\n\r\n" + body;
+
+    executor_->TestParseResponse(promise, response);
+
+    ASSERT_AWAIT_READY(future);
+    auto json = future.Get();
+    EXPECT_EQ(json["error_message"], R"([{"loc":["body","policy"],"msg":"field required"}])");
+}
+
+TEST_F(ConchExecutorTest, ParseResponse_Non2xxLongBodyTruncated)
+{
+    litebus::Promise<nlohmann::json> promise;
+    litebus::Future<nlohmann::json> future = promise.GetFuture();
+
+    std::string longError(1024, 'x');
+    std::string body = "{\"error\":\"" + longError + "\"}";
+    std::string response =
+        "HTTP/1.1 400 Bad Request\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(body.length()) + "\r\n\r\n" + body;
+
+    executor_->TestParseResponse(promise, response);
+
+    ASSERT_AWAIT_READY(future);
+    auto json = future.Get();
+    std::string detail = json["error_message"].get<std::string>();
+    EXPECT_EQ(detail.size(), 512 + strlen("...(truncated)"));
+    EXPECT_THAT(detail, testing::HasSubstr("...(truncated)"));
 }
 
 /**
