@@ -95,6 +95,11 @@ static const std::string CREATE_CONFLICT_ARBITRATED_CONTENDER =
     "createConflictArbitratedContender";
 static constexpr uint32_t MAX_ROUTE_CONTROL_FRAME_SIZE = 64 * 1024;
 
+static std::string NewKillRequestID(const std::string &logicalRequestID)
+{
+    return logicalRequestID + "/kill/" + litebus::uuid_generator::UUID::GetRandomUUID().ToString();
+}
+
 static std::string RouteControlErrorMessage(int errorNumber)
 {
     return std::error_code(errorNumber, std::generic_category()).message();
@@ -1945,7 +1950,8 @@ litebus::Future<messages::KillInstanceResponse> InstanceCtrlActor::SendKillReque
     if (concernedInstance_.find(instanceInfo.instanceid()) != concernedInstance_.end()) {
         (void)concernedInstance_.erase(instanceInfo.instanceid());
     }
-    const auto requestID = requestIDOverride.empty() ? instanceInfo.requestid() : requestIDOverride;
+    const auto logicalRequestID = requestIDOverride.empty() ? instanceInfo.requestid() : requestIDOverride;
+    const auto requestID = NewKillRequestID(logicalRequestID);
     auto traceID = "killTrace" + litebus::uuid_generator::UUID::GetRandomUUID().ToString();
     // while isMonopoly is set, the kill would disable the agent to be reuse
     auto isMonopoly = ((instanceInfo.scheduleoption().schedpolicyname() == MONOPOLY_SCHEDULE) && !forRedeploy);
@@ -1979,8 +1985,9 @@ litebus::Future<Status> InstanceCtrlActor::ReleaseRuntimeForPause(
         ? snapshotID.substr(sizeof(resumeTargetPrefix) - 1) : std::string{};
     const bool exactResumeCandidate = !targetAttemptID.empty()
         && instanceInfo.runtimeid() == resume_identity::RuntimeID(instanceInfo.instanceid(), targetAttemptID);
-    const auto cleanupRequestID = (exactResumeCandidate ? "resume-release/" : "pause-release/")
-        + instanceInfo.instanceid() + "/" + snapshotID;
+    const auto cleanupRequestID = NewKillRequestID(
+        (exactResumeCandidate ? "resume-release/" : "pause-release/")
+        + instanceInfo.instanceid() + "/" + snapshotID);
     litebus::Future<messages::KillInstanceResponse> releaseFuture;
     if (exactResumeCandidate) {
         auto traceID = "killTrace" + litebus::uuid_generator::UUID::GetRandomUUID().ToString();
@@ -2164,30 +2171,37 @@ litebus::Future<Status> InstanceCtrlActor::KillRuntimeWithSnapshotCleanup(
     }
     return SendKillRequestToAgent(instanceInfo, isRecovering, false, deleteInstanceSnapshots)
         .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::RecordFrontendKillRuntimeResult, instanceInfo,
-                             frontendKillRequestID, _1));
+                             frontendKillRequestID, isRecovering, _1));
 }
 
 litebus::Future<Status> InstanceCtrlActor::RecordFrontendKillRuntimeResult(
     const InstanceInfo &instanceInfo, const std::string &frontendKillRequestID,
-    const messages::KillInstanceResponse &response)
+    bool isRecovering, const messages::KillInstanceResponse &response)
 {
     auto evidence = frontendKillRuntimeEvidence_.find(instanceInfo.instanceid());
-    if (response.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
+    const bool runtimeAlreadyAbsent =
+        response.code() == static_cast<int32_t>(StatusCode::RUNTIME_MANAGER_RUNTIME_PROCESS_NOT_FOUND);
+    if (response.code() != static_cast<int32_t>(StatusCode::SUCCESS) && !runtimeAlreadyAbsent) {
         YRLOG_WARN("{}|kill instance({}), errCode {}", instanceInfo.requestid(), instanceInfo.instanceid(),
                    response.code());
         if (!frontendKillRequestID.empty() && evidence != frontendKillRuntimeEvidence_.end()
             && evidence->second.killRequestID == frontendKillRequestID) {
             evidence->second.state = "failed-" + std::to_string(response.code());
         }
+        if (isRecovering) {
+            return Status(static_cast<StatusCode>(response.code()), response.message());
+        }
     } else {
-        YRLOG_INFO("{}|succeed to kill instance({})", instanceInfo.requestid(), instanceInfo.instanceid());
+        YRLOG_INFO("{}|{} instance({})", instanceInfo.requestid(),
+                   runtimeAlreadyAbsent ? "runtime already absent for" : "succeed to kill",
+                   instanceInfo.instanceid());
         if (!frontendKillRequestID.empty() && evidence != frontendKillRuntimeEvidence_.end()
             && evidence->second.killRequestID == frontendKillRequestID) {
             evidence->second.state = "terminated";
         }
     }
-    // Preserve legacy kill response semantics; the cleanup snapshot reports the
-    // runtime result independently instead of converting it into false success.
+    // Preserve legacy non-recovery kill response semantics. Recovery must stop
+    // before deploy when the source runtime could not be terminated.
     return Status::OK();
 }
 
@@ -9743,7 +9757,8 @@ void InstanceCtrlActor::FunctionDelete(const std::string &funcKey, const Functio
     if (funcMeta.warmup == WarmupType::NONE || funcMeta.warmup == WarmupType::INVALID) {
         return;
     }
-    auto killInstanceReq = GenKillInstanceRequest(funcKey, fmt::format("FunctionWarmUp-Instance-{}", funcKey), funcKey,
+    auto killInstanceReq = GenKillInstanceRequest(NewKillRequestID(funcKey),
+                                                  fmt::format("FunctionWarmUp-Instance-{}", funcKey), funcKey,
                                                   funcMeta.codeMetaData.storageType, false);
     killInstanceReq->set_runtimeid(GetFunctionHashTag(funcMeta));
     (void)functionAgentMgr_->UnRegisterWarmUp(killInstanceReq)

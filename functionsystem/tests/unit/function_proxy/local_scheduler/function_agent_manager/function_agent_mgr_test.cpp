@@ -121,6 +121,47 @@ TEST(FunctionAgentMgrTest, RejectsListResponseFromUnexpectedAgent)
     EXPECT_EQ(result.Get().requestid(), requestID);
 }
 
+TEST(FunctionAgentMgrTest, StaleKillRetryDoesNotAdvanceReplacementRequest)
+{
+    auto metaStoreClient = std::make_shared<MockMetaStoreClient>("127.0.0.1:1");
+    auto param = PARAM;
+    param.retryCycleMs = 60'000;
+    auto actor = std::make_shared<local_scheduler::FunctionAgentMgrActor>(
+        "kill-retry-generation", param, "nodeID", metaStoreClient);
+    const std::string agentID = "kill-agent";
+    const litebus::AID agentAID("kill-agent-actor", "127.0.0.1:31003");
+    local_scheduler::FunctionAgentMgrActor::FuncAgentInfo agentInfo;
+    agentInfo.isEnable = true;
+    agentInfo.aid = agentAID;
+    actor->funcAgentTable_[agentID] = agentInfo;
+    actor->aidTable_[agentAID] = agentID;
+
+    auto oldRequest = GenKillInstanceRequest(REQUEST_ID, INSTANCE_ID, "old-trace", STORAGE_TYPE);
+    oldRequest->set_runtimeid("runtime-old");
+    auto oldFuture = actor->KillInstance(oldRequest, agentID, true);
+
+    auto oldResponse = GenKillInstanceResponse(StatusCode::SUCCESS, "old runtime stopped", REQUEST_ID);
+    oldResponse.set_instanceid(INSTANCE_ID);
+    actor->KillInstanceResp(agentAID, "KillInstanceResponse", oldResponse.SerializeAsString());
+    ASSERT_TRUE(oldFuture.WaitFor(1'000).IsOK());
+
+    auto replacementRequest = GenKillInstanceRequest(REQUEST_ID, INSTANCE_ID, "new-trace", STORAGE_TYPE);
+    replacementRequest->set_runtimeid("runtime-new");
+    auto replacementFuture = actor->KillInstance(replacementRequest, agentID, true);
+    ASSERT_FALSE(replacementFuture.WaitFor(20).IsOK());
+    ASSERT_EQ(actor->killNotifyPromise_[agentID][REQUEST_ID].retryTimes, 0U);
+
+    actor->RetryKill(REQUEST_ID, agentID, oldRequest);
+
+    EXPECT_EQ(actor->killNotifyPromise_[agentID][REQUEST_ID].retryTimes, 0U);
+
+    auto replacementResponse =
+        GenKillInstanceResponse(StatusCode::SUCCESS, "replacement runtime stopped", REQUEST_ID);
+    replacementResponse.set_instanceid(INSTANCE_ID);
+    actor->KillInstanceResp(agentAID, "KillInstanceResponse", replacementResponse.SerializeAsString());
+    ASSERT_TRUE(replacementFuture.WaitFor(1'000).IsOK());
+}
+
 class DISABLED_FuncAgentMgrTest : public ::testing::Test {
 friend class FunctionAgentMgrActor;
 protected:

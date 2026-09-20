@@ -880,6 +880,64 @@ TEST_F(InstanceCtrlTest, ReloadKillsSourceAndUsesAutomaticRecoveryPath)
     EXPECT_EQ(recoveryInfo_->instancestatus().code(), static_cast<int32_t>(InstanceState::RUNNING));
 }
 
+TEST_F(InstanceCtrlTest, ConsecutiveRuntimeStopsUseDistinctRequestIDs)
+{
+    SeedRunningLocalFailover(false);
+    std::vector<std::string> requestIDs;
+    EXPECT_CALL(*mockSharedClientManagerProxy_, DeleteClient("sandbox-a"))
+        .Times(2).WillRepeatedly(Return(Status::OK()));
+    EXPECT_CALL(*funcAgentMgr_, KillInstance(_, "agent-a", true))
+        .Times(2).WillRepeatedly(Invoke(
+            [&requestIDs](const std::shared_ptr<messages::KillInstanceRequest> &request,
+                          const std::string &, bool) {
+                requestIDs.push_back(request->requestid());
+                return litebus::Future<messages::KillInstanceResponse>(GenKillInstanceResponse(
+                    StatusCode::SUCCESS, "killed", request->requestid()));
+            }));
+
+    auto first = instanceCtrl_->instanceCtrlActor_->SendKillRequestToAgent(
+        *recoveryInfo_, true, false, false);
+    auto second = instanceCtrl_->instanceCtrlActor_->SendKillRequestToAgent(
+        *recoveryInfo_, true, false, false);
+
+    ASSERT_AWAIT_READY(first);
+    ASSERT_AWAIT_READY(second);
+    ASSERT_EQ(requestIDs.size(), 2U);
+    EXPECT_NE(requestIDs[0], requestIDs[1]);
+}
+
+TEST_F(InstanceCtrlTest, RecoveringRuntimeStopFailureIsNotConvertedToSuccess)
+{
+    SeedRunningLocalFailover(false);
+    EXPECT_CALL(*mockSharedClientManagerProxy_, DeleteClient("sandbox-a"))
+        .WillOnce(Return(Status::OK()));
+    EXPECT_CALL(*funcAgentMgr_, KillInstance(_, "agent-a", true))
+        .WillOnce(Return(GenKillInstanceResponse(
+            StatusCode::ERR_INNER_COMMUNICATION, "stale runtime stop failed", "kill")));
+
+    auto result = instanceCtrl_->instanceCtrlActor_->KillRuntime(*recoveryInfo_, true);
+
+    ASSERT_AWAIT_READY(result);
+    EXPECT_TRUE(result.Get().IsError());
+    EXPECT_EQ(result.Get().StatusCode(), StatusCode::ERR_INNER_COMMUNICATION);
+}
+
+TEST_F(InstanceCtrlTest, RecoveringRuntimeAlreadyAbsentIsIdempotentSuccess)
+{
+    SeedRunningLocalFailover(false);
+    EXPECT_CALL(*mockSharedClientManagerProxy_, DeleteClient("sandbox-a"))
+        .WillOnce(Return(Status::OK()));
+    EXPECT_CALL(*funcAgentMgr_, KillInstance(_, "agent-a", true))
+        .WillOnce(Return(GenKillInstanceResponse(
+            StatusCode::RUNTIME_MANAGER_RUNTIME_PROCESS_NOT_FOUND,
+            "runtime already absent", "kill")));
+
+    auto result = instanceCtrl_->instanceCtrlActor_->KillRuntime(*recoveryInfo_, true);
+
+    ASSERT_AWAIT_READY(result);
+    EXPECT_TRUE(result.Get().IsOk()) << result.Get().ToString();
+}
+
 TEST_F(InstanceCtrlTest, ReloadActivatesRestoredWorkloadBeforePublishingRunning)
 {
     LocalRecoveryRouteServer routes;
@@ -2893,7 +2951,7 @@ TEST(FrontendKillEvidenceTest, OlderKillResultCannotOverwriteNewerRequestEvidenc
     messages::KillInstanceResponse response;
     response.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
 
-    auto result = actor->RecordFrontendKillRuntimeResult(olderKill, "older-request", response);
+    auto result = actor->RecordFrontendKillRuntimeResult(olderKill, "older-request", false, response);
 
     ASSERT_AWAIT_READY(result);
     EXPECT_EQ(actor->frontendKillRuntimeEvidence_[instanceID].killRequestID, "newer-request");
@@ -8287,7 +8345,8 @@ protected:
         ASSERT_AWAIT_READY(deletedInstancesFuture);
         ASSERT_NE(killRequestFuture.Get(), nullptr);
         EXPECT_EQ(killRequestFuture.Get()->instanceid(), loser.instanceid());
-        EXPECT_EQ(killRequestFuture.Get()->requestid(), loser.requestid());
+        EXPECT_THAT(killRequestFuture.Get()->requestid(),
+                    StartsWith(loser.requestid() + "/kill/"));
         EXPECT_EQ(killRequestFuture.Get()->runtimeid(), loser.runtimeid());
         ASSERT_THAT(deletedInstancesFuture.Get(), ElementsAre(loser.instanceid()));
         EXPECT_EQ(actor_->GetHeartbeatTimers().count(loser.instanceid()), 0);

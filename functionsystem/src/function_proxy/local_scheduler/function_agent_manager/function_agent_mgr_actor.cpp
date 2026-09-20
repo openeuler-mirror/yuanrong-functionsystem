@@ -734,14 +734,14 @@ void FunctionAgentMgrActor::KillInstanceResp(const litebus::AID &from, string &&
     }
 
     if (auto iter(agentKillNotifyPromise->second.find(requestID));
-        iter == agentKillNotifyPromise->second.end() || iter->second.first == nullptr) {
+        iter == agentKillNotifyPromise->second.end() || iter->second.promise == nullptr) {
         YRLOG_WARN("{}|not find promise to notify response for killing instance.", requestID);
         return;
     }
 
     YRLOG_INFO("{}|success to kill instance({}) from function_agent({}), resp code({}), resp message({})", requestID,
                resp.instanceid(), funcAgentID, resp.code(), resp.message());
-    agentKillNotifyPromise->second[requestID].first->SetValue(resp);
+    agentKillNotifyPromise->second[requestID].promise->SetValue(resp);
     (void)agentKillNotifyPromise->second.erase(requestID);
 
     if (funcAgentTable_.find(funcAgentID) == funcAgentTable_.end()) {
@@ -807,27 +807,37 @@ void FunctionAgentMgrActor::RetryKill(const std::string &requestID, const std::s
         return;
     }
     auto killPromise = agentKillNotifyPromise->second.find(requestID);
-    if (killPromise == agentKillNotifyPromise->second.end() || killPromise->second.first == nullptr ||
-        killPromise->second.first->GetFuture().IsOK()) {
+    if (killPromise == agentKillNotifyPromise->second.end()) {
+        YRLOG_DEBUG("{}|{}|skip kill retry because request has completed, instanceID: {}, functionAgentID: {}.",
+                    request->traceid(), requestID, request->instanceid(), funcAgentID);
+        return;
+    }
+    if (killPromise->second.request != request) {
+        YRLOG_INFO("{}|{}|skip stale kill retry because a newer request owns the request ID, instanceID: {}, "
+                   "functionAgentID: {}.",
+                   request->traceid(), requestID, request->instanceid(), funcAgentID);
+        return;
+    }
+    if (killPromise->second.promise == nullptr || killPromise->second.promise->GetFuture().IsOK()) {
         YRLOG_DEBUG("{}|{}|skip kill retry because request has completed, instanceID: {}, functionAgentID: {}.",
                     request->traceid(), requestID, request->instanceid(), funcAgentID);
         return;
     }
 
     auto iter = funcAgentTable_.find(funcAgentID);
-    if (killPromise->second.second++ < retryTimes_ && iter != funcAgentTable_.end()) {
+    if (killPromise->second.retryTimes++ < retryTimes_ && iter != funcAgentTable_.end()) {
         Send(iter->second.aid, "KillInstance", request->SerializeAsString());
         litebus::AsyncAfter(retryCycleMs_, GetAID(), &FunctionAgentMgrActor::RetryKill, requestID, funcAgentID,
                             request);
         YRLOG_INFO("{}|{}|retry kill instance, instanceID: {}, functionAgentID: {}, attempt: {}/{}.",
-                   request->traceid(), requestID, request->instanceid(), funcAgentID, killPromise->second.second,
+                   request->traceid(), requestID, request->instanceid(), funcAgentID, killPromise->second.retryTimes,
                    retryTimes_);
         return;
     }
     messages::KillInstanceResponse resp = GenKillInstanceResponse(
         StatusCode::ERR_INNER_COMMUNICATION,
         iter == funcAgentTable_.end() ? funcAgentID + " connection timeout" : "kill retry fail", requestID);
-    killPromise->second.first->SetValue(resp);
+    killPromise->second.promise->SetValue(resp);
     (void)agentKillNotifyPromise->second.erase(requestID);
     YRLOG_ERROR("{}|{}|kill instance retry exhausted, instanceID: {}, functionAgentID: {}, attempts: {}.",
                 request->traceid(), requestID, request->instanceid(), funcAgentID, retryTimes_);
@@ -984,10 +994,11 @@ litebus::Future<messages::KillInstanceResponse> FunctionAgentMgrActor::KillInsta
 
     auto notifyPromise = std::make_shared<KillNotifyPromise>();
     auto notifyFuture = notifyPromise->GetFuture();
-    auto emplaceResult = killNotifyPromise_[funcAgentID].emplace(requestID, std::make_pair(notifyPromise, 0));
+    auto emplaceResult = killNotifyPromise_[funcAgentID].emplace(
+        requestID, KillNotifyContext{ notifyPromise, 0, request });
     if (!emplaceResult.second) {
         YRLOG_INFO("{}|{}|request ID is repeat.", request->traceid(), requestID);
-        return killNotifyPromise_[funcAgentID][requestID].first->GetFuture();
+        return emplaceResult.first->second.promise->GetFuture();
     }
     YRLOG_DEBUG("{}|send instance({}) kill request, runtimeID({}), storage type({})", request->requestid(),
                 request->instanceid(), request->runtimeid(), request->storagetype());
@@ -1095,7 +1106,7 @@ void FunctionAgentMgrActor::TimeoutEvent(const string &funcAgentID)
         for (auto promise : iter->second) {
             messages::KillInstanceResponse response =
                 GenKillInstanceResponse(StatusCode::SUCCESS, "function agent may already exited", promise.first);
-            promise.second.first->SetValue(response);
+            promise.second.promise->SetValue(response);
         }
         iter->second.clear();
         killNotifyPromise_.erase(funcAgentID);

@@ -934,7 +934,7 @@ private:
                              data_plane_gateway_activity::DataPlaneGatewayRouteState state);
     litebus::Future<Status> RecordFrontendKillRuntimeResult(
         const InstanceInfo &instanceInfo, const std::string &frontendKillRequestID,
-        const messages::KillInstanceResponse &response);
+        bool isRecovering, const messages::KillInstanceResponse &response);
     void ExpireFrontendKillRuntimeEvidence(const std::string &instanceID, const std::string &requestID);
     inline bool IsValidKillParam(
         const Status &status, std::shared_ptr<KillContext> &killCtx, const std::shared_ptr<KillRequest> &killReq,

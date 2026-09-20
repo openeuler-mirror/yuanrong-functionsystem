@@ -604,19 +604,22 @@ private:
     using DeployNotifyPromise = litebus::Promise<messages::DeployInstanceResponse>;
     using KillNotifyPromise = litebus::Promise<messages::KillInstanceResponse>;
     using instanceStatusNotifyPromise = litebus::Promise<messages::StaticFunctionChangeResponse>;
+    struct KillNotifyContext {
+        std::shared_ptr<KillNotifyPromise> promise;
+        uint32_t retryTimes;
+        std::shared_ptr<messages::KillInstanceRequest> request;
+    };
     std::unordered_map<std::string, FuncAgentInfo> funcAgentTable_;  // key: function agent ID
     std::unordered_map<litebus::AID, std::string> aidTable_;         // key: AID, value: function agent ID
 
-    // { agentID, { requestID, { promise, retryTimes }}}
+    // { agentID, { requestID, request generation context }}
     std::unordered_map<std::string,
                        std::unordered_map<std::string, std::pair<std::shared_ptr<DeployNotifyPromise>, uint32_t>>>
         deployNotifyPromise_;
     std::unordered_map<
         std::string, std::unordered_map<std::string, std::pair<std::shared_ptr<instanceStatusNotifyPromise>, uint32_t>>>
         instanceHealthyNotifyPromise_;
-    std::unordered_map<std::string,
-                       std::unordered_map<std::string, std::pair<std::shared_ptr<KillNotifyPromise>, uint32_t>>>
-        killNotifyPromise_;
+    std::unordered_map<std::string, std::unordered_map<std::string, KillNotifyContext>> killNotifyPromise_;
 
     std::weak_ptr<InstanceCtrl> instanceCtrl_;
     std::weak_ptr<resource_view::ResourceView> resourceView_;
