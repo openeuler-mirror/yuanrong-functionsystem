@@ -374,25 +374,32 @@ bool IsValidImageName(const std::string &image)
 
 }
 
-std::string DockerExecutor::GetRuntimeImage(const std::shared_ptr<messages::StartInstanceRequest> &request)
+Status DockerExecutor::GetRuntimeImage(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                       std::string &image)
 {
     const auto &info = request->runtimeinstanceinfo();
     const auto &opts = info.deploymentconfig().deployoptions();
     auto rootfsIter = opts.find(CONTAINER_ROOTFS);
-    if (rootfsIter != opts.end()) {
-        auto image = ParseRootfsImageUrl(rootfsIter->second);
-        if (!image.empty()) {
-            YRLOG_INFO("{}|{}|using Docker image from rootfs config: {}", info.traceid(), info.requestid(), image);
-            return image;
+    if (rootfsIter != opts.end() && !rootfsIter->second.empty()) {
+        // A configured-but-invalid rootfs must fail the start instead of silently falling back
+        // to the default image, otherwise bad input gets deployed with the wrong image.
+        auto status = ParseRootfsImageUrl(rootfsIter->second, image);
+        if (status.IsError()) {
+            YRLOG_ERROR("{}|{}|invalid rootfs config, refuse fallback to default image: {}", info.traceid(),
+                        info.requestid(), status.GetMessage());
+            return status;
         }
+        YRLOG_INFO("{}|{}|using Docker image from rootfs config: {}", info.traceid(), info.requestid(), image);
+        return Status::OK();
     }
     auto defaultImage = litebus::os::GetEnv("DOCKER_RUNTIME_IMAGE");
     if (defaultImage.IsSome() && !defaultImage.Get().empty()) {
-        return defaultImage.Get();
+        image = defaultImage.Get();
+        return Status::OK();
     }
     YRLOG_ERROR("{}|{}|no Docker image specified: set deployOptions[\"rootfs\"] (type=image, imageurl=...) or "
                 "DOCKER_RUNTIME_IMAGE env", info.traceid(), info.requestid());
-    return "";
+    return Status(StatusCode::RUNTIME_MANAGER_PARAMS_INVALID, "no Docker image specified");
 }
 
 litebus::Future<Status> DockerExecutor::PullImage(const std::string &image)
@@ -1050,10 +1057,9 @@ litebus::Future<messages::StartInstanceResponse> DockerExecutor::StartRuntime(
     const auto &runtimeID = info.runtimeid();
 
     std::string execPath = ResolveExecPath(language, info);
-    std::string image = GetRuntimeImage(request);
-    if (image.empty()) {
-        return GenFailStartInstanceResponse(request, RUNTIME_MANAGER_PARAMS_INVALID,
-                                            "no Docker image specified");
+    std::string image;
+    if (auto imageStatus = GetRuntimeImage(request, image); imageStatus.IsError()) {
+        return GenFailStartInstanceResponse(request, imageStatus.StatusCode(), imageStatus.GetMessage());
     }
 
     const auto &deployOpts = info.deploymentconfig().deployoptions();

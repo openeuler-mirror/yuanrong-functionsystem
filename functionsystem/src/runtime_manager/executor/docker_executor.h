@@ -155,7 +155,9 @@ private:
     // Image management
     litebus::Future<Status> EnsureImageExists(const std::string &image);
     litebus::Future<Status> PullImage(const std::string &image);
-    std::string GetRuntimeImage(const std::shared_ptr<messages::StartInstanceRequest> &request);
+    // Resolves the image from deployOptions["rootfs"] or the DOCKER_RUNTIME_IMAGE env.
+    // Returns a parameter error for a configured-but-invalid rootfs (no silent fallback).
+    Status GetRuntimeImage(const std::shared_ptr<messages::StartInstanceRequest> &request, std::string &image);
 
     // Build Docker API request body
     struct ContainerCreateSpec {

@@ -1726,7 +1726,7 @@ TEST_F(InstanceCtrlTest, CreateInstanceFailedForResourceNotEnough)
  * Expectations:
  * 1. instance state in scheduleReq == CREATING
  * 2  instance state in stateMachine == FATAL
- * 3. notifyCalled code == ERR_INNER_SYSTEM_ERROR
+ * 3. notifyCalled code == ERR_INNER_COMMUNICATION
  */
 TEST_F(InstanceCtrlTest, CreateInstanceFailedForDeployInstanceFailed)
 {
@@ -1740,8 +1740,11 @@ TEST_F(InstanceCtrlTest, CreateInstanceFailedForDeployInstanceFailed)
         .WillRepeatedly(Return(mockSharedClient));
 
     litebus::Promise<runtime::NotifyRequest> notifyCalled;
+    // The deploy failure notifies the creator twice: directly from UpdateInstance and again
+    // from the ScheduleEnd failure branch. SetValue is idempotent, so extra notifications
+    // beyond the first are ignored and the assertions below still see the first one.
     EXPECT_CALL(*mockSharedClient, NotifyResult(_))
-        .WillOnce(Invoke([notifyCalled](runtime::NotifyRequest &&request) -> litebus::Future<runtime::NotifyResponse> {
+        .WillRepeatedly(Invoke([notifyCalled](runtime::NotifyRequest &&request) -> litebus::Future<runtime::NotifyResponse> {
             notifyCalled.SetValue(request);
             return runtime::NotifyResponse();
         }));
@@ -1761,7 +1764,17 @@ TEST_F(InstanceCtrlTest, CreateInstanceFailedForDeployInstanceFailed)
 
     auto scheduler = std::make_shared<MockScheduler>();
     EXPECT_CALL(*scheduler, ScheduleDecision(_)).WillOnce(Return(ScheduleResult{ "", StatusCode::SUCCESS, "" }));
-    EXPECT_CALL(*scheduler, ScheduleConfirm).Times(1);
+    litebus::Promise<Status> scheduleConfirmCalled;
+    // ScheduleEnd (which calls ScheduleConfirm) runs only after the FATAL transition's meta-store
+    // write, i.e. after the deploy-failure notify above. Wait for it explicitly before the test
+    // ends, otherwise gmock verifies this expectation while ScheduleEnd is still pending.
+    EXPECT_CALL(*scheduler, ScheduleConfirm)
+        .Times(1)
+        .WillOnce(Invoke([scheduleConfirmCalled](const std::shared_ptr<messages::ScheduleResponse> &,
+                                                 const resource_view::InstanceInfo &, const ScheduleResult &) {
+            scheduleConfirmCalled.SetValue(Status::OK());
+            return litebus::Future<Status>(Status::OK());
+        }));
     instanceCtrl->BindScheduler(scheduler);
 
     auto metaClient = MetaStoreClient::Create({ .etcdAddress = metaStoreServerHost_ });
@@ -1791,6 +1804,9 @@ TEST_F(InstanceCtrlTest, CreateInstanceFailedForDeployInstanceFailed)
     });
     auto machine = instanceControlView->GetInstance("DesignatedInstanceID");
     ASSERT_AWAIT_TRUE([&]() { return machine->GetInstanceState() == InstanceState::FATAL; });
+    // Block until ScheduleEnd has run so the ScheduleConfirm expectation above is verified
+    // after it actually happened.
+    ASSERT_AWAIT_READY_FOR(scheduleConfirmCalled.GetFuture(), 30000);
 
     auto alarmInfoMap = functionsystem::metrics::MetricsAdapter::GetInstance().GetMetricsContext().GetAlarmInfoMap();
     ASSERT_TRUE(alarmInfoMap.find("YuanrongInstanceCreateFailure00001-requestID") != alarmInfoMap.end());

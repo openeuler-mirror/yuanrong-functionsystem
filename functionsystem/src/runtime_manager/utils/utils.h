@@ -24,6 +24,8 @@
 #include <async/uuid_generator.hpp>
 #include <functional>
 
+#include "common/status/status.h"
+
 namespace functionsystem::runtime_manager {
 
 // Port forward configuration parsed from network JSON.
@@ -44,8 +46,10 @@ bool HasInvalidPortForwardings(const std::string &networkJson);
 
 // Extract the image URL from a rootfs JSON of type "image".
 // Expected format: {"type": "image", "imageurl": "repo/image:tag", ...}
-// Returns empty string if the JSON is not type=image or has no imageurl.
-std::string ParseRootfsImageUrl(const std::string &rootfsJson);
+// Returns OK with imageUrl set only for valid type=image JSON; malformed JSON or a
+// non-image type is a parameter error (imageUrl untouched) so the caller fails the
+// start instead of silently falling back to the default image.
+Status ParseRootfsImageUrl(const std::string &rootfsJson, std::string &imageUrl);
 
 // Extract the working directory from a rootfs JSON.
 // Expected format: {"type": "image", "imageurl": "...", "workdir": "/data", ...}

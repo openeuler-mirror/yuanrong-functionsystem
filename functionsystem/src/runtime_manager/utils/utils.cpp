@@ -181,20 +181,28 @@ std::string Utils::LinkCommandWithLdLibraryPath(const std::string& ldLibraryPath
     return resultCmd;
 }
 
-std::string ParseRootfsImageUrl(const std::string &rootfsJson)
+Status ParseRootfsImageUrl(const std::string &rootfsJson, std::string &imageUrl)
 {
     if (rootfsJson.empty()) {
-        return "";
+        return Status(StatusCode::RUNTIME_MANAGER_PARAMS_INVALID, "rootfs config is empty");
     }
     try {
         auto j = nlohmann::json::parse(rootfsJson);
-        if (j.value("type", "") != "image") {
-            return "";
+        const auto type = j.value("type", "");
+        if (type != "image") {
+            return Status(StatusCode::RUNTIME_MANAGER_PARAMS_INVALID,
+                          fmt::format("unsupported rootfs type: {}", type.empty() ? "<absent>" : type));
         }
-        return j.value("imageurl", "");
+        imageUrl = j.value("imageurl", "");
+        if (imageUrl.empty()) {
+            return Status(StatusCode::RUNTIME_MANAGER_PARAMS_INVALID,
+                          "imageurl is required for rootfs type=image");
+        }
+        return Status::OK();
     } catch (const std::exception &e) {
         YRLOG_WARN("ParseRootfsImageUrl: failed to parse rootfs json: {}", e.what());
-        return "";
+        return Status(StatusCode::RUNTIME_MANAGER_PARAMS_INVALID,
+                      fmt::format("failed to parse rootfs json: {}", e.what()));
     }
 }
 
