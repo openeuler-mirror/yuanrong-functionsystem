@@ -2564,9 +2564,12 @@ Status InstanceCtrlActor::CheckHeteroResourceValid(const std::shared_ptr<Schedul
     return Status(SUCCESS);
 }
 
-litebus::Future<Status> InstanceCtrlActor::DispatchSchedule(const std::shared_ptr<ScheduleRequest> &request)
+litebus::Future<Status> InstanceCtrlActor::DispatchSchedule(const std::shared_ptr<ScheduleRequest> &request,
+                                                            bool isRecovering)
 {
-    return litebus::Async(GetAID(), &InstanceCtrlActor::DeployInstance, request, 0, litebus::None(), false)
+    // isRecovering=true only for the runtime-period recovery chain (DoLocalRedeploy); creation
+    // dispatch stays false so creation deploy failures never enter the recover chain.
+    return litebus::Async(GetAID(), &InstanceCtrlActor::DeployInstance, request, 0, litebus::None(), isRecovering)
         .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::ScheduleConfirmed, _1, request));
 }
 
@@ -2710,8 +2713,11 @@ litebus::Future<Status> InstanceCtrlActor::UpdateInstance(const DeployInstanceRe
         metrics::MetricsAdapter::GetInstance().SendInstanceCreateFailureAlarm({
             request->requestid(), request->instance().instanceid(), response.runtimeid(), response.address(),
             static_cast<int64_t>(errCode), "deploy", message});
-        auto status = IsRuntimeRecoverEnable(instanceInfo, stateMachine->GetCancelFuture()) ? InstanceState::FAILED
-                                                                                            : InstanceState::FATAL;
+        // Creation deploy failures go straight to FATAL; only a recovery redeploy may transit to
+        // FAILED and re-enter the reschedule chain.
+        auto status = (isRecovering && IsRuntimeRecoverEnable(instanceInfo, stateMachine->GetCancelFuture()))
+                          ? InstanceState::FAILED
+                          : InstanceState::FATAL;
         // monopoly need to send kill to avoid pod reused
         if (instanceInfo.scheduleoption().schedpolicyname() == MONOPOLY_SCHEDULE) {
             KillRuntime(instanceInfo, false);
@@ -2748,7 +2754,15 @@ litebus::Future<Status> InstanceCtrlActor::UpdateInstance(const DeployInstanceRe
     // deep copy: a shallow UpdateScheduleReq would alias instanceContext_->scheduleRequest_
     // with request, so PrepareTransitionInfo's set_code(newState) pollutes the previousInfo
     // snapshot used for rollback on persistence failure.
-    stateMachine->UpdateScheduleReq(std::make_shared<messages::ScheduleRequest>(*request));
+    // Adopt the request's identity/deploy-output but keep the state machine's current status
+    // and version: on the recover chain the request is a stale FAILED snapshot, and installing
+    // it wholesale would rewind state, trip the terminal check below, and stall etcd writes on a
+    // stale version.
+    auto req = std::make_shared<messages::ScheduleRequest>(*request);
+    req->mutable_instance()->mutable_instancestatus()->CopyFrom(
+        stateMachine->GetInstanceInfo().instancestatus());
+    req->mutable_instance()->set_version(stateMachine->GetVersion());
+    stateMachine->UpdateScheduleReq(req);
 
     // instance force-FATAL'd by the kill chain during deploy. kill again with the real runtimeid
     // (the kill chain ran with an empty one and missed the sandbox), and skip CheckReadiness to
@@ -3889,22 +3903,16 @@ void InstanceCtrlActor::ScheduleEnd(const litebus::Future<Status> &future,
             return;
         }
 
-        auto instanceInfo = request->instance();
-        if (IsRuntimeRecoverEnable(instanceInfo, stateMachine->GetCancelFuture())) {
-            (void)litebus::Async(GetAID(), &InstanceCtrlActor::TransInstanceState, stateMachine,
-                                 TransContext{ InstanceState::FAILED, stateMachine->GetVersion(), status.GetMessage(),
-                                               true, statusCode })
-                .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::RescheduleWithID, instanceInfo.instanceid()));
-        } else {
-            (void)SendCallResult(instanceID, dstInstance, parentProxy, callResult);
-            // need to update stateMachine by scheduleReq, because scheduleReq was already updated
-            auto transContext =
-                TransContext{ InstanceState::FATAL, stateMachine->GetVersion(),
-                              stateMachine->Information() + "fatal: Failed to create caused by " + status.GetMessage(),
-                              true, static_cast<int32_t>(statusCode) };
-            transContext.scheduleReq = request;
-            (void)TransInstanceState(stateMachine, transContext);
-        }
+        // ScheduleEnd only observes the initial creation dispatch (the recovery chain does not
+        // attach it), so a creation failure here always ends in FATAL, never the reschedule chain.
+        (void)SendCallResult(instanceID, dstInstance, parentProxy, callResult);
+        // need to update stateMachine by scheduleReq, because scheduleReq was already updated
+        auto transContext =
+            TransContext{ InstanceState::FATAL, stateMachine->GetVersion(),
+                          stateMachine->Information() + "fatal: Failed to create caused by " + status.GetMessage(),
+                          true, static_cast<int32_t>(statusCode) };
+        transContext.scheduleReq = request;
+        (void)TransInstanceState(stateMachine, transContext);
     }
 }
 
@@ -5401,7 +5409,7 @@ litebus::Future<Status> InstanceCtrlActor::DoLocalRedeploy(const Status &status,
     // redeploy consider as one reschedule
     request->mutable_instance()->set_scheduletimes(request->instance().scheduletimes() - 1);
     if (status.IsOk()) {
-        return DispatchSchedule(request).Then(
+        return DispatchSchedule(request, true).Then(
             litebus::Defer(GetAID(), &InstanceCtrlActor::RedeployDecision, std::placeholders::_1, request));
     }
     (void)redeployTimesMap_.erase(request->instance().instanceid());
