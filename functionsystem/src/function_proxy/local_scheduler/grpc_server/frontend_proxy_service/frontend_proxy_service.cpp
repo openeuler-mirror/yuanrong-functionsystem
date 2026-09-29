@@ -102,20 +102,43 @@ void LogLifecycleEventImpl(const LifecycleEvent &event)
 
 #define LogLifecycleEvent(...) LogLifecycleEventImpl(LifecycleEvent{ __VA_ARGS__ })
 
+struct FrontendFutureWaitState {
+    std::mutex mutex;
+    std::condition_variable completed;
+    bool ready { false };
+};
+
 template <typename T>
 litebus::Option<T> WaitFrontendResult(const litebus::Future<T> &future, ::grpc::ServerContext *context,
                                       uint64_t timeoutMs, bool &cancelled)
 {
+    auto state = std::make_shared<FrontendFutureWaitState>();
+    std::weak_ptr<FrontendFutureWaitState> weakState = state;
+    future.OnComplete([weakState](const litebus::Future<T> &) {
+        if (auto completedState = weakState.lock()) {
+            {
+                std::lock_guard<std::mutex> lock(completedState->mutex);
+                completedState->ready = true;
+            }
+            completedState->completed.notify_one();
+        }
+    });
+
     const auto started = std::chrono::steady_clock::now();
     uint64_t elapsed = 0;
+    std::unique_lock<std::mutex> lock(state->mutex);
     while (elapsed < timeoutMs) {
         if (context != nullptr && context->IsCancelled()) {
             cancelled = true;
             return litebus::None();
         }
-        auto result = future.Get(std::min(FRONTEND_WAIT_POLL_MS, timeoutMs - elapsed));
-        if (result.IsSome()) {
-            return result;
+        const auto pollMs = std::min(FRONTEND_WAIT_POLL_MS, timeoutMs - elapsed);
+        if (state->completed.wait_for(lock, std::chrono::milliseconds(pollMs), [&state] { return state->ready; })) {
+            lock.unlock();
+            if (future.IsError()) {
+                return litebus::None();
+            }
+            return litebus::Option<T>(future.Get());
         }
         elapsed = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - started).count());
