@@ -16,6 +16,7 @@ set(EXECUTOR_SRCS
     ${CMAKE_CURRENT_LIST_DIR}/docker_executor_test.cpp
     ${CMAKE_CURRENT_LIST_DIR}/executor_test.cpp
     ${CMAKE_CURRENT_LIST_DIR}/supervisor_executor_test.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/conch_executor_test.cpp
     # ${CMAKE_CURRENT_LIST_DIR}/runtime_executor_test.cpp
     # Disabled: depends on /home/snuser/ (absent in CI) and hits a pre-existing
     # nullptr crash in RuntimeExecutor::GetStdRedirector callers. Unrelated to

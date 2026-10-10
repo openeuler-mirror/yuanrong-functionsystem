@@ -511,6 +511,11 @@ void SetStartRuntimeInstanceRequestConfig(const std::unique_ptr<messages::StartI
             startInstanceRequest->set_type(static_cast<int32_t>(EXECUTOR_TYPE::DOCKER));
             return;
         }
+        if (sandboxTypeIter->second == SANDBOX_TYPE_CONCH) {
+            YRLOG_INFO("{}|Using conch executor for {}", req->requestid(), sandboxTypeIter->second.c_str());
+            startInstanceRequest->set_type(static_cast<int32_t>(EXECUTOR_TYPE::CONCH));
+            return;
+        }
     }
 
     // Check for container configuration
