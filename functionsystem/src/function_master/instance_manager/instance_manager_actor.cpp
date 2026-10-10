@@ -46,6 +46,8 @@ const int64_t ABNORMAL_GC_TIMEOUT = 2 * 60 * 60 * 1000; // 2 hour
 const int64_t INSTANCE_COUNT_REPORT_INTERVAL = 10 * 1000; // 10 seconds
 const int64_t GARBAGE_COLLECT_INTERVAL = 5 * 60 * 1000; // 5 minutes
 const uint64_t FATAL_INSTANCE_TIMEOUT = 3600; // 1 hour in seconds
+const std::string KEY_STOP_FLAG_PREFIX = "/yr/stopflags/"; // NOLINT
+const uint64_t STOP_FLAG_GET_TIMEOUT_MS = 500;
 
 /**
  * Parse tenantID from instance key.
@@ -1137,9 +1139,25 @@ void InstanceManagerActor::MasterBusiness::OnFuncMetaDelete(const std::string &f
     (void)actor->TryCancelSchedule(funcKey, messages::CancelType::FUNCTION, reason);
 }
 
+bool InstanceManagerActor::MasterBusiness::IsNoRescheduleStop(const std::string &nodeName)
+{
+    // [stop flag gate] A node stopped via "yr stop --no-reschedule" leaves a
+    // lease-bound key in etcd; while the key is alive, do not reschedule this
+    // node's instances. Fail-open on any read error/timeout. Raw client->Get
+    // instead of GetInstance() to avoid WARN logs on the flag-less default path.
+    auto flagFuture = member_->client->Get(KEY_STOP_FLAG_PREFIX + nodeName, {});
+    const bool noResched = !flagFuture.WaitFor(STOP_FLAG_GET_TIMEOUT_MS).IsError()
+                               && !flagFuture.Get()->status.IsError() && flagFuture.Get()->count > 0;
+    if (noResched) {
+        YRLOG_INFO("node({}) stopped with no-reschedule flag, skip rescheduling", nodeName);
+    }
+    return noResched;
+}
+
 void InstanceManagerActor::MasterBusiness::ProcessInstanceOnFaultLocal(const std::string &nodeName,
                                                                        const std::string &reason)
 {
+    const bool noResched = IsNoRescheduleStop(nodeName);
     for (const auto &instance : member_->instances.at(nodeName)) {
         if (instance.second == nullptr) {
             continue;
@@ -1161,39 +1179,54 @@ void InstanceManagerActor::MasterBusiness::ProcessInstanceOnFaultLocal(const std
             continue;
         }
 
-        std::shared_ptr<StoreInfo> routePutInfo = std::make_shared<StoreInfo>();
-        std::shared_ptr<StoreInfo> instancePutInfo = std::make_shared<StoreInfo>();
-        auto version = instance.second->version(); // version will +1 in GeneratePutInfo
-        if (!GeneratePutInfo(instance.second, instancePutInfo, routePutInfo, InstanceState::SCHEDULING,
-                             reason)) {
-            YRLOG_ERROR("{}|failed to generate put info", instance.second->instanceid());
+        if (noResched) {
+            // Flag alive: planned stop. Freeze records at stop-time state
+            // (EVICTED/RUNNING) instead of rewriting to SCHEDULING.
+            continue;
+        }
+
+        if (!RescheduleInstanceOnFaultLocal(instance.first, instance.second, nodeName, reason)) {
             return;
         }
-        // 2.Put to MetaStore.
-        auto actor = actor_.lock();
-        ASSERT_IF_NULL(actor);
-        (void)member_->instanceOpt
-            ->Modify(instancePutInfo, routePutInfo, version, IsLowReliabilityInstance(*instance.second))
-            .Then([nodeName, globalScheduler(member_->globalScheduler), instancePtr(instance.second),
-                   instanceKey(instance.first), aid(actor->GetAID()),
-                   cacher(member_->operateCacher)](const OperateResult &result) {
-                if (result.status.IsError()) {
-                    YRLOG_ERROR("failed to Put instance({}) to MetaStore, err: {}.", instancePtr->instanceid(),
-                                result.status.ToString());
-                    if (TransactionFailedForEtcd(result.status.StatusCode())) {
-                        cacher->AddPutEvent(INSTANCE_PATH_PREFIX, instancePtr->instanceid(), "SCHEDULING");
-                    }
-                } else {
-                    // 3.Re-schedule.
-                    YRLOG_INFO("re-schedule instance({}) because scheduler({}) is fault.", instancePtr->instanceid(),
-                               nodeName);
-                    litebus::Async(aid, &InstanceManagerActor::TryReschedule, instanceKey, instancePtr,
-                                   instancePtr->scheduletimes());
-                }
-                return true;
-            });
-        member_->instances[INSTANCE_MANAGER_OWNER][instance.first] = instance.second;
     }
+}
+
+bool InstanceManagerActor::MasterBusiness::RescheduleInstanceOnFaultLocal(
+    const std::string &instanceKey, const std::shared_ptr<resource_view::InstanceInfo> &instance,
+    const std::string &nodeName, const std::string &reason)
+{
+    std::shared_ptr<StoreInfo> routePutInfo = std::make_shared<StoreInfo>();
+    std::shared_ptr<StoreInfo> instancePutInfo = std::make_shared<StoreInfo>();
+    auto version = instance->version(); // version will +1 in GeneratePutInfo
+    if (!GeneratePutInfo(instance, instancePutInfo, routePutInfo, InstanceState::SCHEDULING, reason)) {
+        YRLOG_ERROR("{}|failed to generate put info", instance->instanceid());
+        return false;
+    }
+    // 2.Put to MetaStore.
+    auto actor = actor_.lock();
+    ASSERT_IF_NULL(actor);
+    (void)member_->instanceOpt
+        ->Modify(instancePutInfo, routePutInfo, version, IsLowReliabilityInstance(*instance))
+        .Then([nodeName, globalScheduler(member_->globalScheduler), instancePtr(instance),
+               instanceKey(instanceKey), aid(actor->GetAID()),
+               cacher(member_->operateCacher)](const OperateResult &result) {
+            if (result.status.IsError()) {
+                YRLOG_ERROR("failed to Put instance({}) to MetaStore, err: {}.", instancePtr->instanceid(),
+                            result.status.ToString());
+                if (TransactionFailedForEtcd(result.status.StatusCode())) {
+                    cacher->AddPutEvent(INSTANCE_PATH_PREFIX, instancePtr->instanceid(), "SCHEDULING");
+                }
+            } else {
+                // 3.Re-schedule.
+                YRLOG_INFO("re-schedule instance({}) because scheduler({}) is fault.", instancePtr->instanceid(),
+                           nodeName);
+                litebus::Async(aid, &InstanceManagerActor::TryReschedule, instanceKey, instancePtr,
+                               instancePtr->scheduletimes());
+            }
+            return true;
+        });
+    member_->instances[INSTANCE_MANAGER_OWNER][instanceKey] = instance;
+    return true;
 }
 
 void InstanceManagerActor::MasterBusiness::ProcessInstanceNotReSchedule(

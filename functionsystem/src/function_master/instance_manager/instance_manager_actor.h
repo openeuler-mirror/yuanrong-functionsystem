@@ -490,6 +490,13 @@ private:
 
         void GarbageCollectFatalInstances() override;
     private:
+        bool IsNoRescheduleStop(const std::string &nodeName);
+        bool RescheduleInstanceOnFaultLocal(
+            const std::string &instanceKey,
+            const std::shared_ptr<resource_view::InstanceInfo> &instance,
+            const std::string &nodeName,
+            const std::string &reason);
+
         bool nodeSynced_{false};
         std::unordered_set<std::string> nodes_;
     };
