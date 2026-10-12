@@ -655,7 +655,8 @@ private:
 
     bool CheckDiskResourceValid(const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
 
-    litebus::Future<Status> DispatchSchedule(const std::shared_ptr<messages::ScheduleRequest> &request);
+    litebus::Future<Status> DispatchSchedule(const std::shared_ptr<messages::ScheduleRequest> &request,
+                                             bool isRecovering);
 
     litebus::Future<messages::ScheduleResponse> DoDispatchSchedule(
         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,

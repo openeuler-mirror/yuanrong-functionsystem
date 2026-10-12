@@ -227,6 +227,10 @@ litebus::Future<TransitionResult> InstanceStateMachine::PersistenceInstanceInfo(
             }
             // if save info successfully and context.scheduleReq exist, update stateMachine by scheduleReq
             // scheduleReq in stateMachine is the same as scheduleReq, need to copy to avoid multi-thread modification
+            // This runs after PrepareTransitionInfo, which has already rewritten scheduleReq to the target state,
+            // bumped its version, and stamped CREATE_TIME_STAMP on first persistence, so adopting it wholesale
+            // keeps the ledger in sync without dropping the timestamp (the recover chain's stale-snapshot rewind
+            // at instance_ctrl_actor.cpp:3870 is fixed there; this path is safe).
             if (context.scheduleReq != nullptr) {
                 self->UpdateScheduleReq(std::make_shared<messages::ScheduleRequest>(*context.scheduleReq));
                 self->SetModRevision(result.currentModRevision);
@@ -251,6 +255,12 @@ litebus::Future<TransitionResult> InstanceStateMachine::TransitionTo(const Trans
 
         requestID = instanceContext_->GetRequestID();
         oldState = instanceContext_->GetState();
+        // Surface a stale carried version here so the divergence is visible now, not just as an
+        // opaque etcd "version is incorrect" rejection later.
+        if (context.version != 0 && context.version != GetVersion()) {
+            YRLOG_WARN("{}|transition instance({}) to state({}) carries stale version({}), current version is ({})",
+                       requestID, instanceID_, fmt::underlying(context.newState), context.version, GetVersion());
+        }
         // if old state is exiting, will execute exitHandler in VerifyTransitionState
         if (context.newState == oldState && oldState != InstanceState::EXITING) {
             YRLOG_WARN("{}|instance({}) state is same, ignore it", requestID, instanceID_);
@@ -273,6 +283,8 @@ litebus::Future<TransitionResult> InstanceStateMachine::TransitionTo(const Trans
                 YRLOG_INFO("{}|Persistence is not required because PERSISTENT_NOT", requestID);
             }
             if (context.scheduleReq != nullptr) {
+                // Runs after PrepareTransitionInfo, so scheduleReq already holds the target state
+                // (and a stamped CREATE_TIME_STAMP on first persistence); adopt it wholesale.
                 instanceContext_->UpdateScheduleReq(std::make_shared<messages::ScheduleRequest>(*context.scheduleReq));
             }
             if (instanceInfo.lowreliability() && context.newState == InstanceState::CREATING) {
