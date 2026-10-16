@@ -71,7 +71,12 @@ const uint32_t DEFAULT_DOMAIN_HEARTBEAT_TIMEOUT = 6000;
 
 // SANDBOXD selects the sandboxd-backed SandboxdExecutor (runtime.v1.SandboxService).
 // Selection is env-gated (YR_RUNTIME_BACKEND=sandboxd); see ContainerExecutorType().
-enum class EXECUTOR_TYPE { RUNTIME = 0, CONTAINER = 1, SUPERVISOR = 2, DOCKER = 3, SANDBOXD = 4, UNKNOWN = -1 };
+// CONCH selects the ConchExecutor: a Conch microVM sandbox reached through jiuwenbox's
+// existing HTTP-over-UDS API (same /run/jiuwenbox/jiuwenbox.sock), routed by the
+// request's top-level "sandbox_runtime":"conch" field (jiuwenswarm !4817).
+enum class EXECUTOR_TYPE {
+    RUNTIME = 0, CONTAINER = 1, SUPERVISOR = 2, DOCKER = 3, SANDBOXD = 4, CONCH = 5, UNKNOWN = -1
+};
 
 const int32_t SYSTEM_FUNCTION_INSTANCE_LEVEL = 1;
 
@@ -372,5 +377,7 @@ const std::string YR_ONLY_STDOUT = "YR_ONLY_STDOUT";
 // sandboxType values (function meta sandboxType field)
 const std::string SANDBOX_TYPE_DOCKER = "docker";
 const std::string SANDBOX_TYPE_SUPERVISOR = "supervisor";
+// conch: microVM sandbox via jiuwenbox's conch backend (jiuwenswarm !4817), same jiuwenbox.sock.
+const std::string SANDBOX_TYPE_CONCH = "conch";
 }  // namespace functionsystem
 #endif  // COMMON_CONSTANTS_CONSTANTS_H

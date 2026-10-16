@@ -30,6 +30,7 @@
 #include "executor/docker_executor.h"
 #include "executor/runtime_executor.h"
 #include "executor/sandboxd/sandboxd_executor.h"
+#include "executor/conch_executor.h"
 #include "executor/supervisor_executor.h"
 #include "port/port_manager.h"
 #include "runtime_manager/executor/executor.h"
@@ -411,7 +412,8 @@ void RuntimeManager::SetConfig(const Flags &flags)
     if (containerType == EXECUTOR_TYPE::SANDBOXD && !initialRegistrationStarted_) {
         sandboxRuntimeDiscoveryState_ = SandboxRuntimeDiscoveryState::PENDING;
     }
-    for (auto type : { EXECUTOR_TYPE::RUNTIME, containerType, EXECUTOR_TYPE::SUPERVISOR, EXECUTOR_TYPE::DOCKER }) {
+    for (auto type : { EXECUTOR_TYPE::RUNTIME, containerType, EXECUTOR_TYPE::SUPERVISOR, EXECUTOR_TYPE::DOCKER,
+                       EXECUTOR_TYPE::CONCH }) {
         auto executor = FindExecutor(type);
         YRLOG_INFO("SetRuntimeConfig for type({})", fmt::underlying(type));
         if (executor != nullptr) {
@@ -528,6 +530,9 @@ std::string RuntimeManager::GetExecutorUnavailableMessage(EXECUTOR_TYPE type)
     if (type == EXECUTOR_TYPE::SANDBOXD) {
         return "sandboxd service is not ready, please check whether the service is abnormal";
     }
+    if (type == EXECUTOR_TYPE::CONCH) {
+        return "conch service is not ready, please check whether jiuwenbox/conchd is abnormal";
+    }
     return "unknown instance type, cannot start instance";
 }
 
@@ -546,6 +551,8 @@ std::shared_ptr<ExecutorProxy> RuntimeManager::FindExecutor(EXECUTOR_TYPE type)
             return CreateSupervisorExecutor();
         case EXECUTOR_TYPE::DOCKER:
             return CreateDockerExecutor();
+        case EXECUTOR_TYPE::CONCH:
+            return CreateConchExecutor();
         case EXECUTOR_TYPE::SANDBOXD:
             return CreateSandboxdExecutor();
         default:
@@ -572,6 +579,16 @@ std::shared_ptr<ExecutorProxy> RuntimeManager::CreateSupervisorExecutor()
     litebus::Spawn(executor, false);
     auto executorProxy = std::make_shared<SupervisorExecutorProxy>(executor);
     (void)executorMap_.insert(std::make_pair(EXECUTOR_TYPE::SUPERVISOR, executorProxy));
+    return executorProxy;
+}
+
+std::shared_ptr<ExecutorProxy> RuntimeManager::CreateConchExecutor()
+{
+    YRLOG_INFO("not found a executor, create a conch executor.");
+    auto executor = std::make_shared<ConchExecutor>("ConchExecutor", functionAgentAID_);
+    litebus::Spawn(executor, false);
+    auto executorProxy = std::make_shared<ConchExecutorProxy>(executor);
+    (void)executorMap_.insert(std::make_pair(EXECUTOR_TYPE::CONCH, executorProxy));
     return executorProxy;
 }
 
