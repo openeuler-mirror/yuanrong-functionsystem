@@ -516,7 +516,11 @@ LocalSchedStartParam InitLocalSchedParam(const function_proxy::Flags &flags,
         .tcpTunnelMaxConnections = flags.GetTcpTunnelMaxConnections(),
         .tcpTunnelRootCert = "",
         .tcpTunnelModuleCert = "",
-        .tcpTunnelModuleKey = ""
+        .tcpTunnelModuleKey = "",
+        // --- Workspace RPC(方案 A) ---
+        .workspaceStorageRoot = flags.GetWorkspaceStorageRoot(),
+        .workspaceUid = flags.GetWorkspaceUid(),
+        .workspaceGid = flags.GetWorkspaceGid()
     };
 }
 

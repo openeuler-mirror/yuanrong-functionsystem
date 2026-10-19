@@ -18,8 +18,10 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <condition_variable>
+#include <cstring>
 #include <deque>
 #include <limits>
 #include <memory>
@@ -28,6 +30,11 @@
 #include <thread>
 #include <unordered_map>
 #include <utility>
+
+#include <ftw.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #include "common/logs/logging.h"
 #include "function_proxy/busproxy/invocation_handler/invocation_handler.h"
@@ -51,6 +58,15 @@ constexpr const char *FUNCTION_PROXY_STREAM_CALLER_ID = "function-proxy";
 constexpr size_t FRONTEND_EVENT_QUEUE_CAPACITY = 100;
 constexpr size_t FRONTEND_EVENT_METADATA_SIZE = 16;
 constexpr const char *FRONTEND_EVENT_EOF = "yuanrong_event_EOF";
+
+// --- Workspace RPC 常量(方案 A) ---
+// 默认 workspace 存储根目录;生产环境由 --workspace_storage_root flag 覆盖。
+constexpr const char *DEFAULT_WORKSPACE_STORAGE_ROOT = "/home/agentos/.users";
+// 默认 workspace 目录权限位(0700)。
+constexpr mode_t DEFAULT_WORKSPACE_DIR_MODE = 0700;
+// 默认 workspace 目录的 (uid, gid);生产环境由 flag 覆盖。
+constexpr uid_t DEFAULT_WORKSPACE_UID = 1000;
+constexpr gid_t DEFAULT_WORKSPACE_GID = 1000;
 struct LifecycleEvent {
     const char *operation;
     const char *dispatchPhase;
@@ -961,6 +977,228 @@ void FrontendProxyService::SetStatus(::frontend_proxy::FrontendProxyStatus *stat
     status->set_message(message);
     status->set_retryable(retryable);
     status->set_retryreason(retryReason);
+}
+
+// --- 方案 A: Workspace RPC 实现 ---
+
+std::string FrontendProxyService::ResolveWorkspaceStorageRoot() const
+{
+    if (param_.workspaceStorageRootProvider) {
+        auto root = param_.workspaceStorageRootProvider();
+        if (!root.empty()) {
+            return root;
+        }
+    }
+    return DEFAULT_WORKSPACE_STORAGE_ROOT;
+}
+
+std::pair<uid_t, gid_t> FrontendProxyService::ResolveWorkspaceUidGid() const
+{
+    if (param_.workspaceUidGidProvider) {
+        auto ids = param_.workspaceUidGidProvider();
+        // uid/gid 为 0 也允许(root 场景),只校验 uid 不为非法值
+        return ids;
+    }
+    return { DEFAULT_WORKSPACE_UID, DEFAULT_WORKSPACE_GID };
+}
+
+std::string FrontendProxyService::ValidateWorkspaceOwner(const std::string &owner)
+{
+    if (owner.empty()) {
+        return "owner is required";
+    }
+    if (owner.find('/') != std::string::npos) {
+        return "owner must not contain '/': " + owner;
+    }
+    if (owner == ".." || owner.find("..") != std::string::npos) {
+        return "owner must not be a path traversal: " + owner;
+    }
+    if (owner.front() == '.') {
+        return "owner must not start with '.': " + owner;
+    }
+    return "";
+}
+
+int FrontendProxyService::ParseWorkspaceMode(const std::string &mode)
+{
+    if (mode.empty()) {
+        return static_cast<int>(DEFAULT_WORKSPACE_DIR_MODE);
+    }
+    // 支持 "0700" / "755" 等八进制字符串
+    try {
+        std::size_t pos = 0;
+        int parsed = std::stoi(mode, &pos, 8);
+        if (pos != mode.size() || parsed < 0 || parsed > 0777) {
+            return -1;
+        }
+        return parsed;
+    } catch (...) {
+        return -1;
+    }
+}
+
+// JoinPath 拼接 storage_root + "/" + owner,去掉 storage_root 尾部多余的 "/"。
+static std::string JoinWorkspacePath(const std::string &storageRoot, const std::string &owner)
+{
+    std::string root = storageRoot;
+    while (root.size() > 1 && root.back() == '/') {
+        root.pop_back();
+    }
+    return root + "/" + owner;
+}
+
+::grpc::Status FrontendProxyService::PrepareWorkspace(::grpc::ServerContext *context,
+                                                       const ::frontend_proxy::PrepareWorkspaceRequest *request,
+                                                       ::frontend_proxy::PrepareWorkspaceResponse *response)
+{
+    if (!HasAuthenticatedPeer(context)) {
+        return { ::grpc::StatusCode::UNAUTHENTICATED,
+                 "frontend proxy prepare workspace requires an authenticated component certificate" };
+    }
+    if (request == nullptr || response == nullptr) {
+        return { ::grpc::StatusCode::INVALID_ARGUMENT, "invalid frontend proxy prepare workspace args" };
+    }
+    const auto &owner = request->owner();
+    auto validateErr = ValidateWorkspaceOwner(owner);
+    if (!validateErr.empty()) {
+        SetStatus(response->mutable_status(), common::ERR_PARAM_INVALID, validateErr);
+        return ::grpc::Status::OK;
+    }
+    const auto modeParsed = ParseWorkspaceMode(request->mode());
+    if (modeParsed < 0) {
+        SetStatus(response->mutable_status(), common::ERR_PARAM_INVALID,
+                  "invalid workspace mode: " + request->mode());
+        return ::grpc::Status::OK;
+    }
+    const auto storageRoot = ResolveWorkspaceStorageRoot();
+    const auto targetPath = JoinWorkspacePath(storageRoot, owner);
+    const auto uidGid = ResolveWorkspaceUidGid();
+    const auto requestID = request->has_context() ? request->context().requestid() : "";
+    YRLOG_INFO("{}|frontend proxy prepare workspace owner={} path={} mode={:04o} uid={} gid={} proxy={}",
+               requestID, owner, targetPath, modeParsed, uidGid.first, uidGid.second, param_.nodeID);
+
+    // mkdir -p(允许已存在);递归创建父目录。
+    // 使用 0755 作为父目录权限,仅叶子目录用请求的 mode(默认 0700)。
+    auto makeDirs = [](const std::string &path, mode_t parentMode) -> std::string {
+        if (path.empty() || path == "/") {
+            return "";
+        }
+        std::string current;
+        current.reserve(path.size());
+        size_t pos = 0;
+        // 处理绝对路径前导 '/'
+        if (path.front() == '/') {
+            current.push_back('/');
+            pos = 1;
+        }
+        while (pos < path.size()) {
+            auto next = path.find('/', pos);
+            if (next == std::string::npos) {
+                next = path.size();
+            }
+            if (next > pos) {
+                current.append(path, pos, next - pos);
+                if (!current.empty() && current != "/") {
+                    if (::mkdir(current.c_str(), parentMode) != 0) {
+                        if (errno != EEXIST) {
+                            return "mkdir failed for " + current + ": " + std::strerror(errno);
+                        }
+                    }
+                }
+            }
+            if (next < path.size()) {
+                current.push_back('/');
+            }
+            pos = next + 1;
+        }
+        return "";
+    };
+
+    // 父目录递归创建,叶子目录单独按 mode 创建。
+    auto lastSlash = targetPath.find_last_of('/');
+    std::string parentPath = (lastSlash != std::string::npos && lastSlash > 0)
+                                  ? targetPath.substr(0, lastSlash)
+                                  : "";
+    if (!parentPath.empty()) {
+        auto err = makeDirs(parentPath, 0755);
+        if (!err.empty()) {
+            SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR, err);
+            return ::grpc::Status::OK;
+        }
+    }
+    // 叶子目录:mkdir(允许 EEXIST 以保证幂等)。
+    if (::mkdir(targetPath.c_str(), static_cast<mode_t>(modeParsed)) != 0) {
+        if (errno != EEXIST) {
+            std::string err = "mkdir failed for " + targetPath + ": " + std::strerror(errno);
+            SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR, err);
+            return ::grpc::Status::OK;
+        }
+    }
+    // chmod:确保已有目录的权限位与请求一致(幂等)。
+    if (::chmod(targetPath.c_str(), static_cast<mode_t>(modeParsed)) != 0) {
+        std::string err = "chmod failed for " + targetPath + ": " + std::strerror(errno);
+        SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR, err);
+        return ::grpc::Status::OK;
+    }
+    // chown:owner 可能已存在(幂等)。
+    if (::chown(targetPath.c_str(), uidGid.first, uidGid.second) != 0) {
+        std::string err = "chown failed for " + targetPath + ": " + std::strerror(errno);
+        SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR, err);
+        return ::grpc::Status::OK;
+    }
+    YRLOG_INFO("{}|frontend proxy prepare workspace ok owner={} path={}", requestID, owner, targetPath);
+    SetStatus(response->mutable_status(), common::ERR_NONE, "");
+    return ::grpc::Status::OK;
+}
+
+::grpc::Status FrontendProxyService::RemoveWorkspace(::grpc::ServerContext *context,
+                                                      const ::frontend_proxy::RemoveWorkspaceRequest *request,
+                                                      ::frontend_proxy::RemoveWorkspaceResponse *response)
+{
+    if (!HasAuthenticatedPeer(context)) {
+        return { ::grpc::StatusCode::UNAUTHENTICATED,
+                 "frontend proxy remove workspace requires an authenticated component certificate" };
+    }
+    if (request == nullptr || response == nullptr) {
+        return { ::grpc::StatusCode::INVALID_ARGUMENT, "invalid frontend proxy remove workspace args" };
+    }
+    const auto &owner = request->owner();
+    auto validateErr = ValidateWorkspaceOwner(owner);
+    if (!validateErr.empty()) {
+        SetStatus(response->mutable_status(), common::ERR_PARAM_INVALID, validateErr);
+        return ::grpc::Status::OK;
+    }
+    const auto storageRoot = ResolveWorkspaceStorageRoot();
+    const auto targetPath = JoinWorkspacePath(storageRoot, owner);
+    const auto requestID = request->has_context() ? request->context().requestid() : "";
+    YRLOG_INFO("{}|frontend proxy remove workspace owner={} path={} proxy={}",
+               requestID, owner, targetPath, param_.nodeID);
+
+    // rm -rf:目录不存在视为已删除(幂等)。
+    // 使用 nftw 递归删除,避免对 system() 的依赖。
+    auto removeCallback = [](const char *fpath, const struct stat *, int, struct FTW *) -> int {
+        // 先尝试 rmdir(目录),失败回退到 unlink(文件/符号链接)。
+        if (::rmdir(fpath) == 0) {
+            return 0;
+        }
+        if (errno == ENOTDIR) {
+            if (::unlink(fpath) == 0) {
+                return 0;
+            }
+        }
+        return -1;
+    };
+    // FTW_DEPTH | FTW_PHYS:先叶子后父节点,不跟随符号链接。
+    if (::nftw(targetPath.c_str(), removeCallback, 16, FTW_DEPTH | FTW_PHYS) != 0) {
+        if (errno != ENOENT) {
+            std::string err = "rm -rf failed for " + targetPath + ": " + std::strerror(errno);
+            SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR, err);
+            return ::grpc::Status::OK;
+        }
+    }
+    YRLOG_INFO("{}|frontend proxy remove workspace ok owner={} path={}", requestID, owner, targetPath);
+    SetStatus(response->mutable_status(), common::ERR_NONE, "");
+    return ::grpc::Status::OK;
 }
 
 #undef LogLifecycleEvent

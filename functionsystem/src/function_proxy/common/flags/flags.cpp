@@ -103,6 +103,11 @@ const uint32_t DEFAULT_SERVICE_TTL = 300000;
 const std::string DEFAULT_LOCAL_SCHEDULE_PLUGINS =
     R"("["Default", "ResourceSelector", "Label", "Heterogeneous"]")";
 
+// --- Workspace RPC(方案 A) 默认值 ---
+// workspace 目录的默认 uid/gid,与 frontend 设计文档一致(1000:1000)。
+const uint32_t DEFAULT_WORKSPACE_UID = 1000;
+const uint32_t DEFAULT_WORKSPACE_GID = 1000;
+
 }  // namespace
 using namespace litebus::flag;
 Flags::Flags()
@@ -187,6 +192,14 @@ Flags::Flags()
             "enable TLS for HTTP routing", true);
     AddFlag(&Flags::traefikServersTransport_, "traefik_servers_transport",
             "ServersTransport name for backend TLS (e.g. yr-backend-tls@file)", "yr-backend-tls@file");
+    // --- Workspace RPC(方案 A) flags ---
+    AddFlag(&Flags::workspaceStorageRoot_, "workspace_storage_root",
+            "workspace 存储根目录;PrepareWorkspace/RemoveWorkspace 在此目录下创建/删除 <owner> 子目录",
+            "/home/agentos/.users");
+    AddFlag(&Flags::workspaceUid_, "workspace_uid",
+            "workspace 目录的 uid(用于 PrepareWorkspace 的 chown 操作)", DEFAULT_WORKSPACE_UID);
+    AddFlag(&Flags::workspaceGid_, "workspace_gid",
+            "workspace 目录的 gid(用于 PrepareWorkspace 的 chown 操作)", DEFAULT_WORKSPACE_GID);
 }
 
 void Flags::AddElectionFlags()

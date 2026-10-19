@@ -22,6 +22,12 @@
 #include <functional>
 #include <string>
 
+#include <grp.h>
+#include <pwd.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+
 #include <grpcpp/server_context.h>
 #include <grpcpp/support/sync_stream.h>
 
@@ -49,6 +55,12 @@ struct FrontendProxyServiceParam {
             const ::frontend_proxy::KillInstanceRequest &)>;
     using KillCleanupProbe =
         std::function<litebus::Future<FrontendKillCleanupSnapshot>(const std::string &, const std::string &)>;
+    // WorkspaceStorageRoot 返回 workspace 存储根目录(默认 /home/agentos/.users)。
+    // 单元测试可注入临时目录;生产环境从 --workspace_storage_root flag 读取。
+    using WorkspaceStorageRootProvider = std::function<std::string()>;
+    // WorkspaceUidGidProvider 返回 workspace 目录的 (uid, gid),默认 1000:1000。
+    // 单元测试可注入自定义值;生产环境从 flag 读取。
+    using WorkspaceUidGidProvider = std::function<std::pair<uid_t, gid_t>()>;
 
     std::string nodeID;
     std::string endpointAddress;
@@ -74,6 +86,10 @@ struct FrontendProxyServiceParam {
     KillReadyDispatcher killReadyDispatcher;
     // Read-only production probe. A successful KillResponse is not cleanup evidence.
     KillCleanupProbe killCleanupProbe;
+    // Workspace 存储根目录 Provider;为空时使用默认值 /home/agentos/.users
+    WorkspaceStorageRootProvider workspaceStorageRootProvider;
+    // Workspace 目录的 (uid, gid) Provider;为空时使用默认值 (1000, 1000)
+    WorkspaceUidGidProvider workspaceUidGidProvider;
     bool enableCreateDispatch { false };
     bool enableKillDispatch { false };
     bool requireAuthenticatedPeer { false };
@@ -110,6 +126,20 @@ public:
                                 const ::frontend_proxy::KillInstanceRequest *request,
                                 ::frontend_proxy::KillInstanceResponse *response) override;
 
+    // PrepareWorkspace 在归属节点本地创建 workspace 存储目录:
+    //   mkdir -p ${workspace_storage_root}/<owner> + chown <uid>:<gid> + chmod <mode>
+    // 幂等:目录已存在不报错,默认权限 0700,默认 uid:gid = 1000:1000。
+    ::grpc::Status PrepareWorkspace(::grpc::ServerContext *context,
+                                    const ::frontend_proxy::PrepareWorkspaceRequest *request,
+                                    ::frontend_proxy::PrepareWorkspaceResponse *response) override;
+
+    // RemoveWorkspace 在归属节点本地删除 workspace 存储目录:
+    //   rm -rf ${workspace_storage_root}/<owner>
+    // 幂等:目录不存在不报错。
+    ::grpc::Status RemoveWorkspace(::grpc::ServerContext *context,
+                                   const ::frontend_proxy::RemoveWorkspaceRequest *request,
+                                   ::frontend_proxy::RemoveWorkspaceResponse *response) override;
+
 private:
     bool ValidateInvokeRequest(const ::frontend_proxy::InvokeInstanceRequest &request,
                                ::frontend_proxy::InvokeInstanceResponse &response) const;
@@ -141,6 +171,17 @@ private:
     static void SetStatus(::frontend_proxy::FrontendProxyStatus *status, common::ErrorCode code,
                           const std::string &message, bool retryable = false,
                           const std::string &retryReason = "");
+    // ResolveWorkspaceStorageRoot 解析 workspace 存储根目录:
+    // 优先使用注入的 provider,否则使用默认值 /home/agentos/.users。
+    std::string ResolveWorkspaceStorageRoot() const;
+    // ResolveWorkspaceUidGid 解析 workspace 目录的 (uid, gid):
+    // 优先使用注入的 provider,否则使用默认值 (1000, 1000)。
+    std::pair<uid_t, gid_t> ResolveWorkspaceUidGid() const;
+    // ValidateWorkspaceOwner 校验 owner 名:非空、不含 "/"、非 ".."、不以 "." 开头。
+    // 返回空字符串表示校验通过,否则返回错误描述。
+    static std::string ValidateWorkspaceOwner(const std::string &owner);
+    // ParseWorkspaceMode 解析权限位字符串(如 "0700"、"755"),失败返回 -1。
+    static int ParseWorkspaceMode(const std::string &mode);
     FrontendProxyServiceParam param_;
 };
 
