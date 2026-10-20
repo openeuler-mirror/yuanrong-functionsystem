@@ -21,6 +21,7 @@
 
 #include "common/constants/signal.h"
 #include "common/etcd_service/etcd_service_driver.h"
+#include "common/metadata/metadata.h"
 #include "common/metrics/metrics_adapter.h"
 #include "common/http/http_server.h"
 #include "common/rpc/server/common_grpc_server.h"
@@ -1093,6 +1094,354 @@ TEST_F(DISABLED_InstanceCtrlActorTest, ExitWithNPUFaultTest)
     future = litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::HandleExit, "InstanceA", request);
     ASSERT_AWAIT_READY(future);
     EXPECT_EQ(future.Get().code(), common::ERR_NONE);
+}
+
+namespace {
+const std::string AGENT_REUSE_OPTION_KEY = "AGENT_REUSE_EXISTING_INSTANCE";
+const std::string SANDBOX_TYPE_OPTION_KEY = "sandbox_type";
+
+template <typename T>
+litebus::Future<T> MakeCompletedFuture(T value)
+{
+    auto promise = std::make_shared<litebus::Promise<T>>();
+    promise->SetValue(std::move(value));
+    return promise->GetFuture();
+}
+}
+
+/**
+ * Agent reuse (namespace:name instanceID) unit tests.
+ * These tests call the actor methods directly and never spawn the actor,
+ * so they only cover branches that neither send messages nor touch etcd:
+ * the reuse gate, the owner adjudication matrix, and the fail-closed paths
+ * of owner resolution and create forwarding.
+ */
+class AgentReuseCtrlTest : public ::testing::Test {
+protected:
+    void SetUp() override
+    {
+        actor_ = std::make_shared<InstanceCtrlActor>("TEST_AGENT_REUSE_ACTOR", TEST_NODE_ID, InstanceCtrlConfig{});
+        view_ = std::make_shared<MockInstanceControlView>(TEST_NODE_ID);
+        actor_->BindInstanceControlView(view_);
+        actor_->observer_ = nullptr;
+    }
+
+    static std::shared_ptr<messages::ScheduleRequest> MakeAgentReuseRequest(
+        const std::string &instanceID = TEST_INSTANCE_ID)
+    {
+        auto request = std::make_shared<messages::ScheduleRequest>();
+        request->set_requestid(TEST_REQUEST_ID);
+        request->set_traceid("agent-reuse-trace-id");
+        request->mutable_instance()->set_instanceid(instanceID);
+        request->mutable_instance()->mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::NEW));
+        (*request->mutable_instance()->mutable_createoptions())[AGENT_REUSE_OPTION_KEY] = "true";
+        return request;
+    }
+
+    static std::shared_ptr<messages::ScheduleRequest> MakePlainRequest()
+    {
+        auto request = std::make_shared<messages::ScheduleRequest>();
+        request->set_requestid(TEST_REQUEST_ID);
+        request->set_traceid("agent-reuse-trace-id");
+        request->mutable_instance()->set_instanceid(TEST_INSTANCE_ID);
+        return request;
+    }
+
+    static std::shared_ptr<MockInstanceStateMachine> MakeMachine(InstanceState state,
+                                                                 const std::string &owner = TEST_NODE_ID)
+    {
+        auto machine = std::make_shared<MockInstanceStateMachine>(TEST_INSTANCE_ID);
+        ON_CALL(*machine, GetInstanceState).WillByDefault(Return(state));
+        ON_CALL(*machine, GetOwner).WillByDefault(Return(owner));
+        return machine;
+    }
+
+    static std::string MakeRouteJson(const std::string &instanceID, const std::string &owner)
+    {
+        resources::RouteInfo route;
+        route.set_instanceid(instanceID);
+        route.set_functionproxyid(owner);
+        std::string json;
+        EXPECT_TRUE(TransToJsonFromRouteInfo(json, route));
+        return json;
+    }
+
+    std::shared_ptr<InstanceCtrlActor> actor_;
+    std::shared_ptr<MockInstanceControlView> view_;
+};
+
+TEST_F(AgentReuseCtrlTest, IsAgentReuseCreateRequiresExactTrueOption)
+{
+    auto request = MakePlainRequest();
+    EXPECT_FALSE(actor_->IsAgentReuseCreate(request));
+
+    (*request->mutable_instance()->mutable_createoptions())[AGENT_REUSE_OPTION_KEY] = "false";
+    EXPECT_FALSE(actor_->IsAgentReuseCreate(request));
+
+    (*request->mutable_instance()->mutable_createoptions())[AGENT_REUSE_OPTION_KEY] = "True";
+    EXPECT_FALSE(actor_->IsAgentReuseCreate(request));
+
+    (*request->mutable_instance()->mutable_createoptions())[AGENT_REUSE_OPTION_KEY] = "true";
+    EXPECT_TRUE(actor_->IsAgentReuseCreate(request));
+}
+
+TEST_F(AgentReuseCtrlTest, HandleAgentCreateOnOwnerRejectsInvalidRequest)
+{
+    // without the reuse option the request is not an agent reuse create
+    auto promise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+    auto response = actor_->HandleAgentCreateOnOwner(MakePlainRequest(), promise);
+    ASSERT_AWAIT_READY(response);
+    EXPECT_EQ(response.Get().code(), StatusCode::ERR_STATE_MACHINE_ERROR);
+    EXPECT_NE(response.Get().message().find("invalid agent create request"), std::string::npos);
+
+    // reuse option with an empty instance id is rejected as well
+    auto reusePromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+    response = actor_->HandleAgentCreateOnOwner(MakeAgentReuseRequest(""), reusePromise);
+    ASSERT_AWAIT_READY(response);
+    EXPECT_EQ(response.Get().code(), StatusCode::ERR_STATE_MACHINE_ERROR);
+    EXPECT_NE(response.Get().message().find("instance_id=, owner="), std::string::npos);
+}
+
+TEST_F(AgentReuseCtrlTest, HandleAgentCreateOnOwnerFailsWhenOwnerMachineMissing)
+{
+    auto request = MakeAgentReuseRequest();
+    EXPECT_CALL(*view_, GetInstance(TEST_INSTANCE_ID)).WillOnce(Return(nullptr));
+    auto promise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+    auto response = actor_->HandleAgentCreateOnOwner(request, promise);
+    ASSERT_AWAIT_READY(response);
+    EXPECT_EQ(response.Get().code(), StatusCode::ERR_STATE_MACHINE_ERROR);
+    EXPECT_NE(response.Get().message().find("owner state machine is missing"), std::string::npos);
+}
+
+TEST_F(AgentReuseCtrlTest, HandleAgentCreateOnOwnerFailsWhenOwnerChanged)
+{
+    auto request = MakeAgentReuseRequest();
+    auto machine = MakeMachine(InstanceState::RUNNING, "OTHER_NODE");
+    EXPECT_CALL(*view_, GetInstance(TEST_INSTANCE_ID)).WillOnce(Return(machine));
+    auto promise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+    auto response = actor_->HandleAgentCreateOnOwner(request, promise);
+    ASSERT_AWAIT_READY(response);
+    EXPECT_EQ(response.Get().code(), StatusCode::ERR_STATE_MACHINE_ERROR);
+    EXPECT_NE(response.Get().message().find("owner has changed"), std::string::npos);
+}
+
+TEST_F(AgentReuseCtrlTest, HandleAgentCreateOnOwnerFailsWhenOwnerContextMissing)
+{
+    auto request = MakeAgentReuseRequest();
+    auto machine = MakeMachine(InstanceState::RUNNING);
+    EXPECT_CALL(*machine, GetScheduleRequest).WillOnce(Return(nullptr));
+    EXPECT_CALL(*view_, GetInstance(TEST_INSTANCE_ID)).WillOnce(Return(machine));
+    auto promise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+    auto response = actor_->HandleAgentCreateOnOwner(request, promise);
+    ASSERT_AWAIT_READY(response);
+    EXPECT_EQ(response.Get().code(), StatusCode::ERR_STATE_MACHINE_ERROR);
+    EXPECT_NE(response.Get().message().find("owner instance context is missing"), std::string::npos);
+}
+
+TEST_F(AgentReuseCtrlTest, HandleAgentCreateOnOwnerRejectsSandboxTypeMismatch)
+{
+    // existing context has sandbox_type, the new request does not
+    auto dockerRequest = std::make_shared<messages::ScheduleRequest>();
+    dockerRequest->set_requestid(TEST_REQUEST_ID);
+    (*dockerRequest->mutable_instance()->mutable_createoptions())[SANDBOX_TYPE_OPTION_KEY] = "docker";
+    auto machine = MakeMachine(InstanceState::RUNNING);
+    EXPECT_CALL(*machine, GetScheduleRequest).WillOnce(Return(dockerRequest));
+    EXPECT_CALL(*view_, GetInstance(TEST_INSTANCE_ID)).WillOnce(Return(machine));
+    auto promise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+    auto response = actor_->HandleAgentCreateOnOwner(MakeAgentReuseRequest(), promise);
+    ASSERT_AWAIT_READY(response);
+    EXPECT_EQ(response.Get().code(), StatusCode::ERR_INSTANCE_INFO_INVALID);
+    EXPECT_NE(response.Get().message().find("sandbox_type"), std::string::npos);
+
+    // both sides have sandbox_type but the values differ
+    auto conchRequest = std::make_shared<messages::ScheduleRequest>();
+    conchRequest->set_requestid(TEST_REQUEST_ID);
+    (*conchRequest->mutable_instance()->mutable_createoptions())[SANDBOX_TYPE_OPTION_KEY] = "conch";
+    machine = MakeMachine(InstanceState::RUNNING);
+    EXPECT_CALL(*machine, GetScheduleRequest).WillOnce(Return(conchRequest));
+    EXPECT_CALL(*view_, GetInstance(TEST_INSTANCE_ID)).WillOnce(Return(machine));
+    auto request = MakeAgentReuseRequest();
+    (*request->mutable_instance()->mutable_createoptions())[SANDBOX_TYPE_OPTION_KEY] = "docker";
+    auto secondPromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+    response = actor_->HandleAgentCreateOnOwner(request, secondPromise);
+    ASSERT_AWAIT_READY(response);
+    EXPECT_EQ(response.Get().code(), StatusCode::ERR_INSTANCE_INFO_INVALID);
+
+    // the new request has sandbox_type while the existing context does not
+    machine = MakeMachine(InstanceState::RUNNING);
+    EXPECT_CALL(*machine, GetScheduleRequest).WillOnce(Return(std::make_shared<messages::ScheduleRequest>()));
+    EXPECT_CALL(*view_, GetInstance(TEST_INSTANCE_ID)).WillOnce(Return(machine));
+    auto thirdPromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+    response = actor_->HandleAgentCreateOnOwner(request, thirdPromise);
+    ASSERT_AWAIT_READY(response);
+    EXPECT_EQ(response.Get().code(), StatusCode::ERR_INSTANCE_INFO_INVALID);
+}
+
+TEST_F(AgentReuseCtrlTest, HandleAgentCreateOnOwnerReturnsDuplicatedForReusableStates)
+{
+    for (const auto state :
+         { InstanceState::NEW, InstanceState::SCHEDULING, InstanceState::CREATING, InstanceState::RUNNING,
+           InstanceState::SUB_HEALTH, InstanceState::SUSPEND }) {
+        auto request = MakeAgentReuseRequest();
+        auto machine = MakeMachine(state);
+        // same sandbox_type (unset on both sides) must not be treated as a mismatch
+        EXPECT_CALL(*machine, GetScheduleRequest).WillOnce(Return(std::make_shared<messages::ScheduleRequest>()));
+        EXPECT_CALL(*view_, GetInstance(TEST_INSTANCE_ID)).WillOnce(Return(machine));
+        auto promise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+        auto response = actor_->HandleAgentCreateOnOwner(request, promise);
+        ASSERT_AWAIT_READY(response);
+        EXPECT_EQ(response.Get().code(), StatusCode::ERR_INSTANCE_DUPLICATED) << "state: " << static_cast<int32_t>(state);
+        EXPECT_NE(response.Get().message().find("agent instance already exists"), std::string::npos);
+    }
+}
+
+TEST_F(AgentReuseCtrlTest, HandleAgentCreateOnOwnerRejectsTerminalStates)
+{
+    for (const auto state :
+         { InstanceState::EXITING, InstanceState::EVICTING, InstanceState::EXITED, InstanceState::EVICTED,
+           InstanceState::FATAL }) {
+        auto request = MakeAgentReuseRequest();
+        auto machine = MakeMachine(state);
+        EXPECT_CALL(*machine, GetScheduleRequest).WillOnce(Return(std::make_shared<messages::ScheduleRequest>()));
+        EXPECT_CALL(*view_, GetInstance(TEST_INSTANCE_ID)).WillOnce(Return(machine));
+        auto promise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+        auto response = actor_->HandleAgentCreateOnOwner(request, promise);
+        ASSERT_AWAIT_READY(response);
+        EXPECT_EQ(response.Get().code(), StatusCode::ERR_INSTANCE_EXITED) << "state: " << static_cast<int32_t>(state);
+        EXPECT_NE(response.Get().message().find("terminating or terminated"), std::string::npos);
+    }
+}
+
+TEST_F(AgentReuseCtrlTest, HandleAgentCreateOnOwnerFailsOnUnknownState)
+{
+    auto request = MakeAgentReuseRequest();
+    auto machine = MakeMachine(static_cast<InstanceState>(999));
+    EXPECT_CALL(*machine, GetScheduleRequest).WillOnce(Return(std::make_shared<messages::ScheduleRequest>()));
+    EXPECT_CALL(*view_, GetInstance(TEST_INSTANCE_ID)).WillOnce(Return(machine));
+    auto promise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+    auto response = actor_->HandleAgentCreateOnOwner(request, promise);
+    ASSERT_AWAIT_READY(response);
+    EXPECT_EQ(response.Get().code(), StatusCode::ERR_STATE_MACHINE_ERROR);
+    EXPECT_NE(response.Get().message().find("unknown instance state 999"), std::string::npos);
+}
+
+TEST_F(AgentReuseCtrlTest, HandleDispatchWithoutPreStateReportsAgentCreateConflict)
+{
+    auto request = MakeAgentReuseRequest();
+    TransitionResult result{};
+    auto promise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+    auto response = actor_->HandleDispatchWithoutPreState(request, promise, result);
+    ASSERT_AWAIT_READY(response);
+    EXPECT_EQ(response.Get().code(), StatusCode::ERR_ETCD_OPERATION_ERROR);
+    EXPECT_NE(response.Get().message().find("another request won persistence"), std::string::npos);
+}
+
+TEST_F(AgentReuseCtrlTest, ResolveAgentCreateOwnerFailsWithoutMetaStoreClient)
+{
+    auto request = MakeAgentReuseRequest();
+    auto promise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+    auto response = actor_->ResolveAgentCreateOwner(request, promise);
+    ASSERT_AWAIT_READY(response);
+    EXPECT_EQ(response.Get().code(), StatusCode::ERR_STATE_MACHINE_ERROR);
+    EXPECT_NE(response.Get().message().find("metastore client is unavailable"), std::string::npos);
+}
+
+TEST_F(AgentReuseCtrlTest, OnAgentCreateRouteResolvedFailsClosedOnBadRouteResults)
+{
+    auto request = MakeAgentReuseRequest();
+    auto checkFailure = [this, request](litebus::Future<std::shared_ptr<GetResponse>> future,
+                                        const std::string &expectedFragment) {
+        auto promise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+        actor_->OnAgentCreateRouteResolved(future, request, promise);
+        auto response = promise->GetFuture();
+        ASSERT_AWAIT_READY(response);
+        EXPECT_EQ(response.Get().code(), StatusCode::ERR_STATE_MACHINE_ERROR);
+        EXPECT_NE(response.Get().message().find(expectedFragment), std::string::npos) << response.Get().message();
+    };
+
+    // metastore future failed
+    auto errorPromise = std::make_shared<litebus::Promise<std::shared_ptr<GetResponse>>>();
+    errorPromise->SetFailed(StatusCode::FAILED);
+    checkFailure(errorPromise->GetFuture(), "metastore query failed with code");
+
+    // metastore returned an empty response
+    std::shared_ptr<GetResponse> emptyResp;
+    checkFailure(MakeCompletedFuture(emptyResp), "metastore returned an empty response");
+
+    // metastore response carries an error status
+    auto failedResp = std::make_shared<GetResponse>();
+    failedResp->status = Status(StatusCode::FAILED, "etcd down");
+    checkFailure(MakeCompletedFuture(failedResp), "metastore query failed: ");
+
+    // count/kv shape is invalid (count=1 but no kv)
+    auto shapeResp = std::make_shared<GetResponse>();
+    shapeResp->count = 1;
+    checkFailure(MakeCompletedFuture(shapeResp), "metastore route result is invalid");
+
+    // route value is not valid json
+    auto garbageResp = std::make_shared<GetResponse>();
+    garbageResp->count = 1;
+    mvccpb::KeyValue garbageKv;
+    garbageKv.set_value("this is not json {{{");
+    garbageResp->kvs.push_back(garbageKv);
+    checkFailure(MakeCompletedFuture(garbageResp), "metastore route cannot be parsed");
+
+    // route belongs to another instance id
+    auto mismatchResp = std::make_shared<GetResponse>();
+    mismatchResp->count = 1;
+    mvccpb::KeyValue mismatchKv;
+    mismatchKv.set_value(MakeRouteJson("OTHER_INSTANCE_ID", "OTHER_NODE"));
+    mismatchResp->kvs.push_back(mismatchKv);
+    checkFailure(MakeCompletedFuture(mismatchResp), "metastore route cannot be parsed");
+
+    // route owner is empty
+    auto emptyOwnerResp = std::make_shared<GetResponse>();
+    emptyOwnerResp->count = 1;
+    mvccpb::KeyValue emptyOwnerKv;
+    emptyOwnerKv.set_value(MakeRouteJson(TEST_INSTANCE_ID, ""));
+    emptyOwnerResp->kvs.push_back(emptyOwnerKv);
+    checkFailure(MakeCompletedFuture(emptyOwnerResp), "metastore route cannot be parsed");
+
+    // route points to this node while the local machine is missing
+    auto selfOwnerResp = std::make_shared<GetResponse>();
+    selfOwnerResp->count = 1;
+    mvccpb::KeyValue selfOwnerKv;
+    selfOwnerKv.set_value(MakeRouteJson(TEST_INSTANCE_ID, TEST_NODE_ID));
+    selfOwnerResp->kvs.push_back(selfOwnerKv);
+    checkFailure(MakeCompletedFuture(selfOwnerResp), "local state machine is missing");
+
+    // route points to a foreign node but the AID resolver is unavailable
+    auto foreignResp = std::make_shared<GetResponse>();
+    foreignResp->count = 1;
+    mvccpb::KeyValue foreignKv;
+    foreignKv.set_value(MakeRouteJson(TEST_INSTANCE_ID, "OTHER_NODE"));
+    foreignResp->kvs.push_back(foreignKv);
+    checkFailure(MakeCompletedFuture(foreignResp), "owner resolver is unavailable");
+}
+
+TEST_F(AgentReuseCtrlTest, SendForwardAgentCreateRequestFailsClosedOnBadOwnerAID)
+{
+    auto request = MakeAgentReuseRequest();
+
+    // AID resolution future failed
+    auto errorPromise = std::make_shared<litebus::Promise<litebus::Option<litebus::AID>>>();
+    errorPromise->SetFailed(StatusCode::FAILED);
+    auto promise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+    actor_->SendForwardAgentCreateRequest(errorPromise->GetFuture(), "OTHER_NODE", request, promise);
+    auto response = promise->GetFuture();
+    ASSERT_AWAIT_READY(response);
+    EXPECT_EQ(response.Get().code(), StatusCode::ERR_STATE_MACHINE_ERROR);
+    EXPECT_NE(response.Get().message().find("owner AID resolution failed with code"), std::string::npos);
+
+    // AID resolution returned none
+    auto nonePromise = std::make_shared<litebus::Promise<litebus::Option<litebus::AID>>>();
+    nonePromise->SetValue(litebus::Option<litebus::AID>());
+    auto secondPromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+    actor_->SendForwardAgentCreateRequest(nonePromise->GetFuture(), "OTHER_NODE", request, secondPromise);
+    response = secondPromise->GetFuture();
+    ASSERT_AWAIT_READY(response);
+    EXPECT_EQ(response.Get().code(), StatusCode::ERR_STATE_MACHINE_ERROR);
+    EXPECT_NE(response.Get().message().find("owner AID is unavailable"), std::string::npos);
 }
 
 }  // namespace functionsystem::test
