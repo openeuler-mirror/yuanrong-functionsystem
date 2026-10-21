@@ -511,6 +511,16 @@ public:
                                      const std::string &instanceID, const InstanceInfo &instance);
     // Returns and consumes the last failure snapshot for requestID. present=false if none.
     FrontendCreateFailureSnapshot TakeFrontendCreateFailureSnapshot(const std::string &requestID);
+    // Records one readiness redeploy round for a pending frontend create (same
+    // gating as RecordFrontendCreateFailure: pending ready ticket + last_failure_on_timeout
+    // policy). Upserts retriedTimes and captures the first failure so the yr.create
+    // span can be stopped with retry attributes on fulfillment or timeout.
+    // Merge semantics with RecordFrontendCreateFailure on the same map entry:
+    // the retry fields (retriedTimes/firstFailure*) only accumulate here, the
+    // failure fields (present/code/message/instanceID) are only overwritten by
+    // RecordFrontendCreateFailure — neither writer resets the other's fields.
+    void RecordFrontendCreateRetry(const std::string &requestID, int32_t code, const std::string &message,
+                                   const InstanceInfo &instance);
     void EraseFrontendCreateFailure(const std::string &requestID);
     void EraseReadyCallResultCallbackByRequestID(const std::string &requestID);
     void EraseReadyCallResultCallbackByInstanceID(const std::string &instanceID);
@@ -862,6 +872,13 @@ private:
     litebus::Future<messages::ScheduleResponse> ConfirmScheduleDecisionAndDispatch(
         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const schedule_decision::ScheduleResult &result,
         const InstanceState &prevState);
+    // Stops the yr.schedule.local span on a failed local decision that does not enter the
+    // success/allocated dispatch chain (which stops it in OnTryDispatchOnLocal instead).
+    void StopLocalScheduleSpanOnFailure(const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, int32_t code,
+                                        const std::string &reason);
+    // Cleans up the state-machine cache for a non-forwarded schedule failure: unconditional in
+    // DirectRouting mode (no etcd watch events), otherwise only for requests owned by other nodes.
+    void CleanupStateMachineOnScheduleFailure(const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
 
     litebus::Future<messages::ScheduleResponse> RetryForwardSchedule(
         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const messages::ScheduleResponse &resp,
@@ -1177,10 +1194,14 @@ private:
     std::unordered_map<std::string, InstanceReadyCallResultCallBack> instanceReadyCallResultCallbackByInstanceID_;
     std::unordered_map<std::string, std::string> instanceReadyCallResultInstanceIDByRequestID_;
     std::unordered_map<std::string, std::string> instanceReadyCallResultRequestIDByInstanceID_;
-    // Last deploy failure for pending frontend create requests (key=requestID).
-    // Written by RecordFrontendCreateFailure on IsCreateByFrontend failures, read
-    // and erased by TakeFrontendCreateFailureSnapshot on ready timeout. faas/sandbox
-    // creates never populate this (no source=frontend marker).
+    // Last deploy failure + retry bookkeeping for pending frontend create requests
+    // (key=requestID). Written by RecordFrontendCreateFailure on IsCreateByFrontend
+    // failures and by RecordFrontendCreateRetry on readiness redeploys; read and
+    // erased by TakeFrontendCreateFailureSnapshot when the yr.create span is stopped
+    // (ready fulfillment or timeout) and by UnregisterFrontendReadyWait on abnormal
+    // unregister paths. faas/sandbox creates never populate this (no source=frontend
+    // marker). TakeFrontendReadyCallback deliberately does NOT erase it: the
+    // fulfillment-side span stop needs the retry fields after the ticket fires.
     std::unordered_map<std::string, FrontendCreateFailureSnapshot> frontendCreateFailureSnapshots_;
 
     std::unordered_map<std::string, CreateCallResultCallBack> createCallResultCallback_;

@@ -44,6 +44,7 @@
 #include "common/utils/random_number.h"
 #include "common/utils/struct_transfer.h"
 #include "common/utils/meta_store_kv_operation.h"
+#include "common/trace/create_trace_helper.h"
 #include "common/trace/trace_manager.h"
 #include "function_proxy/config/direct_routing_config.h"
 #include "instance_ctrl_message.h"
@@ -2381,7 +2382,14 @@ litebus::Option<TransitionResult> InstanceCtrlActor::OnTryDispatchOnLocal(
     const TransitionResult &transResult)
 {
     // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::K_LOCAL_SCHEDULE, scheduleReq->requestid());
+    // Stamp the schedule span with the decision outcome so a failed placement is
+    // attributable from the span alone (same convention as yr.download.error_*).
+    trace::AttributesVector localScheduleAttrs;
+    if (result.code != static_cast<int32_t>(StatusCode::SUCCESS)) {
+        trace::AppendErrorAttrs(localScheduleAttrs, static_cast<int64_t>(result.code), result.reason);
+    }
+    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::K_LOCAL_SCHEDULE, scheduleReq->requestid(),
+                                                localScheduleAttrs);
     // In DR mode (Gap 2), SCHEDULING/CREATING transitions use PERSISTENT_NOT (no etcd write),
     // so version stays 0 and savedInfo is empty. Skip the savedInfo check and proceed with
     // local dispatch; the single etcd write happens at RUNNING state.
@@ -2554,6 +2562,7 @@ litebus::Future<messages::ScheduleResponse> InstanceCtrlActor::ConfirmScheduleDe
     auto code = (result.code == static_cast<int32_t>(StatusCode::INVALID_RESOURCE_PARAMETER))
                     ? static_cast<int32_t>(StatusCode::RESOURCE_NOT_ENOUGH)
                     : result.code;
+    StopLocalScheduleSpanOnFailure(scheduleReq, code, result.reason);
     YRLOG_DEBUG("{}|{}|now determine whether to forward schedule of instance({}), code({}), prevState({})",
                 scheduleReq->traceid(), scheduleReq->requestid(), scheduleReq->instance().instanceid(), code,
                 fmt::underlying(prevState));
@@ -2573,22 +2582,43 @@ litebus::Future<messages::ScheduleResponse> InstanceCtrlActor::ConfirmScheduleDe
                                    stateMachineRef)
             .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::HandleForwardResponseAndNotifyCreator, scheduleReq, _1));
     } else if (code != static_cast<int32_t>(StatusCode::SUCCESS)) {
-        // DirectRouting mode: all schedule failures need to cleanup state machine (no etcd watch events)
-        // Partial Watch mode: only cleanup requests from other nodes (preserve existing behavior)
-        // Traditional full-watch mode: only cleanup requests from other nodes (preserve existing behavior)
-        if (function_proxy::DirectRoutingConfig::IsEnabled()) {
-            TryClearStateMachineCache(scheduleReq);
-        } else if (config_.isPartialWatchInstances) {
-            if (ExtractProxyIDFromProxyAID(scheduleReq->instance().parentfunctionproxyaid()) != nodeID_) {
-                TryClearStateMachineCache(scheduleReq);
-            }
-        } else {
-            if (ExtractProxyIDFromProxyAID(scheduleReq->instance().parentfunctionproxyaid()) != nodeID_) {
-                TryClearStateMachineCache(scheduleReq);
-            }
-        }
+        CleanupStateMachineOnScheduleFailure(scheduleReq);
     }
     return resp;
+}
+
+void InstanceCtrlActor::StopLocalScheduleSpanOnFailure(const std::shared_ptr<ScheduleRequest> &scheduleReq,
+                                                       int32_t code, const std::string &reason)
+{
+    // the local schedule span is only stopped on the success/allocated
+    // dispatch chain (TryDispatchOnLocal -> OnTryDispatchOnLocal). A failed local
+    // decision that upthrows to the domain scheduler (or cleans up) must stamp and
+    // end the span here instead — otherwise the span never ends, is never exported
+    // and keeps leaking in the span map, leaving the local hop unattributable in
+    // the trace (observed: yr.schedule.forward's parent dangling on a never-ended
+    // yr.schedule.local).
+    if (code == static_cast<int32_t>(StatusCode::SUCCESS)) {
+        return;
+    }
+    trace::AttributesVector localScheduleAttrs;
+    trace::AppendErrorAttrs(localScheduleAttrs, static_cast<int64_t>(code), reason);
+    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::K_LOCAL_SCHEDULE, scheduleReq->requestid(),
+                                                localScheduleAttrs);
+}
+
+void InstanceCtrlActor::CleanupStateMachineOnScheduleFailure(const std::shared_ptr<ScheduleRequest> &scheduleReq)
+{
+    // DirectRouting mode: all schedule failures need to cleanup state machine (no etcd watch events)
+    // Partial Watch mode: only cleanup requests from other nodes (preserve existing behavior)
+    // Traditional full-watch mode: only cleanup requests from other nodes (preserve existing behavior)
+    if (function_proxy::DirectRoutingConfig::IsEnabled()) {
+        TryClearStateMachineCache(scheduleReq);
+        return;
+    }
+    // The partial-watch and full-watch modes share the same cleanup condition.
+    if (ExtractProxyIDFromProxyAID(scheduleReq->instance().parentfunctionproxyaid()) != nodeID_) {
+        TryClearStateMachineCache(scheduleReq);
+    }
 }
 
 void InstanceCtrlActor::TryClearStateMachineCache(const std::shared_ptr<messages::ScheduleRequest> &scheduleReq)
@@ -2735,7 +2765,14 @@ litebus::Future<ScheduleResponse> InstanceCtrlActor::HandleForwardResponseAndNot
     const std::shared_ptr<ScheduleRequest> &scheduleReq, const ScheduleResponse &resp)
 {
     // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::K_FORWARD_SCHEDULE, scheduleReq->requestid());
+    // Stamp the forwarded-schedule span with the outcome (error code/message on
+    // failure, same convention as yr.download.error_*).
+    trace::AttributesVector forwardScheduleAttrs;
+    if (resp.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
+        trace::AppendErrorAttrs(forwardScheduleAttrs, static_cast<int64_t>(resp.code()), resp.message());
+    }
+    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::K_FORWARD_SCHEDULE, scheduleReq->requestid(),
+                                                forwardScheduleAttrs);
     ASSERT_IF_NULL(instanceControlView_);
     // If the forwarded scheduling request fails, the notify interface is invoked to notify the instance
     // creator of the scheduling failure, and this local scheduler, as the owner scheduling starting point
@@ -3200,6 +3237,14 @@ litebus::Future<Status> InstanceCtrlActor::HandleCheckReadinessFailure(const std
                                                                        bool isRecovering)
 {
     if (retriedTimes < config_.maxInstanceRedeployTimes) {
+        // Readiness failed and a redeploy is scheduled: record the retry round so
+        // the yr.create span (stopped at ready fulfillment/timeout) can carry
+        // yr.retry_count / first-failure attributes. No-op for non-frontend creates.
+        // The code stays 0 by design: this layer only has the failure message —
+        // both callers (client-connect failure / readiness RPC error) carry no
+        // business StatusCode — so firstFailureMessage is the authoritative
+        // first-failure evidence (see FrontendCreateFailureSnapshot).
+        RecordFrontendCreateRetry(request->requestid(), 0, errMsg, request->instance());
         return SendKillRequestToAgent(request->instance(), isRecovering, true)
             .Then([aid(GetAID()), request, retriedTimes, minDeployInterval(config_.minDeployIntervalMs), isRecovering,
                    maxDeployInterval(config_.maxDeployIntervalMs)](const messages::KillInstanceResponse &rsp) {
@@ -3596,21 +3641,18 @@ InstanceReadyCallResultCallBack InstanceCtrlActor::TakeFrontendReadyCallback(
         iter != instanceRegisteredReadyCallResultCallback_.end()) {
         callback = iter->second;
         EraseReadyCallResultCallbackByRequestID(requestID);
-        // A real CallResult (ready or fatal) is consuming the ready ticket; drop any
-        // pending failure snapshot so the ready-timeout closure cannot resurrect it.
-        EraseFrontendCreateFailure(requestID);
+        // The failure snapshot is deliberately NOT erased here: the fulfillment-side
+        // yr.create span stop (chained right after this callback fires) consumes it
+        // via TakeFrontendCreateFailureSnapshot to pick up the retry bookkeeping, and
+        // the ready-timeout closure can no longer resurrect it because resolving the
+        // promise cancels its timer.
     } else if (auto iter = instanceReadyCallResultCallbackByInstanceID_.find(srcInstance);
                iter != instanceReadyCallResultCallbackByInstanceID_.end()) {
         callback = iter->second;
         // The runtime CallResult's requestID diverged from the frontend ticket's, so
         // we matched by instanceID. EraseReadyCallResultCallbackByInstanceID clears the
-        // ready-callback maps but not the failure snapshot bound to the original
-        // requestID; look it up and drop it too, or it leaks and could pollute a later
-        // requestID reuse.
-        if (auto reqIDIter = instanceReadyCallResultRequestIDByInstanceID_.find(srcInstance);
-            reqIDIter != instanceReadyCallResultRequestIDByInstanceID_.end()) {
-            EraseFrontendCreateFailure(reqIDIter->second);
-        }
+        // ready-callback maps; the failure snapshot stays for the fulfillment-side
+        // span stop (same as the requestID match above).
         EraseReadyCallResultCallbackByInstanceID(srcInstance);
     }
     return callback;
@@ -3641,9 +3683,20 @@ litebus::Future<CallResultAck> InstanceCtrlActor::SendCallResult(
             return CallResultAck();
         }
         ASSERT_IF_NULL(clientManager_);
-        // Uses requestID for the existing span key.
-        trace::TraceManager::GetInstance().StopSpan(
-            trace::SpanName::K_CREATE, requestID, {{"instance.id", srcInstance}});
+        // Frontend direct-create results are routed through the ready ticket
+        // (dstInstance == requestID, see GetCreateResultDstInstance): the yr.create
+        // span belongs to the frontend dispatcher outlets, which stamp the terminal
+        // attributes (result/instance_id/error/exception/node/...) asynchronously via
+        // createFailureLookup. Stopping the span here would race that outlet — when a
+        // second CallResult arrives first (e.g. init failure plus runtime exit), this
+        // synchronous stop erases the span and the later attribute-rich stop silently
+        // drops result/yr.error_code/exception (observed: ready-failure yr.create
+        // carried only instance.id). Only the runtime/posix create path (a real
+        // parent instance) stops the span here.
+        if (dstInstance != requestID) {
+            trace::TraceManager::GetInstance().StopSpan(
+                trace::SpanName::K_CREATE, requestID, {{"instance.id", srcInstance}});
+        }
         auto clientFuture = clientManager_->GetControlInterfacePosixClient(dstInstance);
         return clientFuture.Then(
             litebus::Defer(GetAID(), &InstanceCtrlActor::SendNotifyResult, _1, dstInstance, requestID, callResult));
@@ -3967,7 +4020,14 @@ litebus::Future<Status> InstanceCtrlActor::ScheduleConfirmed(const Status &statu
                                                              const std::shared_ptr<ScheduleRequest> &request)
 {
     // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::K_DEPLOY_INSTANCE, request->requestid());
+    // Stamp the deploy span with the outcome (error code/message on failure,
+    // same convention as yr.download.error_*).
+    trace::AttributesVector deployConfirmedAttrs;
+    if (status.IsError()) {
+        trace::AppendErrorAttrs(deployConfirmedAttrs, static_cast<int64_t>(status.StatusCode()), status.GetMessage());
+    }
+    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::K_DEPLOY_INSTANCE, request->requestid(),
+                                                deployConfirmedAttrs);
     auto rsp = std::make_shared<ScheduleResponse>();
     rsp->set_code(static_cast<int32_t>(status.StatusCode()));
     rsp->set_requestid(request->requestid());
@@ -4174,13 +4234,20 @@ void InstanceCtrlActor::ScheduleEnd(const litebus::Future<Status> &future,
                                     const std::shared_ptr<ScheduleRequest> &request)
 {
     // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::K_DEPLOY_INSTANCE, request->requestid());
     Status status;
     if (future.IsError()) {
         status = Status(static_cast<StatusCode>(future.GetErrorCode()), "failed to create instance");
     } else {
         status = future.Get();
     }
+    // Stop after the status is resolved so a failed deploy stamps the span with
+    // the error code/message (same convention as yr.download.error_*).
+    trace::AttributesVector deployEndAttrs;
+    if (status.IsError()) {
+        trace::AppendErrorAttrs(deployEndAttrs, static_cast<int64_t>(status.StatusCode()), status.GetMessage());
+    }
+    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::K_DEPLOY_INSTANCE, request->requestid(),
+                                                deployEndAttrs);
     auto rsp = std::make_shared<ScheduleResponse>();
     rsp->set_code(static_cast<int32_t>(status.StatusCode()));
     rsp->set_requestid(request->requestid());
@@ -6951,11 +7018,42 @@ litebus::Future<messages::ScheduleResponse> InstanceCtrlActor::ScheduleFrontendA
         runtimePromise->SetValue(response);
         return response;
     }
+    // A fresh registration for this requestID starts from a clean slate: drop any
+    // failure/retry snapshot left over from a previous request that reused the same
+    // requestID, so its retriedTimes/firstFailure* cannot be attributed to this one.
+    EraseFrontendCreateFailure(scheduleReq->requestid());
+    // The ready ticket belongs to this request: start the yr.create span here (not in
+    // the gRPC dispatcher) so a duplicate requestID rejected above never starts/leaks a
+    // span and never interferes with the original's span — TraceManager keys spans by
+    // (spanName, spanKey=requestID). Mirrors the posix create path, including
+    // propagating the span context into createOptions so the stage sub-spans
+    // (yr.schedule.*, yr.instance.deploy/create_sandbox/wait_connection) nest under it.
+    (*scheduleReq->mutable_instance()->mutable_extensions())[FRONTEND_READY_TICKET_REGISTERED] = "true";
+    trace::TraceManager::SpanParam createSpanParam;
+    createSpanParam.spanName = trace::SpanName::K_CREATE;
+    createSpanParam.spanKey = scheduleReq->requestid();
+    createSpanParam.traceID = scheduleReq->traceid();
+    createSpanParam.traceParent = trace::TraceManager::GetTraceParentFromOptions(
+        scheduleReq->instance().createoptions(), &scheduleReq->instance().scheduleoption().extension());
+    createSpanParam.function = scheduleReq->instance().function();
+    auto createSpan = trace::TraceManager::GetInstance().StartSpanWithRecord(std::move(createSpanParam));
+    trace::TraceManager::PropagateSpanToOptions(createSpan,
+                                                scheduleReq->mutable_instance()->mutable_createoptions(),
+                                                scheduleReq->mutable_instance()->mutable_scheduleoption()
+                                                    ->mutable_extension());
     // Frontend create follows the same two-phase contract as the POSIX/libruntime path: runtimePromise acknowledges
     // that a NEW instance entered SCHEDULING, while the Schedule future may still report an intermediate local
     // RESOURCE_NOT_ENOUGH result before forwarding completes. Returning the latter would make frontend fail the
     // request and unregister its ready waiter even though the domain scheduler can place the instance remotely.
-    (void)Schedule(scheduleReq, runtimePromise);
+    // The pipeline gets a DEEP COPY of the request: the actor-side scheduling chain keeps
+    // mutating the request (affinity/labels/extensions — see Schedule), while the
+    // gRPC dispatcher's continuation reads instance().extensions() on its own thread to
+    // detect FRONTEND_READY_TICKET_REGISTERED. Concurrent writes and reads on the same
+    // protobuf object (the extensions MapField in particular) are a data race; the copy
+    // isolates the two sides. The span context propagated above rides into the copy, so
+    // the stage sub-spans still chain under the yr.create span.
+    auto scheduleCopy = std::make_shared<messages::ScheduleRequest>(*scheduleReq);
+    (void)Schedule(scheduleCopy, runtimePromise);
     auto acceptedFuture = runtimePromise->GetFuture();
     acceptedFuture.OnComplete(litebus::Defer(GetAID(), &InstanceCtrlActor::OnFrontendScheduleCompleted, _1,
                                              scheduleReq->requestid()));
@@ -6990,8 +7088,33 @@ void InstanceCtrlActor::RecordFrontendCreateFailure(const std::string &requestID
     if (!IsLastFailureOnTimeoutPolicy(instance.createoptions())) {
         return;
     }
-    // Overwrite on every failure so the last attempt's reason wins.
-    frontendCreateFailureSnapshots_[requestID] = { true, code, message, instanceID };
+    // Overwrite on every failure so the last attempt's reason wins; preserve the
+    // retry bookkeeping accumulated by RecordFrontendCreateRetry.
+    auto &snapshot = frontendCreateFailureSnapshots_[requestID];
+    snapshot.present = true;
+    snapshot.code = code;
+    snapshot.message = message;
+    snapshot.instanceID = instanceID;
+}
+
+void InstanceCtrlActor::RecordFrontendCreateRetry(const std::string &requestID, int32_t code,
+                                                  const std::string &message, const InstanceInfo &instance)
+{
+    // Same gating as RecordFrontendCreateFailure: only frontend creates with a
+    // pending ready ticket and the last_failure_on_timeout policy record retries.
+    if (requestID.empty() || instanceRegisteredReadyCallResultCallback_.find(requestID)
+                                == instanceRegisteredReadyCallResultCallback_.end()) {
+        return;
+    }
+    if (!IsLastFailureOnTimeoutPolicy(instance.createoptions())) {
+        return;
+    }
+    auto &snapshot = frontendCreateFailureSnapshots_[requestID];
+    snapshot.retriedTimes += 1;
+    if (snapshot.retriedTimes == 1) {
+        snapshot.firstFailureCode = code;
+        snapshot.firstFailureMessage = message;
+    }
 }
 
 FrontendCreateFailureSnapshot InstanceCtrlActor::TakeFrontendCreateFailureSnapshot(const std::string &requestID)

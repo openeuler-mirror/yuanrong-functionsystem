@@ -238,22 +238,33 @@ void AgentServiceActor::DeployInstance(const litebus::AID &from, std::string &&n
     }
     // 5. deploy code package (including main, layer, and delegate package) and start runtime
     auto parameters = BuildDeployerParameters(deployInstanceRequest);
-    StartCodeDownloadSpan(deployInstanceRequest);
-    DownloadCodeAndStartRuntime(parameters, deployInstanceRequest);
+    // The yr.instance.download_code span covers the code-package download stage and is
+    // only recorded when code is actually fetched. Driver /
+    // sandbox instances carry a synthetic working_dir object in the queue
+    // (GetDeployInstanceReq: storagetype=working_dir, empty deploy dir) that resolves as
+    // already-deployed without any fetch, so the span is started lazily on the first
+    // real download inside DownloadCodeAndStartRuntime — not unconditionally here.
+    DownloadCodeAndStartRuntime(parameters, deployInstanceRequest, std::make_shared<bool>(false));
 }
 
 void AgentServiceActor::DownloadCodeAndStartRuntime(
     const std::shared_ptr<std::queue<DeployerParameters>> &deployObjects,
-    const std::shared_ptr<messages::DeployInstanceRequest> &req)
+    const std::shared_ptr<messages::DeployInstanceRequest> &req,
+    const std::shared_ptr<bool> &downloadSpanActive)
 {
-    if (IsDownloadFailed(req)) {
+    if (IsDownloadFailed(req, downloadSpanActive)) {
         return;
     }
     if (deployObjects->empty()) {
         YRLOG_INFO("{}|directly start runtime({}).", req->requestid(), req->instanceid());
         DeployResult result;
         result.status = Status::OK();
-        StopCodeDownloadSpan(req, result);
+        if (*downloadSpanActive) {
+            // Only stop the span when a real download started it; a queue that only
+            // carried already-deployed objects (driver/sandbox instances) never
+            // records the stage.
+            StopCodeDownloadSpan(req, result);
+        }
         PrepareEnv(req).OnComplete(
             litebus::Defer(GetAID(), &AgentServiceActor::StartRuntime, req, std::placeholders::_1));
         return;
@@ -274,22 +285,30 @@ void AgentServiceActor::DownloadCodeAndStartRuntime(
         YRLOG_DEBUG("{}|{}|code package({}) is downloading. instanceID({})", req->traceid(), req->requestid(),
                     deployObject.destination, req->instanceid());
         iter->second.GetFuture().OnComplete(litebus::Defer(GetAID(), &AgentServiceActor::GetDownloadCodeResult,
-                                                           deployObjects, req, deployObject.destination,
-                                                           std::placeholders::_1));
+                                                           deployObjects, req, downloadSpanActive,
+                                                           deployObject.destination, std::placeholders::_1));
     } else if (deployObject.deployer->IsDeployed(deployObject.destination, isMonopoly)) {
         // code package had been downloaded
         YRLOG_DEBUG("{}|{}|code package({}) had been downloaded. instanceID({})", req->traceid(), req->requestid(),
                     deployObject.destination, req->instanceid());
-        DownloadCodeAndStartRuntime(deployObjects, req);
+        DownloadCodeAndStartRuntime(deployObjects, req, downloadSpanActive);
     } else {
         // start to download code package
         YRLOG_DEBUG("{}|{}|code package({}) start to download code package. instanceID({})", req->traceid(),
                     req->requestid(), deployObject.destination, req->instanceid());
+        if (!*downloadSpanActive) {
+            // Lazily start the download span on the first real fetch so instances whose
+            // deploy queue only holds already-deployed objects (driver/sandbox
+            // instances without code) never emit a stage span.
+            StartCodeDownloadSpan(req);
+            *downloadSpanActive = true;
+        }
         (void)deployingObjects_.emplace(deployObject.destination, litebus::Promise<DeployResult>{});
         litebus::Async(GetAID(), &AgentServiceActor::AsyncDownloadCode, deployObject.request, deployObject.deployer)
             .Then(litebus::Defer(GetAID(), &AgentServiceActor::UpdateDeployedObjectByDestination, req,
                                  deployObject.destination, std::placeholders::_1))
-            .OnComplete(litebus::Defer(GetAID(), &AgentServiceActor::DownloadCodeAndStartRuntime, deployObjects, req));
+            .OnComplete(litebus::Defer(GetAID(), &AgentServiceActor::DownloadCodeAndStartRuntime, deployObjects, req,
+                                       downloadSpanActive));
     }
 }
 
@@ -360,14 +379,20 @@ litebus::Future<bool> AgentServiceActor::RecoverPluginCache(const std::string &m
 }
 
 
-bool AgentServiceActor::IsDownloadFailed(const std::shared_ptr<messages::DeployInstanceRequest> &req)
+bool AgentServiceActor::IsDownloadFailed(const std::shared_ptr<messages::DeployInstanceRequest> &req,
+                                         const std::shared_ptr<bool> &downloadSpanActive)
 {
     if (failedDownloadRequests_.find(req->requestid()) == failedDownloadRequests_.end()) {
         return false;
     }
     auto from = deployingRequest_[req->requestid()].from;
     auto deployResult = failedDownloadRequests_[req->requestid()];
-    StopCodeDownloadSpan(req, deployResult);
+    // Only stop the span when this request actually started one: a request that
+    // only waited on a concurrent download for the same package never started the
+    // lazily-opened span, and stopping it would just log "no span found".
+    if (*downloadSpanActive) {
+        StopCodeDownloadSpan(req, deployResult);
+    }
     DeleteCodeReferByDeployInstanceRequest(req);
     auto resp = InitDeployInstanceResponse(static_cast<int32_t>(deployResult.status.StatusCode()),
                                            deployResult.status.GetMessage(), *req);
@@ -380,6 +405,7 @@ bool AgentServiceActor::IsDownloadFailed(const std::shared_ptr<messages::DeployI
 
 void AgentServiceActor::GetDownloadCodeResult(const std::shared_ptr<std::queue<DeployerParameters>> &deployObjects,
                                               const std::shared_ptr<messages::DeployInstanceRequest> &req,
+                                              const std::shared_ptr<bool> &downloadSpanActive,
                                               const std::string &destination,
                                               const litebus::Future<DeployResult> &result)
 {
@@ -392,7 +418,7 @@ void AgentServiceActor::GetDownloadCodeResult(const std::shared_ptr<std::queue<D
                    deployResult.status.GetMessage());
     }
 
-    DownloadCodeAndStartRuntime(deployObjects, req);
+    DownloadCodeAndStartRuntime(deployObjects, req, downloadSpanActive);
 }
 
 bool AgentServiceActor::UpdateDeployedObjectByDestination(const std::shared_ptr<messages::DeployInstanceRequest> &req,

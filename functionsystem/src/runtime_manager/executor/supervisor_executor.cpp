@@ -29,6 +29,7 @@
 #include "common/logs/logging.h"
 #include "common/metadata/metadata_type.h"
 #include "common/resource_view/resource_type.h"
+#include "common/trace/create_trace_helper.h"
 #include "common/utils/collect_status.h"
 #include "common/utils/exec_utils.h"
 #include "common/utils/files.h"
@@ -366,20 +367,32 @@ litebus::Future<runtime::v1::StartResponse> SupervisorExecutor::CreateSandbox(
     auto result = promise.GetFuture();
     nlohmann::json createRequest = CreateRequest(request);
 
+    // yr.instance.create_sandbox spans the supervisor sandbox-create round trip
+    // (mirrors sandboxd_executor). Stopped in OnCreateSandboxDone regardless of
+    // outcome; failures carry yr.sandbox.code/message via the shared helper.
+    trace::StartSandboxCreateSpan(request);
+
     SendRequestToSupervisor("POST", SUPERVISOR_SANDBOX_PREFIX, createRequest)
         .OnComplete(litebus::Defer(GetAID(), &SupervisorExecutor::OnCreateSandboxDone,
-                                   std::placeholders::_1, runtimeID, std::move(promise)));
+                                   std::placeholders::_1, runtimeID, request, std::move(promise)));
     return result;
 }
 
 void SupervisorExecutor::OnCreateSandboxDone(const litebus::Future<nlohmann::json> &future,
                                              const std::string &runtimeID,
+                                             const std::shared_ptr<messages::StartInstanceRequest> &request,
                                              litebus::Promise<runtime::v1::StartResponse> promise)
 {
-    auto failWith = [&promise](const std::string &message) {
+    // failWith is only ever invoked synchronously within this stack frame, so the
+    // captures are deliberately by-reference: the promise is settled exactly once
+    // and never escapes. (The request parameter is a const reference by design —
+    // it is read-only here and the lifetime is provided by the litebus::Defer
+    // bind-copy at the call site, matching the sibling OnStartRuntimeDone.)
+    auto failWith = [&promise, &request](const std::string &message) {
         runtime::v1::StartResponse failRsp{};
         failRsp.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
         failRsp.set_message(message);
+        trace::StopSandboxCreateSpan(request, failRsp);
         promise.SetValue(failRsp);
     };
 
@@ -422,6 +435,7 @@ void SupervisorExecutor::OnCreateSandboxDone(const litebus::Future<nlohmann::jso
     rsp.set_code(0);
     rsp.set_message("success");
     rsp.set_id(sandboxId);
+    trace::StopSandboxCreateSpan(request, rsp);
     promise.SetValue(rsp);
 }
 

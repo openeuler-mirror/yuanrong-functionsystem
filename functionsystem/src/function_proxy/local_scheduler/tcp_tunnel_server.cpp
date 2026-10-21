@@ -55,6 +55,14 @@ constexpr size_t PORT_FORWARD_FIELD_COUNT = 3;
 constexpr size_t PORT_FORWARD_HOST_INDEX = 1;
 constexpr size_t PORT_FORWARD_CONTAINER_INDEX = 2;
 constexpr size_t RELAY_DESCRIPTOR_COUNT = 2;
+// Length bounds for client-supplied string fields that end up in logs and
+// trace attributes. traceparent is exactly 55 bytes per W3C Trace Context;
+// traceID follows this platform's X-Trace-Id convention (an arbitrary
+// uuid-ish string, so 64 with headroom); instanceID/requestID are identifiers
+// (uuid-scale, 128 with headroom). Anything longer is hostile input.
+constexpr size_t MAX_TRACE_ID_FIELD_LENGTH = 64;
+constexpr size_t MAX_TRACEPARENT_FIELD_LENGTH = 55;
+constexpr size_t MAX_IDENT_FIELD_LENGTH = 128;
 
 struct TCPPortMapping {
     int hostPort;
@@ -316,11 +324,7 @@ std::optional<TCPPortMapping> ParseTCPPortMapping(const nlohmann::json &value)
     return TCPPortMapping{ hostPort.value(), containerPort.value() };
 }
 
-struct TunnelRequest {
-    std::string instanceID;
-    std::string requestID;
-    int targetPort{ 0 };
-};
+// TunnelRequest lives in tcp_tunnel_server.h (public, unit-testable).
 
 bool AuthenticateClient(SSL *ssl, int clientFd, bool enableTLS)
 {
@@ -346,24 +350,73 @@ bool ReadTunnelRequest(SSL *ssl, int clientFd, TunnelRequest &request, std::stri
     if (!ReadHeader(ssl, clientFd, header, error)) {
         return false;
     }
+    return ParseTunnelRequestHeader(header, request, error);
+}
+
+// Wire-string guard for client-supplied fields that end up in logs and trace
+// attributes (traceID/traceparent/instanceID/requestID): a present value must
+// be bounded in length and free of anything that could forge a log line
+// (CR/LF, escapes). Empty values pass unvalidated — the correlation fields are
+// optional and absent on old frontends (instanceID/requestID emptiness is
+// rejected separately before the charset check).
+bool IsValidWireString(const std::string &value, size_t maxLength)
+{
+    if (value.empty()) {
+        return true;
+    }
+    if (value.size() > maxLength) {
+        return false;
+    }
+    return std::all_of(value.begin(), value.end(), [](unsigned char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '-' || c == '_' ||
+               c == '.' || c == ':';
+    });
+}
+}  // namespace
+
+bool ParseTunnelRequestHeader(const nlohmann::json &header, TunnelRequest &request, std::string &error)
+{
+    // Reset the out-params first so a rejected parse never leaves fields from a
+    // previous request behind, and a stale error never masks the current one.
+    request = TunnelRequest{};
+    error.clear();
     try {
-        request.instanceID = header.value("instanceID", std::string{});
-        request.requestID = header.value("requestID", std::string{});
-        request.targetPort = header.value("targetPort", 0);
-        const bool invalid = header.value("tunnelVersion", 0) != TUNNEL_VERSION || request.instanceID.empty() ||
-                             request.requestID.empty() || header.value("protocol", std::string{}).empty() ||
-                             request.targetPort < 0 || request.targetPort > UINT16_MAX;
+        // Read and validate into locals first; the out-param is only written
+        // after every check passes, so a rejected header never leaves a
+        // partially-filled request behind (an attacker-controlled
+        // instanceID/targetPort the caller might otherwise act on).
+        const std::string instanceID = header.value("instanceID", std::string{});
+        const std::string requestID = header.value("requestID", std::string{});
+        const std::string protocol = header.value("protocol", std::string{});
+        const int targetPort = header.value("targetPort", 0);
+        // Optional correlation fields; absent on old frontends. When present
+        // they must be well-formed (bounded, log-safe charset) — a malformed
+        // value rejects the request instead of flowing into logs/trace. The
+        // identifier fields get the same guard: they also come straight off
+        // the wire and are logged on every dial/accept path.
+        const std::string traceID = header.value("traceID", std::string{});
+        const std::string traceParent = header.value("traceparent", std::string{});
+        const bool invalid = header.value("tunnelVersion", 0) != TUNNEL_VERSION || instanceID.empty() ||
+                             requestID.empty() || protocol.empty() || targetPort <= 0 || targetPort > UINT16_MAX ||
+                             !IsValidWireString(instanceID, MAX_IDENT_FIELD_LENGTH) ||
+                             !IsValidWireString(requestID, MAX_IDENT_FIELD_LENGTH) ||
+                             !IsValidWireString(traceID, MAX_TRACE_ID_FIELD_LENGTH) ||
+                             !IsValidWireString(traceParent, MAX_TRACEPARENT_FIELD_LENGTH);
         if (invalid) {
             error = "unsupported tunnel request";
             return false;
         }
+        request.instanceID = instanceID;
+        request.requestID = requestID;
+        request.targetPort = targetPort;
+        request.traceID = traceID;
+        request.traceParent = traceParent;
     } catch (const std::exception &exception) {
         error = std::string("invalid tunnel header fields: ") + exception.what();
         return false;
     }
     return true;
 }
-}  // namespace
 
 int ResolvePublishedTCPPort(const std::string &portForwardMetadata, int targetPort, std::string &error)
 {
@@ -573,6 +626,43 @@ std::string TcpTunnelServer::ResolveContainerIP(const std::string &instanceID, s
     return instance.containerip();
 }
 
+bool TcpTunnelServer::ResolveBackendAddress(const TunnelRequest &request, std::string &connectHost, int &backendPort,
+                                            std::string &error) const
+{
+    // Reset all out-params on entry (same contract as ParseTunnelRequestHeader):
+    // the branch on error.empty() below must be independent of the caller, and a
+    // false return must never leave a stale host/port behind for the caller to use.
+    error.clear();
+    connectHost.clear();
+    backendPort = 0;
+    const std::string containerIP = ResolveContainerIP(request.instanceID, error);
+    if (!containerIP.empty()) {
+        // Network isolation mode: sandbox has its own netns, loopback can't reach AgentServer.
+        // Connect directly to sandboxIP:containerPort (targetPort semantics == containerPort).
+        connectHost = containerIP;
+        backendPort = request.targetPort;
+        return true;
+    }
+    if (!error.empty()) {
+        // Instance not managed here / not RUNNING — fail fast.
+        YRLOG_WARN("{}|TCP tunnel resolve failed for instance {}: {} (trace_id={})", request.requestID,
+                   request.instanceID, error, request.traceID.empty() ? "-" : request.traceID);
+        return false;
+    }
+    // Host network mode: no containerIP, fall back to loopback:hostPort.
+    const int hostPort = ResolveHostPort(request.instanceID, request.targetPort, error);
+    if (hostPort <= 0) {
+        YRLOG_WARN("{}|TCP tunnel resolve failed for instance {}: {} (trace_id={})", request.requestID,
+                   request.instanceID, error, request.traceID.empty() ? "-" : request.traceID);
+        return false;
+    }
+    backendPort = hostPort;
+    // Assign the out-param explicitly instead of relying on ConnectLocalPort
+    // treating an empty host as loopback — the success path must always set it.
+    connectHost = "127.0.0.1";
+    return true;
+}
+
 void TcpTunnelServer::HandleClient(int clientFd)
 {
     ClientSession session;
@@ -595,29 +685,16 @@ bool TcpTunnelServer::ServeClient(ClientSession &session)
     }
     session.instanceID = request.instanceID;
     session.requestID = request.requestID;
-    std::string containerIP = ResolveContainerIP(request.instanceID, error);
-    int backendPort = 0;
     std::string connectHost;
-    if (!containerIP.empty()) {
-        // Network isolation mode: sandbox has its own netns, loopback can't reach AgentServer.
-        // Connect directly to sandboxIP:containerPort (targetPort semantics == containerPort).
-        connectHost = containerIP;
-        backendPort = request.targetPort;
-    } else if (!error.empty()) {
-        // Instance not managed here / not RUNNING — fail fast.
+    int backendPort = 0;
+    if (!ResolveBackendAddress(request, connectHost, backendPort, error)) {
         (void)SendResponse(session.ssl, session.clientFd, false, error);
         return false;
-    } else {
-        // Host network mode: no containerIP, fall back to loopback:hostPort.
-        const int hostPort = ResolveHostPort(request.instanceID, request.targetPort, error);
-        if (hostPort <= 0) {
-            (void)SendResponse(session.ssl, session.clientFd, false, error);
-            return false;
-        }
-        backendPort = hostPort;
     }
     session.backendFd = ConnectLocalPort(connectHost, backendPort);
     if (session.backendFd < 0) {
+        YRLOG_WARN("{}|TCP tunnel failed to connect instance {} target port {} (trace_id={})", request.requestID,
+                   request.instanceID, backendPort, request.traceID.empty() ? "-" : request.traceID);
         (void)SendResponse(session.ssl, session.clientFd, false, "failed to connect instance target port");
         return false;
     }
@@ -627,7 +704,9 @@ bool TcpTunnelServer::ServeClient(ClientSession &session)
     }
     idleMgr_->SessionCountDelta(session.instanceID, 1);
     session.counted = true;
-    YRLOG_INFO("{}|accepted TCP tunnel for instance {}", session.requestID, session.instanceID);
+    YRLOG_INFO("{}|accepted TCP tunnel for instance {} (trace_id={}, traceparent={})", session.requestID,
+               session.instanceID, request.traceID.empty() ? "-" : request.traceID,
+               request.traceParent.empty() ? "-" : request.traceParent);
     if (!SendResponse(session.ssl, session.clientFd, true, "")) {
         return false;
     }

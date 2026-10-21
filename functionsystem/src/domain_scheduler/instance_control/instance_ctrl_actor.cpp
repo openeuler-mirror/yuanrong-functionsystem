@@ -21,6 +21,7 @@
 #include "common/constants/actor_name.h"
 #include "common/create_agent_decision/create_agent_decision.h"
 #include "common/logs/logging.h"
+#include "common/trace/create_trace_helper.h"
 #include "common/trace/trace_manager.h"
 #include "common/proto/pb/posix/message.pb.h"
 #include "common/schedule_plugin/common/preallocated_context.h"
@@ -130,12 +131,13 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
     const litebus::Future<ScheduleResult> &result, const std::shared_ptr<messages::ScheduleRequest> &req,
     uint32_t dispatchTimes)
 {
-        // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::K_DOMAIN_SCHEDULE, req->requestid());
-
     ASSERT_IF_NULL(recorder_);
     recorder_->EraseScheduleRequest(req->requestid());
     auto schedResult = result.Get();
+    // Remap before stamping the span so the traced code matches the code the caller
+    // actually receives (remapping after the StopSpan would leave
+    // INVALID_RESOURCE_PARAMETER in the trace while PARAMETER_ERROR /
+    // RESOURCE_NOT_ENOUGH is returned, misleading error attribution).
     if (schedResult.code == static_cast<int32_t>(StatusCode::INVALID_RESOURCE_PARAMETER)) {
         if (isHeader_) {
             schedResult.code = static_cast<int32_t>(StatusCode::PARAMETER_ERROR);
@@ -143,6 +145,16 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
             schedResult.code = static_cast<int32_t>(StatusCode::RESOURCE_NOT_ENOUGH);
         }
     }
+    // todo(lwy_robb): to use traceID
+    // Stop after the schedule result is resolved so a failed domain decision
+    // stamps the span with the error code/message (same convention as
+    // yr.download.error_*).
+    trace::AttributesVector domainScheduleAttrs;
+    if (schedResult.code != static_cast<int32_t>(StatusCode::SUCCESS)) {
+        trace::AppendErrorAttrs(domainScheduleAttrs, static_cast<int64_t>(schedResult.code), schedResult.reason);
+    }
+    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::K_DOMAIN_SCHEDULE, req->requestid(),
+                                                domainScheduleAttrs);
 
     if (schedResult.code == static_cast<int32_t>(StatusCode::PARAMETER_ERROR) ||
         schedResult.code == static_cast<int32_t>(StatusCode::RESOURCE_NOT_ENOUGH) ||

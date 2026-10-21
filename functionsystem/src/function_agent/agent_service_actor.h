@@ -458,7 +458,8 @@ protected:
     void Init() override;
     void Finalize() override;
     void DownloadCodeAndStartRuntime(const std::shared_ptr<std::queue<DeployerParameters>> &deployObjects,
-                                     const std::shared_ptr<messages::DeployInstanceRequest> &req);
+                                     const std::shared_ptr<messages::DeployInstanceRequest> &req,
+                                     const std::shared_ptr<bool> &downloadSpanActive);
 
 private:
     bool SetNetwork(const std::vector<NetworkConfig> &configs);
@@ -492,8 +493,10 @@ private:
     void CleanRuntimeManagerStatus(uint32_t retryTimes);
     void GetDownloadCodeResult(const std::shared_ptr<std::queue<DeployerParameters>> &deployObjects,
                                const std::shared_ptr<messages::DeployInstanceRequest> &req,
-                               const std::string &destination, const litebus::Future<DeployResult> &result);
-    bool IsDownloadFailed(const std::shared_ptr<messages::DeployInstanceRequest> &req);
+                               const std::shared_ptr<bool> &downloadSpanActive, const std::string &destination,
+                               const litebus::Future<DeployResult> &result);
+    bool IsDownloadFailed(const std::shared_ptr<messages::DeployInstanceRequest> &req,
+                          const std::shared_ptr<bool> &downloadSpanActive);
     static void StartCodeDownloadSpan(const DeployInstanceRequest &request);
     static void StopCodeDownloadSpan(const DeployInstanceRequest &request, const DeployResult &result);
     void DownloadCode(const std::shared_ptr<messages::DeployRequest> &request,

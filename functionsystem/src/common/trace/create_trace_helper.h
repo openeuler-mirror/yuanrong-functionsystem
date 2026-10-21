@@ -29,6 +29,58 @@ namespace functionsystem::trace {
 inline constexpr char kCodeDownloadSpanName[] = "yr.instance.download_code";
 inline constexpr char kCreateSandboxSpanName[] = "yr.instance.create_sandbox";
 
+// Error attributes shared by stage spans (yr.schedule.*, yr.instance.deploy, ...).
+// Precedent: yr.download.error_code / yr.sandbox.code in the helpers below.
+inline constexpr char kErrorCodeAttr[] = "yr.error_code";
+inline constexpr char kErrorMessageAttr[] = "yr.error_message";
+
+// Upper bound for error-message attribute payloads: messages may embed user
+// input, paths or runtime identifiers; clamping them keeps trace size bounded
+// and limits the information-leak surface of the tracing backend. Only error
+// messages are clamped today (AppendErrorAttrs), not every attribute.
+inline constexpr size_t kMaxTraceAttrMessageLength = 1024;
+inline constexpr char kTraceAttrTruncationSuffix[] = "...(truncated)";
+
+inline std::string TruncateTraceAttr(const std::string &value)
+{
+    if (value.size() <= kMaxTraceAttrMessageLength) {
+        return value;
+    }
+    // Keep head AND tail around the marker: error causes often sit at the end of
+    // the message ("caused by: ...", errno/exception text), so a head-only cut
+    // would drop exactly the root cause. The suffix is budgeted so the result
+    // never exceeds the bound, and both cut points back off to UTF-8 character
+    // boundaries (exporters reject or replace invalid UTF-8 attribute values).
+    constexpr size_t suffixLength = sizeof(kTraceAttrTruncationSuffix) - 1;  // without the NUL
+    const size_t budget = kMaxTraceAttrMessageLength - suffixLength;
+    const size_t headBudget = budget / 2;
+    size_t headEnd = headBudget;
+    while (headEnd > 0 && (static_cast<unsigned char>(value[headEnd]) & 0xC0) == 0x80) {
+        --headEnd;
+    }
+    size_t tailStart = value.size() - (budget - headBudget);
+    while (tailStart < value.size() && (static_cast<unsigned char>(value[tailStart]) & 0xC0) == 0x80) {
+        ++tailStart;
+    }
+    return value.substr(0, headEnd) + kTraceAttrTruncationSuffix + value.substr(tailStart);
+}
+
+// Appends the failure code/message attributes to attrs when the outcome is an
+// error. Shared by stage-span stop points (see D4-err in the design doc).
+// Defensive on two fronts: the success sentinel is never stamped (monitors key
+// on the presence of yr.error_code, so a stray 0 would flag healthy spans), and
+// the message is truncated to kMaxTraceAttrMessageLength.
+inline void AppendErrorAttrs(AttributesVector &attrs, int64_t code, const std::string &message)
+{
+    if (code == static_cast<int64_t>(StatusCode::SUCCESS)) {
+        return;
+    }
+    attrs.emplace_back(kErrorCodeAttr, code);
+    if (!message.empty()) {
+        attrs.emplace_back(kErrorMessageAttr, TruncateTraceAttr(message));
+    }
+}
+
 inline void StartCodeDownloadSpan(const std::shared_ptr<messages::DeployInstanceRequest> &request)
 {
     if (request == nullptr || request->requestid().empty()) {

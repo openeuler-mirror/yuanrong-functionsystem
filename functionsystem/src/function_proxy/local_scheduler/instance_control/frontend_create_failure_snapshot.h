@@ -22,18 +22,28 @@
 
 namespace functionsystem::local_scheduler {
 
-// Last failure evidence captured for a frontend create (POST /api/agent) whose
-// runtime deployment failed while the frontend ready ticket is still pending.
-// Only written when IsCreateByFrontend && create_error_policy==last_failure_on_timeout;
+// Last failure evidence + retry bookkeeping captured for a frontend create
+// (POST /api/agent) while the frontend ready ticket is still pending. Only
+// written when IsCreateByFrontend && create_error_policy==last_failure_on_timeout;
 // it does NOT alter the reschedule/retry state machine. The ready-timeout closure
 // reads this snapshot to surface the real supervisor error instead of a generic
 // "ready call result timed out" string. Overwritten on every deploy failure so
-// the last attempt's reason wins.
+// the last attempt's reason wins (retry fields are preserved across overwrites).
+// The retriedTimes/firstFailure* fields are maintained by the readiness redeploy
+// loop (HandleCheckReadinessFailure) so a success-after-retry create still shows
+// its retry history: the consumer stops the yr.create span with these attributes
+// when the ready ticket is fulfilled or times out.
 struct FrontendCreateFailureSnapshot {
     bool present { false };
     int32_t code { 0 };
     std::string message;
     std::string instanceID;
+    // Readiness redeploy count before the ready ticket was fulfilled/timed out;
+    // 0 when the create succeeded on the first attempt.
+    uint32_t retriedTimes { 0 };
+    // First readiness failure (code may be 0 when only a message is available).
+    int32_t firstFailureCode { 0 };
+    std::string firstFailureMessage;
 };
 
 }  // namespace functionsystem::local_scheduler

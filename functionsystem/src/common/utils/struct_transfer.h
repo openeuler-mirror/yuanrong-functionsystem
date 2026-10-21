@@ -60,6 +60,22 @@ const std::string CREATE_ERROR_POLICY_KEY = "create_error_policy";
 // failure snapshot (instead of a generic timeout string) and the ready-wait unregister
 // cancels any in-flight schedule/retry via KillFrontend.
 const std::string CREATE_ERROR_POLICY_LAST_FAILURE = "last_failure_on_timeout";
+// InstanceInfo.extensions key marking that the frontend ready ticket was registered
+// for this schedule request. Written by InstanceCtrlActor::ScheduleFrontendAndWaitReady
+// after successful registration (a rejected duplicate requestID returns before the
+// write, so a duplicate's request never carries the marker); read by the gRPC create
+// dispatcher to distinguish "schedule failed after registration" (this request owns
+// the yr.create span) from a duplicate requestID rejection (the pending span belongs
+// to the original request).
+//
+// Ownership/threading notes: the marker lives on the per-request ScheduleRequest
+// built by BuildFrontendScheduleRequest — each create request gets its own
+// ScheduleRequest/InstanceInfo, so a duplicate request can never observe the
+// original request's marker (it reads its own marker-free copy). The actor writes
+// the marker before the schedule promise resolves, and the dispatcher reads it in
+// a continuation chained on that same promise/future, so the write is
+// visible-before-read via the promise/future happens-before edge.
+const std::string FRONTEND_READY_TICKET_REGISTERED = "frontend_ready_ticket_registered";
 const std::string RUNTIME_UUID_PREFIX = "runtime-";
 const std::string APP_ENTRYPOINT = "ENTRYPOINT";
 const std::string RUNTIME_ENTRYPOINT = "RUNTIME_ENTRYPOINT";

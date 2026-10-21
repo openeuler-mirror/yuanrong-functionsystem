@@ -133,6 +133,7 @@ private:
         const std::string &runtimeID, const messages::StartInstanceResponse &response);
 
     void OnCreateSandboxDone(const litebus::Future<nlohmann::json> &future, const std::string &runtimeID,
+                             const std::shared_ptr<messages::StartInstanceRequest> &request,
                              litebus::Promise<runtime::v1::StartResponse> promise);
     void OnStartRuntimeDone(const litebus::Future<runtime::v1::StartResponse> &future,
                             const std::shared_ptr<messages::StartInstanceRequest> &request,
