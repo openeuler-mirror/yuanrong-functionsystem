@@ -94,6 +94,51 @@ constexpr int HTTP_STATUS_OK_MAX = 300;   // exclusive upper bound of 2xx
 constexpr int HTTP_STATUS_NO_CONTENT = 204;
 constexpr double CPU_MILLICORES_PER_CORE = 1000.0;   // CPU resource is in milli-cores (1000 = 1 core)
 
+namespace {
+
+// Split docker-style "user[:group]" (SDK sandbox.create(user=...)) into a complete run_as pair:
+// jiuwenbox resolves it host-side (digit-only = raw id, else passwd/group name) and requires
+// both, so a missing side falls back to the other; "" and ":" leave both empty (no identity).
+void ParseRunAsPair(const std::string &rawHostUser, std::string &runAsUser, std::string &runAsGroup)
+{
+    if (rawHostUser.empty()) {
+        return;
+    }
+    const auto colon = rawHostUser.find(':');
+    runAsUser = rawHostUser.substr(0, colon);
+    runAsGroup = colon == std::string::npos ? runAsUser : rawHostUser.substr(colon + 1);
+    if (runAsUser.empty()) {
+        runAsUser = runAsGroup;
+    }
+    if (runAsGroup.empty()) {
+        runAsGroup = runAsUser;
+    }
+}
+
+// Map scheduling CPU (milli-cores, same source BuildCgroup/BuildResources read) and memory (MB)
+// to conch vcpu_num/vcpu_max/ram_mb so conch doesn't fall back to its 2-vCPU/2048MB default;
+// both round up (a sub-core request still gets 1). vcpu_max follows vcpu_num: conchd defaults
+// an omitted one to 2 and rejects vcpu_max < vcpu_num.
+void MapConchResources(const messages::RuntimeInstanceInfo &info, nlohmann::json &conch)
+{
+    const auto &runtimeResources = info.runtimeconfig().resources().resources();
+    if (auto cpuIt = runtimeResources.find(resource_view::CPU_RESOURCE_NAME); cpuIt != runtimeResources.end()) {
+        const double cpuVal = Executor::GetEffectiveScalarLimit(cpuIt->second, 0);
+        if (cpuVal > 0) {
+            const int vcpuNum = std::max(1, static_cast<int>(std::ceil(cpuVal / CPU_MILLICORES_PER_CORE)));
+            conch["vcpu_num"] = vcpuNum;
+            conch["vcpu_max"] = vcpuNum;
+        }
+    }
+    if (auto memIt = runtimeResources.find(resource_view::MEMORY_RESOURCE_NAME); memIt != runtimeResources.end()) {
+        const double memVal = Executor::GetEffectiveScalarLimit(memIt->second, 0);
+        if (memVal > 0) {
+            conch["ram_mb"] = static_cast<int64_t>(std::ceil(memVal));
+        }
+    }
+}
+}  // namespace
+
 ConchExecutor::ConchExecutor(const std::string &name, const litebus::AID &functionAgentAID)
     : Executor(name), functionAgentAID_(functionAgentAID)
 {
@@ -329,9 +374,9 @@ void ConchExecutor::BindHostLogDir(const std::string &runtimeID, nlohmann::json 
 }
 
 // Build the jiuwenbox sandbox create body for the conch backend. ConchPolicy is extra="forbid"
-// (only template_name/vcpu_num/vcpu_max/ram_mb/env/filesystem_policy/network accepted), so none
-// of supervisor's bwrap-only keys — policy.environment/process/namespace/cgroup, top-level
-// filesystem_policy — may be emitted; any of them yields a 400.
+// (only template_name/run_as_user/run_as_group/vcpu_num/vcpu_max/ram_mb/env/filesystem_policy/
+// network accepted), so none of supervisor's bwrap-only keys — policy.environment/process/
+// namespace/cgroup, top-level filesystem_policy — may be emitted; any of them yields a 400.
 nlohmann::json ConchExecutor::CreateRequest(const std::shared_ptr<messages::StartInstanceRequest> &request)
 {
     const auto &info = request->runtimeinstanceinfo();
@@ -341,7 +386,13 @@ nlohmann::json ConchExecutor::CreateRequest(const std::shared_ptr<messages::Star
         auto it = deployOpts.find(key);
         return it != deployOpts.end() ? it->second : std::string{};
     };
-    const std::string hostUser = getOpt(HOST_USER).empty() ? "agentos" : getOpt(HOST_USER);
+    // host_user (see ParseRunAsPair) is the guest identity; emit only when explicitly set —
+    // the "agentos" default is a home convention, not an identity; unset keeps root, like
+    // docker's empty User.
+    std::string runAsUser;
+    std::string runAsGroup;
+    ParseRunAsPair(getOpt(HOST_USER), runAsUser, runAsGroup);
+    const std::string hostUser = runAsUser.empty() ? "agentos" : runAsUser;
     const std::string rootfsJson = getOpt(CONTAINER_ROOTFS);
     const std::string homeDir = "/home/" + hostUser;
 
@@ -349,6 +400,11 @@ nlohmann::json ConchExecutor::CreateRequest(const std::shared_ptr<messages::Star
 
     // template_name from rootfs imageurl; empty -> jiuwenbox env / conchd default fallback.
     conch["template_name"] = ParseRootfsImageUrl(rootfsJson);
+
+    if (!runAsUser.empty()) {
+        conch["run_as_user"] = std::move(runAsUser);
+        conch["run_as_group"] = std::move(runAsGroup);
+    }
 
     // bind_mounts under conch.filesystem_policy (NOT the bwrap top-level filesystem_policy);
     // each host_path must exist and be a directory on the jiuwenbox host (validate_conch_policy).
@@ -363,25 +419,7 @@ nlohmann::json ConchExecutor::CreateRequest(const std::shared_ptr<messages::Star
         conch["env"][kv.first] = kv.second;
     }
 
-    // Resources: scheduling CPU is milli-cores / Memory MB (same source BuildCgroup /
-    // BuildResources read); mapped to vcpu_num / ram_mb so conch doesn't fall back to its
-    // 2-vCPU/2048MB default, rounding up (a sub-core request still gets 1). vcpu_max follows
-    // vcpu_num: conchd defaults an omitted one to 2 and rejects vcpu_max < vcpu_num.
-    const auto &runtimeResources = info.runtimeconfig().resources().resources();
-    if (auto cpuIt = runtimeResources.find(resource_view::CPU_RESOURCE_NAME); cpuIt != runtimeResources.end()) {
-        const double cpuVal = Executor::GetEffectiveScalarLimit(cpuIt->second, 0);
-        if (cpuVal > 0) {
-            const int vcpuNum = std::max(1, static_cast<int>(std::ceil(cpuVal / CPU_MILLICORES_PER_CORE)));
-            conch["vcpu_num"] = vcpuNum;
-            conch["vcpu_max"] = vcpuNum;
-        }
-    }
-    if (auto memIt = runtimeResources.find(resource_view::MEMORY_RESOURCE_NAME); memIt != runtimeResources.end()) {
-        const double memVal = Executor::GetEffectiveScalarLimit(memIt->second, 0);
-        if (memVal > 0) {
-            conch["ram_mb"] = static_cast<int64_t>(std::ceil(memVal));
-        }
-    }
+    MapConchResources(info, conch);
 
     nlohmann::json policy = nlohmann::json::object();
     policy["conch"] = std::move(conch);
