@@ -77,6 +77,17 @@ public:
         return CreateRequest(request);
     }
 
+    void TestSetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *req, const Envs &envs,
+                                           const std::shared_ptr<messages::StartInstanceRequest> &request)
+    {
+        SetRequestEnvsAndLogsForStart(req, envs, request);
+    }
+
+    std::string TestBuildSessionLogSetupCommand(const std::string &redirect)
+    {
+        return BuildSessionLogSetupCommand(redirect);
+    }
+
     messages::StartInstanceResponse TestGenSuccessStartInstanceResponse(
         const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &sandboxID,
         const std::string &sandboxIP = "")
@@ -1193,6 +1204,141 @@ TEST_F(SupervisorExecutorTest, CreateRequest_NoResourcesOmitsCgroup)
 }
 
 /**
+ * Feature: CreateRequest filesystem policy
+ * Description: Without a workspace the home is a jiuwenbox-managed lifecycle `directories`
+ *              entry (original policy shape) — no bind of our own, and no host log dir
+ *              mount: runtime logs live inside the home at <home>/yr_sessions/latest/logs,
+ *              created in-sandbox by BuildCommand's mkdir prefix.
+ */
+TEST_F(SupervisorExecutorTest, CreateRequest_HomeAsLifecycleDirWithoutWorkspace)
+{
+    auto request = GenStartInstanceRequest();  // runtimeID: test_runtime_id, no rootfs mounts
+
+    auto req = executor_->TestCreateRequest(request);
+    const auto &fs = req["policy"]["filesystem_policy"];
+    EXPECT_FALSE(fs.contains("bind_mounts"));
+    ASSERT_TRUE(fs.contains("directories"));
+    ASSERT_EQ(fs["directories"].size(), 1);
+    EXPECT_EQ(fs["directories"][0], "/home/agentos");
+    ASSERT_EQ(fs["read_write"].size(), 1);
+    EXPECT_EQ(fs["read_write"][0], "/home/agentos");
+}
+
+/**
+ * Feature: CreateRequest filesystem policy
+ * Description: With a workspace (rootfs.mounts binds the home) the only binds are the
+ *              user-provided rootfs mounts and no `directories` entry is added.
+ */
+TEST_F(SupervisorExecutorTest, CreateRequest_WorkspaceHomeUsesRootfsMounts)
+{
+    auto request = GenStartInstanceRequest();
+    (*request->mutable_runtimeinstanceinfo()->mutable_deploymentconfig()->mutable_deployoptions())[CONTAINER_ROOTFS] =
+        R"({"mounts":[{"source":"/data/ws","target":"/home/agentos"}]})";
+
+    auto req = executor_->TestCreateRequest(request);
+    const auto &fs = req["policy"]["filesystem_policy"];
+    ASSERT_TRUE(fs.contains("bind_mounts"));
+    ASSERT_EQ(fs["bind_mounts"].size(), 1);
+    EXPECT_EQ(fs["bind_mounts"][0]["host_path"], "/data/ws");
+    EXPECT_EQ(fs["bind_mounts"][0]["sandbox_path"], "/home/agentos");
+    EXPECT_FALSE(fs.contains("directories"));
+}
+
+/**
+ * Feature: CreateRequest filesystem policy
+ * Description: A custom HOST_USER moves the home (and with it the runtime log dir
+ *              <home>/yr_sessions/latest/logs) under /home/<user>.
+ */
+TEST_F(SupervisorExecutorTest, CreateRequest_HostUserMovesHomePaths)
+{
+    auto request = GenStartInstanceRequest();
+    (*request->mutable_runtimeinstanceinfo()->mutable_deploymentconfig()->mutable_deployoptions())[HOST_USER] =
+        "User9876";
+
+    auto req = executor_->TestCreateRequest(request);
+    EXPECT_EQ(req["policy"]["filesystem_policy"]["directories"][0], "/home/User9876");
+    EXPECT_EQ(req["policy"]["environment"]["JIUWENSWARM_HOME"], "/home/User9876");
+}
+
+/**
+ * Feature: SetRequestEnvsAndLogsForStart
+ * Description: The redirect goes to the sandbox-visible log path (no host path inside the
+ *              sandbox), stdout and stderr share one file, and GLOG_log_dir
+ *              are overridden to the same dir so .std/ds client logs land beside the
+ *              redirect log.
+ */
+TEST_F(SupervisorExecutorTest, SetRequestEnvsAndLogsForStart_RedirectsIntoSandboxLogDir)
+{
+    auto request = GenStartInstanceRequest();  // runtimeID: test_runtime_id
+    runtime::v1::StartRequest start;
+
+    executor_->TestSetRequestEnvsAndLogsForStart(&start, Envs{}, request);
+
+    EXPECT_EQ(start.stdout(), "/home/agentos/yr_sessions/latest/logs/test_runtime_id.log");
+    EXPECT_EQ(start.stderr(), start.stdout());
+    EXPECT_EQ(start.envs().at("GLOG_log_dir"), "/home/agentos/yr_sessions/latest/logs");
+    EXPECT_EQ(start.envs().at("YR_ONLY_STDOUT"), "true");
+}
+
+/**
+ * Feature: SetRequestEnvsAndLogsForStart
+ * Description: A custom HOST_USER moves the redirect path and the GLOG dirs under
+ *              /home/<user>.
+ */
+TEST_F(SupervisorExecutorTest, SetRequestEnvsAndLogsForStart_HostUserMovesRedirectPath)
+{
+    auto request = GenStartInstanceRequest();  // runtimeID: test_runtime_id
+    (*request->mutable_runtimeinstanceinfo()->mutable_deploymentconfig()->mutable_deployoptions())[HOST_USER] =
+        "User9876";
+    runtime::v1::StartRequest start;
+
+    executor_->TestSetRequestEnvsAndLogsForStart(&start, Envs{}, request);
+
+    EXPECT_EQ(start.stdout(), "/home/User9876/yr_sessions/latest/logs/test_runtime_id.log");
+    EXPECT_EQ(start.stderr(), start.stdout());
+    EXPECT_EQ(start.envs().at("GLOG_log_dir"), "/home/User9876/yr_sessions/latest/logs");
+}
+
+/**
+ * Feature: BuildSessionLogSetupCommand
+ * Description: With the standard sandbox log path shape and a session id available from
+ *              runtimeLogPath's parent dir, the setup prefix creates the real session log
+ *              dir and the relative latest symlink (a legacy real "latest" directory is
+ *              migrated under the session dir so its logs survive).
+ */
+TEST_F(SupervisorExecutorTest, BuildSessionLogSetupCommand_SessionLayoutWithLatestSymlink)
+{
+    executor_->config_.runtimeLogPath = "/var/log/agentos/yr_sessions/20261022_064556/logs";
+
+    EXPECT_EQ(executor_->TestBuildSessionLogSetupCommand("/home/agent os/yr_sessions/latest/logs/rt 1.log"),
+        "{ [ -L '/home/agent os/yr_sessions/latest' ] ||"
+        " mv '/home/agent os/yr_sessions/latest' '/home/agent os/yr_sessions/20261022_064556' 2>/dev/null || true; }"
+        " && mkdir -p '/home/agent os/yr_sessions/20261022_064556/logs'"
+        " && ln -sfn '20261022_064556' '/home/agent os/yr_sessions/latest'");
+}
+
+/**
+ * Feature: BuildSessionLogSetupCommand
+ * Description: Falls back to a plain mkdir of the redirect's parent dir when the path lacks
+ *              the <base>/latest/logs/<file> shape or no session id can be derived from
+ *              runtimeLogPath; returns "" when the redirect has no parent dir at all.
+ */
+TEST_F(SupervisorExecutorTest, BuildSessionLogSetupCommand_Fallbacks)
+{
+    executor_->config_.runtimeLogPath = "/var/log/agentos/yr_sessions/20261022_064556/logs";
+    // shallow path: no <base>/latest/logs depth
+    EXPECT_EQ(executor_->TestBuildSessionLogSetupCommand("/tmp/log dir/a.out"), "mkdir -p '/tmp/log dir'");
+    EXPECT_EQ(executor_->TestBuildSessionLogSetupCommand("/a/b"), "mkdir -p '/a'");
+    // standard shape but no session id derivable (runtimeLogPath without a parent dir)
+    executor_->config_.runtimeLogPath = "logs";
+    EXPECT_EQ(executor_->TestBuildSessionLogSetupCommand("/h/yr_sessions/latest/logs/rt.log"),
+        "mkdir -p '/h/yr_sessions/latest/logs'");
+    // no parent dir at all
+    EXPECT_EQ(executor_->TestBuildSessionLogSetupCommand("rt.log"), "");
+    EXPECT_EQ(executor_->TestBuildSessionLogSetupCommand("/rt.log"), "");
+}
+
+/**
  * Feature: BuildCommand
  * Description: BuildCommand wraps every argv token and redirect path in POSIX single-quotes
  *              so that sh -c takes them literally. A token containing a single quote must
@@ -1220,6 +1366,9 @@ TEST_F(SupervisorExecutorTest, BuildCommand_ShellQuotesTokensAndRedirects)
     EXPECT_THAT(cmdLine, testing::HasSubstr("'-c'"));
     // single quote inside token escaped via '\'' rather than closing the wrapper
     EXPECT_THAT(cmdLine, testing::HasSubstr("'print('\\''hello; rm -rf /'\\''"));
+    // the redirect's parent dir is created in-sandbox first (sh ">>" does not mkdir parents),
+    // quoted like every other token
+    EXPECT_THAT(cmdLine, testing::StartsWith("mkdir -p '/tmp/log dir' && "));
     // redirect paths quoted too (space + quote survived); append mode for copytruncate
     EXPECT_THAT(cmdLine, testing::HasSubstr(" >>'/tmp/log dir/a'\\''b.out'"));
     // stderr merged into stdout via 2>&1
@@ -1243,6 +1392,33 @@ TEST_F(SupervisorExecutorTest, BuildCommand_EmptyTokensAndPaths)
     ASSERT_EQ(command.size(), 3);
     std::string cmdLine = command[2];
     EXPECT_EQ(cmdLine, "'' 'arg with space' >>'' 2>&1");
+}
+
+/**
+ * Feature: BuildCommand
+ * Description: With the full sandbox log path shape (<home>/yr_sessions/latest/logs/<file>),
+ *              the command prefix creates the session layout like the yr CLI's host session
+ *              structure: the real dir <home>/yr_sessions/<session>/logs (the session id is
+ *              reused from the parent dir name of runtime_logs_dir) plus a relative latest
+ *              symlink to it; a legacy real "latest" directory is migrated under the session
+ *              dir so its logs survive.
+ */
+TEST_F(SupervisorExecutorTest, BuildCommand_CreatesSessionLayoutWithLatestSymlink)
+{
+    executor_->config_.runtimeLogPath = "/var/log/agentos/yr_sessions/20261022_064556/logs";
+    auto start = std::make_shared<runtime::v1::StartRequest>();
+    start->add_command("python3");
+    start->set_stdout("/home/agent os/yr_sessions/latest/logs/runtime-x 1.log");
+
+    auto command = executor_->TestBuildCommand(start);
+    ASSERT_EQ(command.size(), 3);
+    std::string cmdLine = command[2];
+
+    EXPECT_THAT(cmdLine, testing::StartsWith("{ [ -L '/home/agent os/yr_sessions/latest' ] ||"
+        " mv '/home/agent os/yr_sessions/latest' '/home/agent os/yr_sessions/20261022_064556' 2>/dev/null || true; }"
+        " && mkdir -p '/home/agent os/yr_sessions/20261022_064556/logs'"
+        " && ln -sfn '20261022_064556' '/home/agent os/yr_sessions/latest' && 'python3'"));
+    EXPECT_THAT(cmdLine, testing::HasSubstr(" >>'/home/agent os/yr_sessions/latest/logs/runtime-x 1.log' 2>&1"));
 }
 
 }  // namespace functionsystem::runtime_manager

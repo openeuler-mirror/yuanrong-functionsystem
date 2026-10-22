@@ -59,7 +59,6 @@ const std::string PRESTART_FLAG = "1";
 const std::string PARAM_RUNTIME_ID = "runtimeID";
 const std::string CPP_NEW_EXEC_PATH = "/cpp/bin/runtime";
 const std::string GO_NEW_EXEC_PATH = "/go/bin/goruntime";
-const std::string GLOG_LOG_DIR = "GLOG_log_dir";
 const std::string YR_LOG_LEVEL = "YR_LOG_LEVEL";
 const std::string PYTHON_PATH = "PYTHONPATH";
 const std::string PATH = "PATH";

@@ -240,7 +240,6 @@ bool SupervisorExecutor::IsReadonlyMount(const nlohmann::json &mount)
 nlohmann::json SupervisorExecutor::ParseBindMounts(const std::string &rootfsJson, const std::string &runtimeID)
 {
     nlohmann::json bindMounts = nlohmann::json::array();
-    BindHostLogDir(runtimeID, bindMounts);
     if (rootfsJson.empty()) {
         return bindMounts;
     }
@@ -304,22 +303,6 @@ nlohmann::json SupervisorExecutor::BuildCgroup(const messages::RuntimeInstanceIn
         }
     }
     return cgroup;
-}
-
-void SupervisorExecutor::BindHostLogDir(const std::string &runtimeID, nlohmann::json &bindMounts)
-{
-    const std::string hostLogDir = litebus::os::Join(config_.runtimeLogPath, config_.runtimeStdLogDir);
-    if (!hostLogDir.empty() && IsSafeBindSource(hostLogDir) && litebus::os::ExistPath(hostLogDir)) {
-        bindMounts.push_back({
-            { "host_path", hostLogDir },
-            { "sandbox_path", hostLogDir },
-            { "mode", "rw" },
-        });
-        return;
-    }
-
-    YRLOG_WARN("{}|skip log dir mount (path={}, safe={}, exists={}); yr logs may stay in-sandbox", runtimeID,
-               hostLogDir, IsSafeBindSource(hostLogDir), litebus::os::ExistPath(hostLogDir));
 }
 
 nlohmann::json SupervisorExecutor::CreateRequest(const std::shared_ptr<messages::StartInstanceRequest> &request)
@@ -535,6 +518,35 @@ void SupervisorExecutor::OnExecInSandboxDone(const litebus::Future<nlohmann::jso
     promise.SetValue(rsp);
 }
 
+std::string SupervisorExecutor::BuildSessionLogSetupCommand(const std::string &redirect) const
+{
+    const auto fileSlash = redirect.find_last_of('/');
+    if (fileSlash == std::string::npos || fileSlash == 0) {
+        return std::string{};
+    }
+    const std::string logDir = redirect.substr(0, fileSlash);               // <base>/latest/logs
+    const auto logDirSlash = logDir.find_last_of('/');
+    if (logDirSlash == std::string::npos || logDirSlash == 0) {
+        return "mkdir -p " + ShellQuote(logDir);
+    }
+    const std::string latestLink = logDir.substr(0, logDirSlash);           // <base>/latest
+    const auto latestSlash = latestLink.find_last_of('/');
+    if (latestSlash == std::string::npos || latestSlash == 0) {
+        return "mkdir -p " + ShellQuote(logDir);
+    }
+    const std::string sessionsBase = latestLink.substr(0, latestSlash);     // <base>
+    const std::string session = litebus::os::GetFileName(
+        config_.runtimeLogPath.substr(0, config_.runtimeLogPath.find_last_of('/')));
+    if (session.empty()) {
+        return "mkdir -p " + ShellQuote(logDir);
+    }
+    const std::string sessionDir = litebus::os::Join(sessionsBase, session);
+    const std::string sessionLogDir = litebus::os::Join(sessionDir, "logs");
+    return "{ [ -L " + ShellQuote(latestLink) + " ] || mv " + ShellQuote(latestLink) + " " +
+        ShellQuote(sessionDir) + " 2>/dev/null || true; } && mkdir -p " + ShellQuote(sessionLogDir) +
+        " && ln -sfn " + ShellQuote(session) + " " + ShellQuote(latestLink);
+}
+
 nlohmann::json SupervisorExecutor::BuildCommand(const std::shared_ptr<runtime::v1::StartRequest> &start)
 {
     auto command = nlohmann::json::array();
@@ -548,12 +560,14 @@ nlohmann::json SupervisorExecutor::BuildCommand(const std::shared_ptr<runtime::v
         // content (e.g. python -c "print('hello')") and must not be interpreted by sh.
         cmdLine += ShellQuote(start->command()[i]);
     }
-    // Reuse the redirect path already set on the StartRequest by SetRequestEnvsAndLogsForStart
-    // (which also mkdir/chmod it), instead of re-deriving the log layout here.
-    // Quote it too: runtimeID/path may contain spaces or shell metacharacters.
-    // stdout and stderr share one path (ConfigRuntimeRedirectLog); 2>&1 merges them into it.
-    // >> (O_APPEND) keeps the writer offset following EOF, in step with the
-    // logrotate copytruncate rotation done by LogManagerActor.
+    // The redirect's session layout is prepared by the setup prefix. Quote the redirect path
+    // too (runtimeID/paths may contain spaces or shell metacharacters). stdout and stderr
+    // share one path; 2>&1 merges them into it.
+    // >> (O_APPEND) keeps the writer offset following EOF.
+    const std::string setup = BuildSessionLogSetupCommand(start->stdout());
+    if (!setup.empty()) {
+        cmdLine = setup + " && " + cmdLine;
+    }
     cmdLine += " >>" + ShellQuote(start->stdout()) + " 2>&1";
 
     command.push_back("sh");
@@ -711,15 +725,26 @@ void SupervisorExecutor::SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest
                                                        const std::shared_ptr<messages::StartInstanceRequest> &request)
 {
     const auto &runtimeID = request->runtimeinstanceinfo().runtimeid();
+    const auto &deployOpts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
+    auto getOpt = [&deployOpts](const std::string &key) {
+        auto it = deployOpts.find(key);
+        return it != deployOpts.end() ? it->second : std::string{};
+    };
+    const std::string hostUser = getOpt(HOST_USER).empty() ? "agentos" : getOpt(HOST_USER);
+    const std::string sandboxLogDir = litebus::os::Join("/home/" + hostUser, SANDBOX_LOG_DIR_RELATIVE);
+
     const std::map<std::string, std::string> combineEnvs = cmdBuilder_.CombineEnvs(envs);
     req->mutable_envs()->insert(combineEnvs.begin(), combineEnvs.end());
+    (*req->mutable_envs())[GLOG_LOG_DIR] = sandboxLogDir;
     (*req->mutable_envs())[YR_ONLY_STDOUT] = "true";
 
-    std::string stdOut;
-    std::string stdErr;
-    ConfigRuntimeRedirectLog(stdOut, stdErr, runtimeID);  // base Executor impl (shared)
+    // Redirect into the sandbox-visible path under the user home. BuildCommand creates the dir
+    // inside the sandbox (the home may be backed by a user workspace we do not control
+    // host-side). Absolute path: ShellQuote'd (no ~ expansion) and HOME inside the sandbox is
+    // inherited from jiuwenbox-server.
+    const std::string stdOut = litebus::os::Join(sandboxLogDir, fmt::format("{}.log", runtimeID));
     req->set_stdout(stdOut);
-    req->set_stderr(stdErr);
+    req->set_stderr(stdOut);
 }
 
 Envs BuildMountForCodes(const std::shared_ptr<runtime::v1::StartRequest> &start,
