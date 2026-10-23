@@ -22,8 +22,6 @@
 #include <functional>
 #include <string>
 
-#include <grp.h>
-#include <pwd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -61,6 +59,11 @@ struct FrontendProxyServiceParam {
     // WorkspaceUidGidProvider 返回 workspace 目录的 (uid, gid),默认 1000:1000。
     // 单元测试可注入自定义值;生产环境从 flag 读取。
     using WorkspaceUidGidProvider = std::function<std::pair<uid_t, gid_t>()>;
+    // WorkspaceOwnerAuthorizer 校验调用租户(tenantID)是否有权操作指定 owner 的 workspace 目录。
+    // 生产环境必须接线(结合 context.tenantID 与 owner 的绑定关系),
+    // 与 invokeTenantAuthorizer 的 tenant 归属校验约定保持一致;
+    // 为空时视为单租户部署,信任 frontend 侧已完成的 owner 派生。
+    using WorkspaceOwnerAuthorizer = std::function<bool(const std::string &, const std::string &)>;
 
     std::string nodeID;
     std::string endpointAddress;
@@ -90,6 +93,9 @@ struct FrontendProxyServiceParam {
     WorkspaceStorageRootProvider workspaceStorageRootProvider;
     // Workspace 目录的 (uid, gid) Provider;为空时使用默认值 (1000, 1000)
     WorkspaceUidGidProvider workspaceUidGidProvider;
+    // Workspace owner 归属授权;为空时不做 owner↔tenant 绑定校验(单租户前提)。
+    // 生产环境接线后,非本租户的 owner 操作返回 ERR_AUTHORIZE_FAILED。
+    WorkspaceOwnerAuthorizer workspaceOwnerAuthorizer;
     bool enableCreateDispatch { false };
     bool enableKillDispatch { false };
     bool requireAuthenticatedPeer { false };
@@ -182,6 +188,13 @@ private:
     static std::string ValidateWorkspaceOwner(const std::string &owner);
     // ParseWorkspaceMode 解析权限位字符串(如 "0700"、"755"),失败返回 -1。
     static int ParseWorkspaceMode(const std::string &mode);
+    // ValidateWorkspaceCall 组合校验 workspace 请求:
+    //   请求身份(frontendClientID+requestID 必填)、租户标签一致性、owner 合法性。
+    // 调用方契约(handler.go)不传 tenantID,故不强制 tenantid 非空。
+    // 校验失败时写入 status 并返回 false,否则返回 true。
+    bool ValidateWorkspaceCall(const ::frontend_proxy::FrontendRequestContext *context,
+                               const std::string &owner,
+                               ::frontend_proxy::FrontendProxyStatus *status) const;
     FrontendProxyServiceParam param_;
 };
 

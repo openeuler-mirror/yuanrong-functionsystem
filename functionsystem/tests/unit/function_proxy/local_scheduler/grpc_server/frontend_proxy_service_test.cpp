@@ -26,6 +26,9 @@
 #include <string>
 #include <thread>
 
+#include <cerrno>
+#include <cstdio>
+
 #include <sys/stat.h>
 #include <unistd.h>
 #include <ftw.h>
@@ -1135,6 +1138,15 @@ FrontendProxyServiceParam MakeWorkspaceParam(const std::string &storageRoot)
     };
     return param;
 }
+
+// SetWorkspaceContext 填充 workspace RPC 所需的请求身份(frontendclientid + requestid)。
+template <typename RequestT>
+void SetWorkspaceContext(RequestT *request, const std::string &requestID)
+{
+    auto *context = request->mutable_context();
+    context->set_frontendclientid("frontend");
+    context->set_requestid(requestID);
+}
 }  // namespace
 
 TEST(FrontendProxyServiceWorkspaceTest, PrepareWorkspaceCreatesLeafDirectoryWithMode)
@@ -1143,7 +1155,7 @@ TEST(FrontendProxyServiceWorkspaceTest, PrepareWorkspaceCreatesLeafDirectoryWith
     auto param = MakeWorkspaceParam(root.Path());
     FrontendProxyService service(std::move(param));
     ::frontend_proxy::PrepareWorkspaceRequest request;
-    request.mutable_context()->set_requestid("prepare-create");
+    SetWorkspaceContext(&request, "prepare-create");
     request.set_owner("alice");
     request.set_mode("0700");
     ::frontend_proxy::PrepareWorkspaceResponse response;
@@ -1160,7 +1172,7 @@ TEST(FrontendProxyServiceWorkspaceTest, PrepareWorkspaceIsIdempotentWhenDirector
     auto param = MakeWorkspaceParam(root.Path());
     FrontendProxyService service(std::move(param));
     ::frontend_proxy::PrepareWorkspaceRequest request;
-    request.mutable_context()->set_requestid("prepare-idempotent");
+    SetWorkspaceContext(&request, "prepare-idempotent");
     request.set_owner("bob");
     request.set_mode("0750");
     ::frontend_proxy::PrepareWorkspaceResponse first;
@@ -1178,7 +1190,7 @@ TEST(FrontendProxyServiceWorkspaceTest, PrepareWorkspaceUsesDefaultModeWhenModeE
     auto param = MakeWorkspaceParam(root.Path());
     FrontendProxyService service(std::move(param));
     ::frontend_proxy::PrepareWorkspaceRequest request;
-    request.mutable_context()->set_requestid("prepare-default-mode");
+    SetWorkspaceContext(&request, "prepare-default-mode");
     request.set_owner("carol");
     request.clear_mode();
     ::frontend_proxy::PrepareWorkspaceResponse response;
@@ -1198,7 +1210,7 @@ TEST(FrontendProxyServiceWorkspaceTest, PrepareWorkspaceCreatesIntermediateParen
     auto param = MakeWorkspaceParam(parent);
     FrontendProxyService service(std::move(param));
     ::frontend_proxy::PrepareWorkspaceRequest request;
-    request.mutable_context()->set_requestid("prepare-with-parent");
+    SetWorkspaceContext(&request, "prepare-with-parent");
     request.set_owner("dave");
     request.set_mode("0700");
     ::frontend_proxy::PrepareWorkspaceResponse response;
@@ -1213,6 +1225,7 @@ TEST(FrontendProxyServiceWorkspaceTest, PrepareWorkspaceRejectsEmptyOwner)
     auto param = MakeWorkspaceParam(root.Path());
     FrontendProxyService service(std::move(param));
     ::frontend_proxy::PrepareWorkspaceRequest request;
+    SetWorkspaceContext(&request, "prepare-empty-owner");
     request.set_owner("");
     ::frontend_proxy::PrepareWorkspaceResponse response;
     ASSERT_TRUE(service.PrepareWorkspace(nullptr, &request, &response).ok());
@@ -1226,6 +1239,7 @@ TEST(FrontendProxyServiceWorkspaceTest, PrepareWorkspaceRejectsPathTraversalOwne
     auto param = MakeWorkspaceParam(root.Path());
     FrontendProxyService service(std::move(param));
     ::frontend_proxy::PrepareWorkspaceRequest request;
+    SetWorkspaceContext(&request, "prepare-traversal-owner");
     request.set_owner("..");
     ::frontend_proxy::PrepareWorkspaceResponse response;
     ASSERT_TRUE(service.PrepareWorkspace(nullptr, &request, &response).ok());
@@ -1246,6 +1260,7 @@ TEST(FrontendProxyServiceWorkspaceTest, PrepareWorkspaceRejectsInvalidMode)
     auto param = MakeWorkspaceParam(root.Path());
     FrontendProxyService service(std::move(param));
     ::frontend_proxy::PrepareWorkspaceRequest request;
+    SetWorkspaceContext(&request, "prepare-invalid-mode");
     request.set_owner("eve");
     request.set_mode("9999");
     ::frontend_proxy::PrepareWorkspaceResponse response;
@@ -1262,7 +1277,7 @@ TEST(FrontendProxyServiceWorkspaceTest, RemoveWorkspaceDeletesLeafDirectory)
     auto param = MakeWorkspaceParam(root.Path());
     FrontendProxyService service(std::move(param));
     ::frontend_proxy::RemoveWorkspaceRequest request;
-    request.mutable_context()->set_requestid("remove-leaf");
+    SetWorkspaceContext(&request, "remove-leaf");
     request.set_owner("frank");
     ::frontend_proxy::RemoveWorkspaceResponse response;
     ASSERT_TRUE(service.RemoveWorkspace(nullptr, &request, &response).ok());
@@ -1276,7 +1291,7 @@ TEST(FrontendProxyServiceWorkspaceTest, RemoveWorkspaceIsIdempotentWhenMissing)
     auto param = MakeWorkspaceParam(root.Path());
     FrontendProxyService service(std::move(param));
     ::frontend_proxy::RemoveWorkspaceRequest request;
-    request.mutable_context()->set_requestid("remove-missing");
+    SetWorkspaceContext(&request, "remove-missing");
     request.set_owner("ghost");
     ::frontend_proxy::RemoveWorkspaceResponse response;
     ASSERT_TRUE(service.RemoveWorkspace(nullptr, &request, &response).ok());
@@ -1297,7 +1312,7 @@ TEST(FrontendProxyServiceWorkspaceTest, RemoveWorkspaceRecursivelyDeletesNestedC
     auto param = MakeWorkspaceParam(root.Path());
     FrontendProxyService service(std::move(param));
     ::frontend_proxy::RemoveWorkspaceRequest request;
-    request.mutable_context()->set_requestid("remove-recursive");
+    SetWorkspaceContext(&request, "remove-recursive");
     request.set_owner("heidi");
     ::frontend_proxy::RemoveWorkspaceResponse response;
     ASSERT_TRUE(service.RemoveWorkspace(nullptr, &request, &response).ok());
@@ -1311,6 +1326,7 @@ TEST(FrontendProxyServiceWorkspaceTest, RemoveWorkspaceRejectsPathTraversalOwner
     auto param = MakeWorkspaceParam(root.Path());
     FrontendProxyService service(std::move(param));
     ::frontend_proxy::RemoveWorkspaceRequest request;
+    SetWorkspaceContext(&request, "remove-traversal-owner");
     request.set_owner("../etc");
     ::frontend_proxy::RemoveWorkspaceResponse response;
     ASSERT_TRUE(service.RemoveWorkspace(nullptr, &request, &response).ok());
@@ -1323,14 +1339,14 @@ TEST(FrontendProxyServiceWorkspaceTest, PrepareAndRemoveWorkspaceRoundTripPreser
     auto param = MakeWorkspaceParam(root.Path());
     FrontendProxyService service(std::move(param));
     ::frontend_proxy::PrepareWorkspaceRequest prepare;
-    prepare.mutable_context()->set_requestid("round-trip-prepare");
+    SetWorkspaceContext(&prepare, "round-trip-prepare");
     prepare.set_owner("ivan");
     prepare.set_mode("0700");
     ::frontend_proxy::PrepareWorkspaceResponse prepareResponse;
     ASSERT_TRUE(service.PrepareWorkspace(nullptr, &prepare, &prepareResponse).ok());
     EXPECT_EQ(prepareResponse.status().code(), common::ERR_NONE);
     ::frontend_proxy::RemoveWorkspaceRequest remove;
-    remove.mutable_context()->set_requestid("round-trip-remove");
+    SetWorkspaceContext(&remove, "round-trip-remove");
     remove.set_owner("ivan");
     ::frontend_proxy::RemoveWorkspaceResponse removeResponse;
     ASSERT_TRUE(service.RemoveWorkspace(nullptr, &remove, &removeResponse).ok());
@@ -1338,6 +1354,134 @@ TEST(FrontendProxyServiceWorkspaceTest, PrepareAndRemoveWorkspaceRoundTripPreser
     EXPECT_FALSE(PathExists(root.Path() + "/ivan"));
     // 根目录仍然存在
     EXPECT_TRUE(PathExists(root.Path()));
+}
+
+TEST(FrontendProxyServiceWorkspaceTest, WorkspaceRejectsUnauthenticatedPeerWhenRequired)
+{
+    ScopedTempDir root;
+    auto param = MakeWorkspaceParam(root.Path());
+    param.requireAuthenticatedPeer = true;
+    FrontendProxyService service(std::move(param));
+    ::frontend_proxy::PrepareWorkspaceRequest prepare;
+    SetWorkspaceContext(&prepare, "authz-prepare");
+    prepare.set_owner("alice");
+    prepare.set_mode("0700");
+    ::frontend_proxy::PrepareWorkspaceResponse prepareResponse;
+    EXPECT_EQ(service.PrepareWorkspace(nullptr, &prepare, &prepareResponse).error_code(),
+              ::grpc::StatusCode::UNAUTHENTICATED);
+    ::frontend_proxy::RemoveWorkspaceRequest remove;
+    SetWorkspaceContext(&remove, "authz-remove");
+    remove.set_owner("alice");
+    ::frontend_proxy::RemoveWorkspaceResponse removeResponse;
+    EXPECT_EQ(service.RemoveWorkspace(nullptr, &remove, &removeResponse).error_code(),
+              ::grpc::StatusCode::UNAUTHENTICATED);
+    EXPECT_FALSE(PathExists(root.Path() + "/alice"));
+}
+
+TEST(FrontendProxyServiceWorkspaceTest, WorkspaceRequiresRequestIdentityContext)
+{
+    ScopedTempDir root;
+    auto param = MakeWorkspaceParam(root.Path());
+    FrontendProxyService service(std::move(param));
+    // 缺整个 context:拒绝且不创建目录。
+    ::frontend_proxy::PrepareWorkspaceRequest prepare;
+    prepare.set_owner("alice");
+    ::frontend_proxy::PrepareWorkspaceResponse noContext;
+    ASSERT_TRUE(service.PrepareWorkspace(nullptr, &prepare, &noContext).ok());
+    EXPECT_EQ(noContext.status().code(), common::ERR_PARAM_INVALID);
+    EXPECT_FALSE(PathExists(root.Path() + "/alice"));
+    // 有 context 但缺 frontendclientid:同样拒绝。
+    prepare.mutable_context()->set_requestid("no-client-id");
+    ::frontend_proxy::PrepareWorkspaceResponse noClient;
+    ASSERT_TRUE(service.PrepareWorkspace(nullptr, &prepare, &noClient).ok());
+    EXPECT_EQ(noClient.status().code(), common::ERR_PARAM_INVALID);
+    EXPECT_FALSE(PathExists(root.Path() + "/alice"));
+    // RemoveWorkspace 缺 context 同样拒绝。
+    ::frontend_proxy::RemoveWorkspaceRequest remove;
+    remove.set_owner("alice");
+    ::frontend_proxy::RemoveWorkspaceResponse removeResponse;
+    ASSERT_TRUE(service.RemoveWorkspace(nullptr, &remove, &removeResponse).ok());
+    EXPECT_EQ(removeResponse.status().code(), common::ERR_PARAM_INVALID);
+}
+
+TEST(FrontendProxyServiceWorkspaceTest, WorkspaceRejectsTenantLabelMismatch)
+{
+    ScopedTempDir root;
+    auto param = MakeWorkspaceParam(root.Path());
+    FrontendProxyService service(std::move(param));
+    ::frontend_proxy::PrepareWorkspaceRequest request;
+    SetWorkspaceContext(&request, "tenant-mismatch");
+    request.mutable_context()->set_tenantid("tenant-a");
+    (*request.mutable_context()->mutable_labels())["tenantID"] = "tenant-b";
+    request.set_owner("alice");
+    ::frontend_proxy::PrepareWorkspaceResponse mismatch;
+    ASSERT_TRUE(service.PrepareWorkspace(nullptr, &request, &mismatch).ok());
+    EXPECT_EQ(mismatch.status().code(), common::ERR_PARAM_INVALID);
+    EXPECT_FALSE(PathExists(root.Path() + "/alice"));
+    // labels 租户与 context.tenantid 一致时放行。
+    (*request.mutable_context()->mutable_labels())["tenantID"] = "tenant-a";
+    ::frontend_proxy::PrepareWorkspaceResponse consistent;
+    ASSERT_TRUE(service.PrepareWorkspace(nullptr, &request, &consistent).ok());
+    EXPECT_EQ(consistent.status().code(), common::ERR_NONE);
+    EXPECT_TRUE(PathExists(root.Path() + "/alice"));
+}
+
+TEST(FrontendProxyServiceWorkspaceTest, PrepareWorkspaceRejectsSymlinkAtExistingPath)
+{
+    ScopedTempDir root;
+    ScopedTempDir outside;
+    // owner 路径预先放置符号链接指向 root 外的目录:实现若只检查 EEXIST 会假成功,
+    // 且 chmod/chown 会跟随链接落到 outside 上。
+    const auto target = root.Path() + "/mallory";
+    ASSERT_EQ(::symlink(outside.Path().c_str(), target.c_str()), 0);
+    auto param = MakeWorkspaceParam(root.Path());
+    FrontendProxyService service(std::move(param));
+    ::frontend_proxy::PrepareWorkspaceRequest request;
+    SetWorkspaceContext(&request, "prepare-symlink");
+    request.set_owner("mallory");
+    request.set_mode("0700");
+    ::frontend_proxy::PrepareWorkspaceResponse response;
+    ASSERT_TRUE(service.PrepareWorkspace(nullptr, &request, &response).ok());
+    EXPECT_EQ(response.status().code(), common::ERR_INNER_SYSTEM_ERROR);
+    EXPECT_FALSE(response.status().message().empty());
+    // 链接目标目录必须未被 chmod/chown 波及且仍存在。
+    EXPECT_TRUE(PathExists(outside.Path()));
+}
+
+TEST(FrontendProxyServiceWorkspaceTest, WorkspaceRejectsOwnerNotOwnedByCallerTenant)
+{
+    ScopedTempDir root;
+    auto param = MakeWorkspaceParam(root.Path());
+    // 注入 owner 归属授权:tenant-a 只允许操作 owner=alice,其余拒绝。
+    param.workspaceOwnerAuthorizer = [](const std::string &tenantID, const std::string &owner) {
+        return tenantID == "tenant-a" && owner == "alice";
+    };
+    FrontendProxyService service(std::move(param));
+    // 非本租户的 owner:拒绝且不做任何文件系统操作。
+    ::frontend_proxy::PrepareWorkspaceRequest prepare;
+    SetWorkspaceContext(&prepare, "owner-authz-prepare");
+    prepare.mutable_context()->set_tenantid("tenant-a");
+    prepare.set_owner("mallory");
+    prepare.set_mode("0700");
+    ::frontend_proxy::PrepareWorkspaceResponse rejected;
+    ASSERT_TRUE(service.PrepareWorkspace(nullptr, &prepare, &rejected).ok());
+    EXPECT_EQ(rejected.status().code(), common::ERR_AUTHORIZE_FAILED);
+    EXPECT_FALSE(PathExists(root.Path() + "/mallory"));
+    // 授权通过的 owner 正常创建。
+    prepare.set_owner("alice");
+    ::frontend_proxy::PrepareWorkspaceResponse allowed;
+    ASSERT_TRUE(service.PrepareWorkspace(nullptr, &prepare, &allowed).ok());
+    EXPECT_EQ(allowed.status().code(), common::ERR_NONE);
+    EXPECT_TRUE(PathExists(root.Path() + "/alice"));
+    // RemoveWorkspace 同样受 owner 归属授权约束:其它租户无法删除 alice 的目录。
+    ::frontend_proxy::RemoveWorkspaceRequest remove;
+    SetWorkspaceContext(&remove, "owner-authz-remove");
+    remove.mutable_context()->set_tenantid("tenant-b");
+    remove.set_owner("alice");
+    ::frontend_proxy::RemoveWorkspaceResponse removeResponse;
+    ASSERT_TRUE(service.RemoveWorkspace(nullptr, &remove, &removeResponse).ok());
+    EXPECT_EQ(removeResponse.status().code(), common::ERR_AUTHORIZE_FAILED);
+    EXPECT_TRUE(PathExists(root.Path() + "/alice"));
 }
 
 }  // namespace functionsystem::test
