@@ -37,7 +37,6 @@ const std::string GO_NEW_EXEC_PATH = "/go/bin/goruntime";
 const std::string BASH_PATH = "/bin/bash";
 const std::string JAVA_CMD = "java";
 const std::string DEFAULT_JAVA8_CMD = "/opt/buildtools/jdk8/bin/java";
-const std::string GLOG_LOG_DIR = "GLOG_log_dir";
 const std::string YR_LOG_LEVEL = "YR_LOG_LEVEL";
 const std::string PATH_ENV = "PATH";
 const std::string MAX_LOG_SIZE_MB_ENV = "YR_MAX_LOG_SIZE_MB";

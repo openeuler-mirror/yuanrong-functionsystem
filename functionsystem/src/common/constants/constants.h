@@ -374,6 +374,9 @@ const std::string CONTAINER_ENV_VARS = "env_vars";
 // redirects stdout/stderr to per-runtime host files via sh -c "... >out 2>err").
 const std::string YR_ONLY_STDOUT = "YR_ONLY_STDOUT";
 
+const std::string GLOG_LOG_DIR = "GLOG_log_dir";
+const std::string SANDBOX_LOG_DIR_RELATIVE = "yr_sessions/latest/logs";
+
 // sandboxType values (function meta sandboxType field)
 const std::string SANDBOX_TYPE_DOCKER = "docker";
 const std::string SANDBOX_TYPE_SUPERVISOR = "supervisor";
