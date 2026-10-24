@@ -477,6 +477,28 @@ public:
         return tcpTunnelMaxConnections_;
     }
 
+    // --- Workspace RPC(方案 A) ---
+    // GetWorkspaceStorageRoot 返回 workspace 存储根目录;默认 /home/agentos/.users。
+    // 由 --workspace_storage_root flag 配置,作为 PrepareWorkspace/RemoveWorkspace 的根目录。
+    const std::string &GetWorkspaceStorageRoot() const
+    {
+        return workspaceStorageRoot_;
+    }
+
+    // GetWorkspaceUid 返回 workspace 目录的 uid;默认 1000。
+    // 由 --workspace_uid flag 配置,用于 PrepareWorkspace 的 chown 操作。
+    uint32_t GetWorkspaceUid() const
+    {
+        return workspaceUid_;
+    }
+
+    // GetWorkspaceGid 返回 workspace 目录的 gid;默认 1000。
+    // 由 --workspace_gid flag 配置,用于 PrepareWorkspace 的 chown 操作。
+    uint32_t GetWorkspaceGid() const
+    {
+        return workspaceGid_;
+    }
+
 protected:
     void AddRuntimeFlags();
     void AddDSFlags();
@@ -578,6 +600,13 @@ protected:
     bool enableTcpTunnel_{ false };
     std::string tcpTunnelPort_{ "22775" };
     uint32_t tcpTunnelMaxConnections_{ 1024 };
+    // --- Workspace RPC(方案 A) ---
+    // workspace 存储根目录,由 --workspace_storage_root flag 配置,默认 /home/agentos/.users
+    std::string workspaceStorageRoot_ = "/home/agentos/.users";
+    // workspace 目录的 uid,由 --workspace_uid flag 配置,默认 1000
+    uint32_t workspaceUid_{ 1000 };
+    // workspace 目录的 gid,由 --workspace_gid flag 配置,默认 1000
+    uint32_t workspaceGid_{ 1000 };
 };
 
 }  // namespace functionsystem::function_proxy

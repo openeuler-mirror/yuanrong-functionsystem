@@ -109,6 +109,14 @@ struct LocalSchedStartParam {
     std::string tcpTunnelRootCert;
     std::string tcpTunnelModuleCert;
     std::string tcpTunnelModuleKey;
+    // --- Workspace RPC(方案 A) ---
+    // workspace 存储根目录;PrepareWorkspace/RemoveWorkspace 在此目录下创建/删除 <owner> 子目录。
+    // 默认 /home/agentos/.users,由 --workspace_storage_root flag 配置。
+    std::string workspaceStorageRoot = "/home/agentos/.users";
+    // workspace 目录的 uid;默认 1000,由 --workspace_uid flag 配置。
+    uint32_t workspaceUid { 1000 };
+    // workspace 目录的 gid;默认 1000,由 --workspace_gid flag 配置。
+    uint32_t workspaceGid { 1000 };
 };
 
 class LocalSchedulingApiRouter : public ApiRouterRegister {

@@ -17,6 +17,8 @@
 #include "local_sched_driver.h"
 
 #include <charconv>
+#include <sys/types.h>
+#include <utility>
 
 #include "common/constants/actor_name.h"
 #include "local_scheduler/traefik_registry/traefik_registry.h"
@@ -545,6 +547,15 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
     auto frontendServiceParam = BuildFrontendProxyServiceParam(param_.nodeID, bindings);
     frontendServiceParam.endpointAddress = param_.ip + ":" + param_.posixPort;
     frontendServiceParam.requireAuthenticatedPeer = param_.enableSSL;
+    // --- Workspace RPC(方案 A) ---
+    // 注入 workspace 存储根目录 / uid / gid provider,使 FrontendProxyService
+    // 在归属节点本地完成 PrepareWorkspace/RemoveWorkspace 操作。
+    frontendServiceParam.workspaceStorageRootProvider = [root = param_.workspaceStorageRoot]() {
+        return root;
+    };
+    frontendServiceParam.workspaceUidGidProvider = [uid = param_.workspaceUid, gid = param_.workspaceGid]() {
+        return std::make_pair(static_cast<uid_t>(uid), static_cast<gid_t>(gid));
+    };
     frontendServiceParam.invokeTenantAuthorizer =
         [instanceView(instanceCtrl_->GetInstanceControlView())](const std::string &tenantID,
                                                                 const std::string &instanceID) {

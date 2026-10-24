@@ -31,11 +31,50 @@ option go_package = "functionsystem/pkg/common/faas_common/grpc/pb/frontend_prox
 // Requests wrap the existing core_service create/invoke/kill messages. The proxy
 // implementation can adapt them to runtime_rpc.StreamingMessage internally
 // without exposing the full stream oneof to frontend.
+//
+// 方案 A: PrepareWorkspace/RemoveWorkspace 由 frontend POST/DELETE /workspace 调用,
+// 在归属节点 function_proxy 本地完成 workspace 存储目录的创建/删除。
 service FrontendProxyService {
   rpc InvokeInstance (InvokeInstanceRequest) returns (InvokeInstanceResponse) {}
   rpc InvokeInstanceStream (InvokeInstanceRequest) returns (stream InvokeInstanceStreamResponse) {}
   rpc CreateInstance (CreateInstanceRequest) returns (CreateInstanceResponse) {}
   rpc KillInstance (KillInstanceRequest) returns (KillInstanceResponse) {}
+  // PrepareWorkspace 在归属节点本地创建 workspace 存储目录(mkdir -p + chown + chmod)。
+  // 幂等:目录已存在不报错。
+  rpc PrepareWorkspace (PrepareWorkspaceRequest) returns (PrepareWorkspaceResponse) {}
+  // RemoveWorkspace 在归属节点本地删除 workspace 存储目录(rm -rf)。
+  // 幂等:目录不存在不报错。
+  rpc RemoveWorkspace (RemoveWorkspaceRequest) returns (RemoveWorkspaceResponse) {}
+}
+
+// PrepareWorkspaceRequest 由 frontend POST /workspace 发起,在归属节点 function_proxy
+// 本地 mkdir workspace 存储目录。
+message PrepareWorkspaceRequest {
+  FrontendRequestContext context = 1;
+  // owner 是 workspace 身份(用户名),对应 ${workspace_storage_root}/<owner>
+  string owner = 2;
+  // mode 是可选的目录权限位字符串(如 "0700");空则由 function_proxy 取默认值 0700
+  string mode = 3;
+}
+
+// PrepareWorkspaceResponse 返回 workspace 准备结果。
+message PrepareWorkspaceResponse {
+  // status 描述 function_proxy 处理结果;code=ERR_NONE 表示成功
+  FrontendProxyStatus status = 1;
+}
+
+// RemoveWorkspaceRequest 由 frontend DELETE /workspace 发起,在归属节点 function_proxy
+// 本地删除 workspace 存储目录。
+message RemoveWorkspaceRequest {
+  FrontendRequestContext context = 1;
+  // owner 是 workspace 身份(用户名),对应 ${workspace_storage_root}/<owner>
+  string owner = 2;
+}
+
+// RemoveWorkspaceResponse 返回 workspace 删除结果。
+message RemoveWorkspaceResponse {
+  // status 描述 function_proxy 处理结果;code=ERR_NONE 表示成功
+  FrontendProxyStatus status = 1;
 }
 
 message FrontendRequestContext {

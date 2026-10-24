@@ -18,8 +18,10 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <condition_variable>
+#include <cstring>
 #include <deque>
 #include <limits>
 #include <memory>
@@ -28,6 +30,12 @@
 #include <thread>
 #include <unordered_map>
 #include <utility>
+
+#include <fcntl.h>
+#include <ftw.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #include "common/logs/logging.h"
 #include "function_proxy/busproxy/invocation_handler/invocation_handler.h"
@@ -51,6 +59,24 @@ constexpr const char *FUNCTION_PROXY_STREAM_CALLER_ID = "function-proxy";
 constexpr size_t FRONTEND_EVENT_QUEUE_CAPACITY = 100;
 constexpr size_t FRONTEND_EVENT_METADATA_SIZE = 16;
 constexpr const char *FRONTEND_EVENT_EOF = "yuanrong_event_EOF";
+
+// --- Workspace RPC 常量(方案 A) ---
+// 默认 workspace 存储根目录;生产环境由 --workspace_storage_root flag 覆盖。
+constexpr const char *DEFAULT_WORKSPACE_STORAGE_ROOT = "/home/agentos/.users";
+// 默认 workspace 目录权限位(0700)。
+constexpr mode_t DEFAULT_WORKSPACE_DIR_MODE = 0700;
+// 默认 workspace 目录的 (uid, gid);生产环境由 flag 覆盖。
+constexpr uid_t DEFAULT_WORKSPACE_UID = 1000;
+constexpr gid_t DEFAULT_WORKSPACE_GID = 1000;
+// workspace 权限位上限(rwxrwxrwx),超出视为非法 mode。
+constexpr int WORKSPACE_MODE_MAX = 0777;
+// nftw 递归删除时同时使用的文件描述符数量上限。
+constexpr int WORKSPACE_NFTW_MAX_FDS = 16;
+// nftw 失败路径记录缓冲区长度:thread_local 变量必须由 noexcept 构造初始化,
+// 用定长字符数组替代 std::string,超长路径截断不影响排障定位。
+constexpr int WORKSPACE_NFTW_PATH_MAX = 4096;
+// workspace 父目录权限(rwxr-xr-x),仅叶子目录使用请求指定的 mode。
+constexpr mode_t WORKSPACE_PARENT_DIR_MODE = 0755;
 struct LifecycleEvent {
     const char *operation;
     const char *dispatchPhase;
@@ -961,6 +987,333 @@ void FrontendProxyService::SetStatus(::frontend_proxy::FrontendProxyStatus *stat
     status->set_message(message);
     status->set_retryable(retryable);
     status->set_retryreason(retryReason);
+}
+
+// --- 方案 A: Workspace RPC 实现 ---
+
+std::string FrontendProxyService::ResolveWorkspaceStorageRoot() const
+{
+    if (param_.workspaceStorageRootProvider) {
+        auto root = param_.workspaceStorageRootProvider();
+        if (!root.empty()) {
+            return root;
+        }
+    }
+    return DEFAULT_WORKSPACE_STORAGE_ROOT;
+}
+
+std::pair<uid_t, gid_t> FrontendProxyService::ResolveWorkspaceUidGid() const
+{
+    if (param_.workspaceUidGidProvider) {
+        auto ids = param_.workspaceUidGidProvider();
+        // uid/gid 为 0 也允许(root 场景),只校验 uid 不为非法值
+        return ids;
+    }
+    return { DEFAULT_WORKSPACE_UID, DEFAULT_WORKSPACE_GID };
+}
+
+std::string FrontendProxyService::ValidateWorkspaceOwner(const std::string &owner)
+{
+    if (owner.empty()) {
+        return "owner is required";
+    }
+    // 拒绝内嵌 NUL:libc 路径 API 以 NUL 截断,内嵌 NUL 会导致校验与实际操作的目标路径不一致。
+    if (owner.find('\0') != std::string::npos) {
+        return "owner must not contain embedded NUL";
+    }
+    if (owner.find('/') != std::string::npos) {
+        return "owner must not contain '/': " + owner;
+    }
+    if (owner == ".." || owner.find("..") != std::string::npos) {
+        return "owner must not be a path traversal: " + owner;
+    }
+    if (owner.front() == '.') {
+        return "owner must not start with '.': " + owner;
+    }
+    return "";
+}
+
+int FrontendProxyService::ParseWorkspaceMode(const std::string &mode)
+{
+    if (mode.empty()) {
+        return static_cast<int>(DEFAULT_WORKSPACE_DIR_MODE);
+    }
+    // 支持 "0700" / "755" 等八进制字符串
+    try {
+        std::size_t pos = 0;
+        int parsed = std::stoi(mode, &pos, 8);
+        if (pos != mode.size() || parsed < 0 || parsed > WORKSPACE_MODE_MAX) {
+            return -1;
+        }
+        return parsed;
+    } catch (...) {
+        return -1;
+    }
+}
+
+// JoinPath 拼接 storage_root + "/" + owner,去掉 storage_root 尾部多余的 "/"。
+static std::string JoinWorkspacePath(const std::string &storageRoot, const std::string &owner)
+{
+    std::string root = storageRoot;
+    while (root.size() > 1 && root.back() == '/') {
+        root.pop_back();
+    }
+    return root + "/" + owner;
+}
+
+// ValidateWorkspaceCall 组合校验 workspace 请求:
+//   1. 请求身份:context.frontendClientID + context.requestID 必填(与 invoke/create/kill 一致)。
+//      调用方契约(handler.go)不传 tenantID,故不强制 tenantid 非空。
+//   2. 租户一致性:labels 中显式携带的租户键(tenantID/tenantId/tenant)必须与 context.tenantid() 一致,
+//      防止调用方携带自相矛盾的租户信息绕过基于租户的审计。
+//   3. owner 合法性:防路径穿越与 NUL 截断。
+//   4. owner 归属授权:若注入 workspaceOwnerAuthorizer,校验调用租户是否有权操作该 owner;
+//      未注入时信任 frontend 侧已做 owner 派生与绑定(单租户部署前提,见 .h 注释)。
+bool FrontendProxyService::ValidateWorkspaceCall(const ::frontend_proxy::FrontendRequestContext *context,
+                                                 const std::string &owner,
+                                                 ::frontend_proxy::FrontendProxyStatus *status) const
+{
+    if (context == nullptr || !HasRequiredContext(*context)) {
+        SetStatus(status, common::ERR_PARAM_INVALID,
+                  "frontend proxy workspace requires context.frontendClientID and context.requestID");
+        return false;
+    }
+    if (HasContextTenantMismatch(*context)) {
+        SetStatus(status, common::ERR_PARAM_INVALID, "frontend proxy workspace tenant does not match context labels");
+        return false;
+    }
+    const auto ownerErr = ValidateWorkspaceOwner(owner);
+    if (!ownerErr.empty()) {
+        SetStatus(status, common::ERR_PARAM_INVALID, ownerErr);
+        return false;
+    }
+    if (param_.workspaceOwnerAuthorizer && !param_.workspaceOwnerAuthorizer(context->tenantid(), owner)) {
+        SetStatus(status, common::ERR_AUTHORIZE_FAILED,
+                  "frontend proxy workspace owner is not authorized for caller tenant");
+        return false;
+    }
+    return true;
+}
+
+// MkdirSegment 尝试创建单级目录;已存在(EEXIST)时用 lstat 校验其为真实目录,
+// 拒绝符号链接/普通文件冒充目录,防止后续 chmod/chown 落到符号链接目标上。
+static std::string MkdirSegment(const std::string &path, mode_t mode)
+{
+    if (::mkdir(path.c_str(), mode) == 0) {
+        return "";
+    }
+    if (errno != EEXIST) {
+        return "mkdir failed for " + path + ": " + std::strerror(errno);
+    }
+    struct stat st {};
+    if (::lstat(path.c_str(), &st) != 0) {
+        return "stat failed for " + path + ": " + std::strerror(errno);
+    }
+    if (!S_ISDIR(st.st_mode)) {
+        return "path exists but is not a directory: " + path;
+    }
+    return "";
+}
+
+// MakeWorkspaceDirs 沿路径逐级创建目录(类似 mkdir -p),每级允许已存在。
+static std::string MakeWorkspaceDirs(const std::string &path, mode_t mode)
+{
+    if (path.empty() || path == "/") {
+        return "";
+    }
+    std::string current;
+    current.reserve(path.size());
+    size_t pos = 0;
+    if (path.front() == '/') {
+        current.push_back('/');
+        pos = 1;
+    }
+    while (pos < path.size()) {
+        auto next = path.find('/', pos);
+        if (next == std::string::npos) {
+            next = path.size();
+        }
+        if (next > pos) {
+            current.append(path, pos, next - pos);
+            const auto err = MkdirSegment(current, mode);
+            if (!err.empty()) {
+                return err;
+            }
+        }
+        if (next < path.size()) {
+            current.push_back('/');
+        }
+        pos = next + 1;
+    }
+    return "";
+}
+
+// CreateWorkspaceDirectory 创建 workspace 目录:父目录按 WORKSPACE_PARENT_DIR_MODE 逐级创建,
+// 叶子目录按请求的 mode 创建;已存在的路径必须是真实目录(幂等)。
+static std::string CreateWorkspaceDirectory(const std::string &targetPath, mode_t leafMode)
+{
+    const auto lastSlash = targetPath.find_last_of('/');
+    if (lastSlash != std::string::npos && lastSlash > 0) {
+        const auto parentErr = MakeWorkspaceDirs(targetPath.substr(0, lastSlash), WORKSPACE_PARENT_DIR_MODE);
+        if (!parentErr.empty()) {
+            return parentErr;
+        }
+    }
+    return MkdirSegment(targetPath, leafMode);
+}
+
+// ApplyWorkspaceOwnership 对叶子目录执行 chmod + chown,确保权限位与归属和请求一致(幂等)。
+// 先用 open(O_NOFOLLOW|O_DIRECTORY) 拿到目录 fd 再 fchmod/fchown:
+//   1) 符号链接在 open 处被拒(O_NOFOLLOW → ELOOP),mode/uid/gid 不会作用到链接目标;
+//   2) fd 绑定 open 时刻的真实目录 inode,消除 lstat 校验与 chmod/chown 之间目录
+//      被并发替换为符号链接的竞态窗口。
+static std::string ApplyWorkspaceOwnership(const std::string &path, mode_t mode, uid_t uid, gid_t gid)
+{
+    const int fd = ::open(path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    if (fd < 0) {
+        return "open directory failed for " + path + ": " + std::strerror(errno);
+    }
+    std::string err;
+    if (::fchmod(fd, mode) != 0) {
+        err = "fchmod failed for " + path + ": " + std::strerror(errno);
+    } else if (::fchown(fd, uid, gid) != 0) {
+        err = "fchown failed for " + path + ": " + std::strerror(errno);
+    }
+    ::close(fd);
+    return err;
+}
+
+// nftw 回调只接受无捕获函数指针,用 thread_local 记录首个失败项的路径与 errno,保证线程安全。
+// 路径用定长字符数组存储:thread_local 变量必须由 noexcept 构造初始化(G.ERR.10-CPP),
+// std::string 构造可能抛出且线程入口无法捕获。
+thread_local char g_nftwFailurePath[WORKSPACE_NFTW_PATH_MAX] = { 0 };
+thread_local int g_nftwFailureErrno = 0;
+
+// RemoveWorkspaceNftwCallback 先尝试 rmdir(目录),失败回退到 unlink(文件/符号链接)。
+// 条目已不存在(ENOENT)按"已删除"的幂等成功处理:并发删除掉的条目同样满足移除目标,
+// 不能让遍历中止;其它错误记录失败路径与 errno 后中止,由外层统一返回 ERR_INNER_SYSTEM_ERROR。
+static int RemoveWorkspaceNftwCallback(const char *fpath, const struct stat *, int, struct FTW *)
+{
+    if (::rmdir(fpath) == 0 || errno == ENOENT) {
+        return 0;
+    }
+    const int rmdirErrno = errno;
+    if (rmdirErrno == ENOTDIR && (::unlink(fpath) == 0 || errno == ENOENT)) {
+        return 0;
+    }
+    if (g_nftwFailurePath[0] == '\0') {
+        const int savedErrno = errno;
+        // 逐字节有界拷贝并保证 NUL 终止:与 snprintf("%s") 的截断语义一致,
+        // 但不使用内存操作函数
+        std::size_t pathLen = 0;
+        while (pathLen + 1 < sizeof(g_nftwFailurePath) && fpath[pathLen] != '\0') {
+            g_nftwFailurePath[pathLen] = fpath[pathLen];
+            ++pathLen;
+        }
+        g_nftwFailurePath[pathLen] = '\0';
+        g_nftwFailureErrno = savedErrno;
+    }
+    return -1;
+}
+
+::grpc::Status FrontendProxyService::PrepareWorkspace(::grpc::ServerContext *context,
+                                                      const ::frontend_proxy::PrepareWorkspaceRequest *request,
+                                                      ::frontend_proxy::PrepareWorkspaceResponse *response)
+{
+    if (!HasAuthenticatedPeer(context)) {
+        return { ::grpc::StatusCode::UNAUTHENTICATED,
+                 "frontend proxy prepare workspace requires an authenticated component certificate" };
+    }
+    if (request == nullptr || response == nullptr) {
+        return { ::grpc::StatusCode::INVALID_ARGUMENT, "invalid frontend proxy prepare workspace args" };
+    }
+    const auto *reqContext = request->has_context() ? &request->context() : nullptr;
+    if (!ValidateWorkspaceCall(reqContext, request->owner(), response->mutable_status())) {
+        return ::grpc::Status::OK;
+    }
+    const auto modeParsed = ParseWorkspaceMode(request->mode());
+    if (modeParsed < 0) {
+        SetStatus(response->mutable_status(), common::ERR_PARAM_INVALID,
+                  "invalid workspace mode: " + request->mode());
+        return ::grpc::Status::OK;
+    }
+    const auto storageRoot = ResolveWorkspaceStorageRoot();
+    const auto targetPath = JoinWorkspacePath(storageRoot, request->owner());
+    const auto uidGid = ResolveWorkspaceUidGid();
+    const auto &requestID = reqContext->requestid();
+    YRLOG_INFO("{}|frontend proxy prepare workspace owner={} path={} mode={:04o} uid={} gid={} proxy={}",
+               requestID, request->owner(), targetPath, modeParsed, uidGid.first, uidGid.second, param_.nodeID);
+
+    // mkdir -p:父目录按 WORKSPACE_PARENT_DIR_MODE 递归创建,叶子目录按请求的 mode(默认 0700)创建;
+    // 已存在路径必须为真实目录(幂等且防符号链接假成功)。
+    const auto makeErr = CreateWorkspaceDirectory(targetPath, static_cast<mode_t>(modeParsed));
+    if (!makeErr.empty()) {
+        SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR, makeErr);
+        return ::grpc::Status::OK;
+    }
+    const auto ownErr = ApplyWorkspaceOwnership(targetPath, static_cast<mode_t>(modeParsed), uidGid.first,
+                                                uidGid.second);
+    if (!ownErr.empty()) {
+        SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR, ownErr);
+        return ::grpc::Status::OK;
+    }
+    YRLOG_INFO("{}|frontend proxy prepare workspace ok owner={} path={}", requestID, request->owner(), targetPath);
+    SetStatus(response->mutable_status(), common::ERR_NONE, "");
+    return ::grpc::Status::OK;
+}
+
+::grpc::Status FrontendProxyService::RemoveWorkspace(::grpc::ServerContext *context,
+                                                     const ::frontend_proxy::RemoveWorkspaceRequest *request,
+                                                     ::frontend_proxy::RemoveWorkspaceResponse *response)
+{
+    if (!HasAuthenticatedPeer(context)) {
+        return { ::grpc::StatusCode::UNAUTHENTICATED,
+                 "frontend proxy remove workspace requires an authenticated component certificate" };
+    }
+    if (request == nullptr || response == nullptr) {
+        return { ::grpc::StatusCode::INVALID_ARGUMENT, "invalid frontend proxy remove workspace args" };
+    }
+    const auto *reqContext = request->has_context() ? &request->context() : nullptr;
+    if (!ValidateWorkspaceCall(reqContext, request->owner(), response->mutable_status())) {
+        return ::grpc::Status::OK;
+    }
+    const auto storageRoot = ResolveWorkspaceStorageRoot();
+    const auto targetPath = JoinWorkspacePath(storageRoot, request->owner());
+    const auto &requestID = reqContext->requestid();
+    YRLOG_INFO("{}|frontend proxy remove workspace owner={} path={} proxy={}",
+               requestID, request->owner(), targetPath, param_.nodeID);
+
+    // 预检:目录不存在视为已删除(幂等),并避免 nftw 遍历中途失败后的 ENOENT 被误判为成功。
+    struct stat st {};
+    if (::lstat(targetPath.c_str(), &st) != 0) {
+        if (errno == ENOENT) {
+            SetStatus(response->mutable_status(), common::ERR_NONE, "");
+            return ::grpc::Status::OK;
+        }
+        SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
+                  "stat failed for " + targetPath + ": " + std::strerror(errno));
+        return ::grpc::Status::OK;
+    }
+    // rm -rf:使用 nftw 递归删除,避免对 system() 的依赖。
+    // FTW_DEPTH 先叶子后父节点,FTW_PHYS 不跟随符号链接(符号链接本身被 unlink,不波及链接目标)。
+    g_nftwFailurePath[0] = '\0';
+    g_nftwFailureErrno = 0;
+    if (::nftw(targetPath.c_str(), RemoveWorkspaceNftwCallback, WORKSPACE_NFTW_MAX_FDS,
+               FTW_DEPTH | FTW_PHYS) != 0) {
+        // 失败详情取自 thread_local 记录的首个失败项,而非回调返回后可能已被覆盖的 errno。
+        std::string err = "rm -rf failed for " + targetPath;
+        if (g_nftwFailurePath[0] != '\0') {
+            err += ": ";
+            err += g_nftwFailurePath;
+            err += ": ";
+            err += std::strerror(g_nftwFailureErrno);
+        }
+        SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR, err);
+        return ::grpc::Status::OK;
+    }
+    YRLOG_INFO("{}|frontend proxy remove workspace ok owner={} path={}", requestID, request->owner(), targetPath);
+    SetStatus(response->mutable_status(), common::ERR_NONE, "");
+    return ::grpc::Status::OK;
 }
 
 #undef LogLifecycleEvent
