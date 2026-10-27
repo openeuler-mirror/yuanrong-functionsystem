@@ -532,35 +532,6 @@ void SupervisorExecutor::OnExecInSandboxDone(const litebus::Future<nlohmann::jso
     promise.SetValue(rsp);
 }
 
-std::string SupervisorExecutor::BuildSessionLogSetupCommand(const std::string &redirect) const
-{
-    const auto fileSlash = redirect.find_last_of('/');
-    if (fileSlash == std::string::npos || fileSlash == 0) {
-        return std::string{};
-    }
-    const std::string logDir = redirect.substr(0, fileSlash);               // <base>/latest/logs
-    const auto logDirSlash = logDir.find_last_of('/');
-    if (logDirSlash == std::string::npos || logDirSlash == 0) {
-        return "mkdir -p " + ShellQuote(logDir);
-    }
-    const std::string latestLink = logDir.substr(0, logDirSlash);           // <base>/latest
-    const auto latestSlash = latestLink.find_last_of('/');
-    if (latestSlash == std::string::npos || latestSlash == 0) {
-        return "mkdir -p " + ShellQuote(logDir);
-    }
-    const std::string sessionsBase = latestLink.substr(0, latestSlash);     // <base>
-    const std::string session = litebus::os::GetFileName(
-        config_.runtimeLogPath.substr(0, config_.runtimeLogPath.find_last_of('/')));
-    if (session.empty()) {
-        return "mkdir -p " + ShellQuote(logDir);
-    }
-    const std::string sessionDir = litebus::os::Join(sessionsBase, session);
-    const std::string sessionLogDir = litebus::os::Join(sessionDir, "logs");
-    return "{ [ -L " + ShellQuote(latestLink) + " ] || mv " + ShellQuote(latestLink) + " " +
-        ShellQuote(sessionDir) + " 2>/dev/null || true; } && mkdir -p " + ShellQuote(sessionLogDir) +
-        " && ln -sfn " + ShellQuote(session) + " " + ShellQuote(latestLink);
-}
-
 nlohmann::json SupervisorExecutor::BuildCommand(const std::shared_ptr<runtime::v1::StartRequest> &start)
 {
     auto command = nlohmann::json::array();
@@ -574,15 +545,18 @@ nlohmann::json SupervisorExecutor::BuildCommand(const std::shared_ptr<runtime::v
         // content (e.g. python -c "print('hello')") and must not be interpreted by sh.
         cmdLine += ShellQuote(start->command()[i]);
     }
-    // The redirect's session layout is prepared by the setup prefix. Quote the redirect path
-    // too (runtimeID/paths may contain spaces or shell metacharacters). stdout and stderr
-    // share one path; 2>&1 merges them into it.
+    // The redirect lives under the sandbox user home (<home>/yr_sessions/<session>/logs/<rid>),
+    // whose host backing we do not control (a user workspace or a jiuwenbox-managed dir), so
+    // the dir is created inside the sandbox right here — sh's ">>" does not mkdir parents.
+    // Quote the redirect path too (runtimeID/paths may contain spaces or shell metacharacters).
+    // stdout and stderr share one path; 2>&1 merges them into it.
     // >> (O_APPEND) keeps the writer offset following EOF.
-    const std::string setup = BuildSessionLogSetupCommand(start->stdout());
-    if (!setup.empty()) {
-        cmdLine = setup + " && " + cmdLine;
+    const std::string &redirect = start->stdout();
+    const auto lastSlash = redirect.find_last_of('/');
+    if (lastSlash != std::string::npos && lastSlash > 0) {
+        cmdLine = "mkdir -p " + ShellQuote(redirect.substr(0, lastSlash)) + " && " + cmdLine;
     }
-    cmdLine += " >>" + ShellQuote(start->stdout()) + " 2>&1";
+    cmdLine += " >>" + ShellQuote(redirect) + " 2>&1";
 
     command.push_back("sh");
     command.push_back("-c");
@@ -745,7 +719,15 @@ void SupervisorExecutor::SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest
         return it != deployOpts.end() ? it->second : std::string{};
     };
     const std::string hostUser = getOpt(HOST_USER).empty() ? "agentos" : getOpt(HOST_USER);
-    const std::string sandboxLogDir = litebus::os::Join("/home/" + hostUser, SANDBOX_LOG_DIR_RELATIVE);
+    // Per-runtime log dir under the sandbox user home, laid out after the yr CLI's host
+    // session structure: <home>/yr_sessions/<deploy-session>/logs/<runtimeID>. The session id
+    // is reused from the deployment session; the per-runtime subdir groups this instance's
+    // redirect log with its .std/ds client logs (GLOG override below).
+    const std::string sessionsRoot = litebus::os::Join("/home/" + hostUser, SESSIONS_ROOT_RELATIVE);
+    const std::string deploySession =
+        litebus::os::GetFileName(config_.runtimeLogPath.substr(0, config_.runtimeLogPath.find_last_of('/')));
+    const std::string sandboxLogDir =
+        litebus::os::Join(litebus::os::Join(litebus::os::Join(sessionsRoot, deploySession), "logs"), runtimeID);
 
     const std::map<std::string, std::string> combineEnvs = cmdBuilder_.CombineEnvs(envs);
     req->mutable_envs()->insert(combineEnvs.begin(), combineEnvs.end());
