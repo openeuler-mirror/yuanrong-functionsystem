@@ -109,7 +109,6 @@ private:
 
     litebus::Future<runtime::v1::StartResponse> CreateSandbox(
         const std::shared_ptr<messages::StartInstanceRequest> &request);
-    std::string BuildSessionLogSetupCommand(const std::string &redirect) const;
 
     nlohmann::json BuildCommand(const ::std::shared_ptr<runtime::v1::StartRequest> &start);
     nlohmann::json BuildExecRequest(const std::string &runtimeID,
