@@ -506,22 +506,37 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
                 response.set_message("instance control is nullptr in local scheduler");
                 return litebus::Future<messages::ScheduleResponse>(response);
             }
+            // The parent AID write happens on this thread before the async hand-off,
+            // so it is ordered before any actor-side access.
             scheduleReq->mutable_instance()->set_parentfunctionproxyaid(instanceCtrl->GetActorAID());
-            return instanceCtrl->ScheduleFrontendAndWaitReady(scheduleReq, runtimePromise, std::move(callback));
+            // Marshalled onto the actor strand like the bindings below:
+            // ScheduleFrontendAndWaitReady mutates the ready-callback registry
+            // (instanceRegisteredReadyCallResultCallback_), and a direct call from
+            // this gRPC thread would race the actor's own accesses to that map.
+            return litebus::Async(instanceCtrl->GetActorAID(), &InstanceCtrlActor::ScheduleFrontendAndWaitReady,
+                                  scheduleReq, runtimePromise, std::move(callback));
         };
+    // Both bindings below touch InstanceCtrlActor member maps (the ready-callback
+    // registry and the frontend-create failure snapshots). They are invoked
+    // from the dispatcher's timeout/continuation threads, so the calls MUST be
+    // marshalled onto the actor strand via litebus::Async — a direct call
+    // would race the actor's own writes (RecordFrontendCreateFailure/Retry,
+    // fulfillment erase) on the same unordered_maps.
     bindings.readyUnregister =
         [instanceCtrl(instanceCtrl_)](const std::string &requestID, const std::string &reason) {
             if (instanceCtrl != nullptr) {
-                instanceCtrl->UnregisterFrontendReadyWait(requestID, reason);
+                (void)litebus::Async(instanceCtrl->GetActorAID(),
+                                     &InstanceCtrlActor::UnregisterFrontendReadyWait, requestID, reason);
             }
         };
     bindings.createFailureLookup =
         [instanceCtrl(instanceCtrl_)](const std::string &requestID)
             -> litebus::Future<FrontendCreateFailureSnapshot> {
             if (instanceCtrl == nullptr) {
-                return FrontendCreateFailureSnapshot{};
+                return litebus::Future<FrontendCreateFailureSnapshot>(FrontendCreateFailureSnapshot{});
             }
-            return instanceCtrl->TakeFrontendCreateFailureSnapshot(requestID);
+            return litebus::Async(instanceCtrl->GetActorAID(),
+                                  &InstanceCtrlActor::TakeFrontendCreateFailureSnapshot, requestID);
         };
     bindings.enableKillDispatch = true;
     bindings.killInvoker =

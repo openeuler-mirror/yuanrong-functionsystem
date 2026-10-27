@@ -26,6 +26,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include <nlohmann/json.hpp>
 #include <openssl/ssl.h>
 
 #include "common/state_machine/instance_control_view.h"
@@ -45,6 +46,30 @@ struct TcpTunnelServerConfig {
 };
 
 int ResolvePublishedTCPPort(const std::string &portForwardMetadata, int targetPort, std::string &error);
+
+// Parsed frontend tunnel header. Field contract (enforced by
+// ParseTunnelRequestHeader):
+//   - instanceID / requestID / protocol: required, non-empty, and subject to the
+//     same length bound + log-safe charset as the correlation fields (they are
+//     logged on every dial/accept path and instanceID feeds the lookup tables).
+//   - targetPort: required, 1..65535.
+//   - traceID / traceParent (forwarded by the frontend wsproxy tunnel header):
+//     optional — an absent/empty value passes unvalidated (headers from older
+//     frontends parse unchanged), but a present value must be bounded in length
+//     and log-safe. Malformed values reject the whole request.
+struct TunnelRequest {
+    std::string instanceID;
+    std::string requestID;
+    int targetPort{ 0 };
+    std::string traceID;
+    std::string traceParent;
+};
+
+// Parses and validates the tunnel request fields from the framed JSON header.
+// Returns false with a non-empty error on invalid/unsupported headers; on
+// return the out-params are reset first, so a false return never leaves
+// stale fields from a previous parse behind.
+bool ParseTunnelRequestHeader(const nlohmann::json &header, TunnelRequest &request, std::string &error);
 
 class TcpTunnelServer {
 public:
@@ -78,6 +103,8 @@ private:
     bool ConfigureTLS();
     int ResolveHostPort(const std::string &instanceID, int targetPort, std::string &error) const;
     std::string ResolveContainerIP(const std::string &instanceID, std::string &error) const;
+    bool ResolveBackendAddress(const TunnelRequest &request, std::string &connectHost, int &backendPort,
+                               std::string &error) const;
     bool Relay(SSL *ssl, int clientFd, int backendFd) const;
 
     TcpTunnelServerConfig config_;

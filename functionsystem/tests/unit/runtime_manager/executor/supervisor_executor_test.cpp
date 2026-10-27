@@ -17,11 +17,24 @@
 #include "runtime_manager/executor/supervisor_executor.h"
 
 #include <fcntl.h>
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
+
+#include <chrono>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <vector>
+
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+#include "opentelemetry/sdk/trace/processor.h"
+#include "opentelemetry/sdk/trace/recordable.h"
+#include "opentelemetry/sdk/trace/span_data.h"
+#include "opentelemetry/sdk/trace/tracer_provider_factory.h"
+#include "opentelemetry/trace/provider.h"
 
 #include "common/constants/constants.h"
 #include "common/proto/pb/message_pb.h"
@@ -30,6 +43,8 @@
 #include "common/status/status.h"
 #include "common/utils/files.h"
 #include "utils/future_test_helper.h"
+#include "common/trace/trace_manager.h"
+#include "common/trace/create_trace_helper.h"
 
 namespace functionsystem::runtime_manager {
 
@@ -1419,6 +1434,159 @@ TEST_F(SupervisorExecutorTest, BuildCommand_CreatesSessionLayoutWithLatestSymlin
         " && mkdir -p '/home/agent os/yr_sessions/20261022_064556/logs'"
         " && ln -sfn '20261022_064556' '/home/agent os/yr_sessions/latest' && 'python3'"));
     EXPECT_THAT(cmdLine, testing::HasSubstr(" >>'/home/agent os/yr_sessions/latest/logs/runtime-x 1.log' 2>&1"));
+}
+
+// the supervisor sandbox-create round trip is spanned by
+// yr.instance.create_sandbox (mirroring sandboxd_executor). The span starts
+// synchronously in CreateSandbox and is stopped on every exit of
+// OnCreateSandboxDone — here the failure exit, since the supervisor UDS socket
+// does not exist in the test environment.
+class SupervisorExecutorTraceTest : public SupervisorExecutorTest {
+protected:
+    // Captures ended spans so the test can make positive assertions (span was
+    // really created, with which attributes): the TraceManager store only
+    // exposes span presence, and a processor-less provider would leave the
+    // old "store is empty" assertion vacuously green even if StartSandboxCreateSpan
+    // were never called.
+    class CapturingSpanProcessor : public opentelemetry::sdk::trace::SpanProcessor {
+    public:
+        struct EndedSpan {
+            std::string name;
+            std::map<std::string, int64_t> intAttributes;
+        };
+
+        std::unique_ptr<opentelemetry::sdk::trace::Recordable> MakeRecordable() noexcept override
+        {
+            return std::unique_ptr<opentelemetry::sdk::trace::Recordable>(new opentelemetry::sdk::trace::SpanData());
+        }
+
+        void OnStart(opentelemetry::sdk::trace::Recordable &,
+                     const opentelemetry::trace::SpanContext &) noexcept override
+        {
+        }
+
+        void OnEnd(std::unique_ptr<opentelemetry::sdk::trace::Recordable> &&recordable) noexcept override
+        {
+            // The C++ SDK has no ReadableSpan interface — the recordable handed to
+            // OnEnd is the SDK's SpanData (what MakeRecordable below creates and
+            // what every span carries); downcast to it to read name/attributes.
+            // Check the dynamic type BEFORE releasing ownership: if the SDK ever
+            // hands us a different Recordable, the unique_ptr keeps (and destroys)
+            // it instead of leaking it through a failed cast.
+            if (dynamic_cast<opentelemetry::sdk::trace::SpanData *>(recordable.get()) == nullptr) {
+                return;
+            }
+            auto span = std::unique_ptr<opentelemetry::sdk::trace::SpanData>(
+                static_cast<opentelemetry::sdk::trace::SpanData *>(recordable.release()));
+            if (span == nullptr) {
+                return;
+            }
+            std::lock_guard<std::mutex> lock(mutex_);
+            EndedSpan ended;
+            // GetName() returns a string_view; materialize it (the SpanData dies
+            // with this call).
+            ended.name = std::string(span->GetName());
+            for (const auto &attribute : span->GetAttributes()) {
+                // Attribute values are OwnedAttributeValue variants; int64_t is
+                // the type yr.*.code attributes are stamped with.
+                if (opentelemetry::nostd::holds_alternative<int64_t>(attribute.second)) {
+                    ended.intAttributes[attribute.first] = opentelemetry::nostd::get<int64_t>(attribute.second);
+                }
+            }
+            endedSpans_.push_back(std::move(ended));
+        }
+
+        bool ForceFlush(std::chrono::microseconds) noexcept override
+        {
+            return true;
+        }
+
+        bool Shutdown(std::chrono::microseconds) noexcept override
+        {
+            return true;
+        }
+
+        std::vector<EndedSpan> EndedSpans() const
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            return endedSpans_;
+        }
+
+    private:
+        mutable std::mutex mutex_;
+        std::vector<EndedSpan> endedSpans_;
+    };
+
+    void SetUp() override
+    {
+        SupervisorExecutorTest::SetUp();
+        // Save the process-wide tracing state; restore it in TearDown so the
+        // suites running after this one are not left with tracing disabled or
+        // a null provider.
+        enableTraceSaved_ = trace::TraceManager::GetInstance().enableTrace_;
+        hostIDSaved_ = trace::TraceManager::GetInstance().hostID_;
+        providerSaved_ = opentelemetry::trace::Provider::GetTracerProvider();
+        trace::TraceManager::GetInstance().Clear();
+        trace::TraceManager::GetInstance().enableTrace_ = true;
+        trace::TraceManager::GetInstance().hostID_ = "node-a";
+        std::vector<std::unique_ptr<opentelemetry::sdk::trace::SpanProcessor>> processors;
+        auto processor = std::make_unique<CapturingSpanProcessor>();
+        processor_ = processor.get();
+        processors.push_back(std::move(processor));
+        auto provider = opentelemetry::nostd::shared_ptr<opentelemetry::trace::TracerProvider>(
+            opentelemetry::sdk::trace::TracerProviderFactory::Create(std::move(processors)).release());
+        opentelemetry::trace::Provider::SetTracerProvider(provider);
+    }
+
+    void TearDown() override
+    {
+        trace::TraceManager::GetInstance().Clear();
+        trace::TraceManager::GetInstance().enableTrace_ = enableTraceSaved_;
+        trace::TraceManager::GetInstance().hostID_ = hostIDSaved_;
+        opentelemetry::trace::Provider::SetTracerProvider(providerSaved_);
+        // processor_ dies with the provider installed above; drop the alias.
+        processor_ = nullptr;
+        SupervisorExecutorTest::TearDown();
+    }
+
+protected:
+    CapturingSpanProcessor *processor_ { nullptr };
+
+private:
+    bool enableTraceSaved_ { false };
+    std::string hostIDSaved_;
+    opentelemetry::nostd::shared_ptr<opentelemetry::trace::TracerProvider> providerSaved_;
+};
+
+TEST_F(SupervisorExecutorTraceTest, CreateSandboxSpansSandboxCreateRoundTrip)
+{
+    // TestCreateSandbox() builds the request itself: the ARGUMENT becomes
+    // runtimeinstanceinfo().runtimeid(), while requestid() — the span key — is
+    // fixed to "test_request_id" inside the helper (and instanceid() to
+    // "test_instance_id"). Keeping the key in one named constant ties the
+    // assertions to that contract instead of an unexplained literal.
+    constexpr const char *kTestSpanKey = "test_request_id";
+    auto future = executor_->TestCreateSandbox("rt-trace-1");
+
+    // The supervisor socket does not exist here, so the round trip fails and
+    // OnCreateSandboxDone takes the failWith exit — the span must be stopped.
+    // failWith stops the span BEFORE settling the promise, so once the future
+    // is ready the span has necessarily been ended and exported.
+    ASSERT_AWAIT_READY(future);
+    EXPECT_NE(future.Get().code(), 0);
+    // Positive assertion: exactly one create_sandbox span was exported, named
+    // and attributed per the helper contract (failWith stamps yr.sandbox.code
+    // with the failure response code).
+    auto endedSpans = processor_->EndedSpans();
+    ASSERT_EQ(endedSpans.size(), 1U);
+    EXPECT_EQ(endedSpans[0].name, trace::kCreateSandboxSpanName);
+    auto sandboxCode = endedSpans[0].intAttributes.find("yr.sandbox.code");
+    ASSERT_NE(sandboxCode, endedSpans[0].intAttributes.end());
+    EXPECT_EQ(sandboxCode->second, static_cast<int64_t>(StatusCode::ERR_INNER_COMMUNICATION));
+    // And the store no longer holds it (span ended).
+    EXPECT_TRUE(trace::TraceManager::GetInstance()
+                    .GetSpanIDFromStore(kTestSpanKey, trace::kCreateSandboxSpanName)
+                    .empty());
 }
 
 }  // namespace functionsystem::runtime_manager
