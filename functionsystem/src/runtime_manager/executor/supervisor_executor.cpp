@@ -16,13 +16,18 @@
 
 #include "supervisor_executor.h"
 
+#include <dirent.h>
 #include <sys/un.h>
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <sstream>
+#include <thread>
 #include <utility>
+#include <vector>
 
 #include "async/asyncafter.hpp"
 #include "common/constants/constants.h"
@@ -55,6 +60,11 @@ constexpr int HTTP_STATUS_OK_MIN = 200;
 constexpr int HTTP_STATUS_OK_MAX = 300;   // exclusive upper bound of 2xx
 constexpr int HTTP_STATUS_NO_CONTENT = 204;
 constexpr double CPU_MILLICORES_PER_CORE = 1000.0;   // CPU resource is in milli-cores (1000 = 1 core)
+// Workspace autofs prewarm: the first directory read re-establishes the expired indirect mount,
+// but it may take a moment (or an NFS round trip) to complete, so poll briefly before failing.
+// The bound is kept near 2s because this runs on the executor's actor thread.
+constexpr int WORKSPACE_PREWARM_MAX_ATTEMPTS = 20;
+constexpr int WORKSPACE_PREWARM_INTERVAL_MS = 100;
 
 SupervisorExecutor::SupervisorExecutor(const std::string &name, const litebus::AID &functionAgentAID)
     : Executor(name), functionAgentAID_(functionAgentAID)
@@ -287,6 +297,75 @@ bool SupervisorExecutor::IsHomeMounted(const std::string &rootfsJson, const std:
     return false;
 }
 
+bool SupervisorExecutor::PrewarmWorkspaceSource(const std::shared_ptr<messages::StartInstanceRequest> &request) const
+{
+    const auto &info = request->runtimeinstanceinfo();
+    const auto &runtimeID = info.runtimeid();
+    const auto &deployOpts = info.deploymentconfig().deployoptions();
+
+    auto hostUserIter = deployOpts.find(HOST_USER);
+    const std::string hostUser =
+        (hostUserIter == deployOpts.end() || hostUserIter->second.empty()) ? "agentos" : hostUserIter->second;
+    const std::string homeDir = "/home/" + hostUser;
+    auto rootfsIter = deployOpts.find(CONTAINER_ROOTFS);
+    const std::string rootfsJson = rootfsIter != deployOpts.end() ? rootfsIter->second : std::string{};
+    if (rootfsJson.empty()) {
+        return true;
+    }
+
+    // The workspace path reaches the executor only through deployoptions["rootfs"]: the frontend
+    // turns POST /api/agent's workspace field into one bind mount whose source is that workspace
+    // (e.g. /home/agentos/users/<u>) and whose target is the sandbox home. The target is
+    // /home/<host_user> once the frontend has resolved the user, and stays the literal
+    // /home/__AGENT_USER__ placeholder when that resolution was skipped. Only this source is an
+    // autofs indirect mount, so only it is probed.
+    static constexpr const char *agentUserPlaceholderTarget = "/home/__AGENT_USER__";
+    std::vector<std::string> workspaceSources;
+    try {
+        const auto rootfs = nlohmann::json::parse(rootfsJson);
+        if (rootfs.contains("mounts") && rootfs["mounts"].is_array()) {
+            for (const auto &m : rootfs["mounts"]) {
+                if (!m.is_object() || !m.contains("source") || !m["source"].is_string() ||
+                    !m.contains("target") || !m["target"].is_string()) {
+                    continue;
+                }
+                const auto target = m["target"].get<std::string>();
+                if (target == homeDir || target == agentUserPlaceholderTarget) {
+                    workspaceSources.emplace_back(m["source"].get<std::string>());
+                }
+            }
+        }
+    } catch (const std::exception &e) {
+        YRLOG_WARN("{}|Failed to parse rootfs mounts for workspace prewarm: {}, skip", runtimeID, e.what());
+        return true;
+    }
+
+    for (const auto &source : workspaceSources) {
+        bool ready = false;
+        for (int attempt = 0; attempt < WORKSPACE_PREWARM_MAX_ATTEMPTS; ++attempt) {
+            // Reading the directory, not stat(), is what triggers the autofs indirect mount. A
+            // stale trigger directory can be stat()ed successfully while unmounted, so stat() would
+            // report a false "ready"; opendir() either mounts synchronously or fails (ENOENT/ELOOP).
+            DIR *dir = opendir(source.c_str());
+            if (dir != nullptr) {
+                (void)readdir(dir);
+                closedir(dir);
+                ready = true;
+                break;
+            }
+            YRLOG_WARN("{}|Workspace source {} not ready (attempt {}/{}): {}", runtimeID, source, attempt + 1,
+                       WORKSPACE_PREWARM_MAX_ATTEMPTS, std::strerror(errno));
+            std::this_thread::sleep_for(std::chrono::milliseconds(WORKSPACE_PREWARM_INTERVAL_MS));
+        }
+        if (!ready) {
+            YRLOG_ERROR("{}|Workspace source {} still unavailable after {}ms prewarm", runtimeID, source,
+                        WORKSPACE_PREWARM_MAX_ATTEMPTS * WORKSPACE_PREWARM_INTERVAL_MS);
+            return false;
+        }
+    }
+    return true;
+}
+
 nlohmann::json SupervisorExecutor::BuildCgroup(const messages::RuntimeInstanceInfo &info)
 {
     const auto &runtimeResources = info.runtimeconfig().resources().resources();
@@ -365,12 +444,24 @@ litebus::Future<runtime::v1::StartResponse> SupervisorExecutor::CreateSandbox(
     const auto &runtimeID = request->runtimeinstanceinfo().runtimeid();
     litebus::Promise<runtime::v1::StartResponse> promise;
     auto result = promise.GetFuture();
-    nlohmann::json createRequest = CreateRequest(request);
 
     // yr.instance.create_sandbox spans the supervisor sandbox-create round trip
     // (mirrors sandboxd_executor). Stopped in OnCreateSandboxDone regardless of
     // outcome; failures carry yr.sandbox.code/message via the shared helper.
     trace::StartSandboxCreateSpan(request);
+
+    // Re-establish an expired workspace autofs mount in this namespace before jiuwenbox/bwrap
+    // clones it; otherwise the first bind mount fails with "Too many levels of symbolic links".
+    if (!PrewarmWorkspaceSource(request)) {
+        runtime::v1::StartResponse failRsp{};
+        failRsp.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+        failRsp.set_message("workspace is unavailable, please retry");
+        trace::StopSandboxCreateSpan(request, failRsp);
+        promise.SetValue(failRsp);
+        return result;
+    }
+
+    nlohmann::json createRequest = CreateRequest(request);
 
     SendRequestToSupervisor("POST", SUPERVISOR_SANDBOX_PREFIX, createRequest)
         .OnComplete(litebus::Defer(GetAID(), &SupervisorExecutor::OnCreateSandboxDone,

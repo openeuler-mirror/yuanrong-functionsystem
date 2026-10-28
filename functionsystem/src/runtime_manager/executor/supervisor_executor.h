@@ -104,6 +104,16 @@ private:
     bool IsHomeMounted(const std::string &rootfsJson, const std::string &homeDir,
                        const std::string &runtimeID) const;
 
+    // Touch the workspace bind source in the host mount namespace before jiuwenbox runs bwrap.
+    // An idle autofs entry (--timeout=300) is lazily unmounted; bwrap then clones CLONE_NEWNS
+    // and its bind mount of the stale entry fails with "Too many levels of symbolic links".
+    // Opening and reading the directory (not stat(), which can succeed against the stale trigger
+    // directory) re-establishes the indirect mount in the namespace bwrap inherits, so the bind
+    // succeeds. The workspace is the rootfs bind mount whose target is /home/<host_user>, which is
+    // how the frontend forwards POST /api/agent's workspace field. Sources that never materialize
+    // are reported as a retryable failure.
+    bool PrewarmWorkspaceSource(const std::shared_ptr<messages::StartInstanceRequest> &request) const;
+
     nlohmann::json CreateRequest(const std::shared_ptr<messages::StartInstanceRequest> &request);
     nlohmann::json BuildCgroup(const messages::RuntimeInstanceInfo &info);
 
