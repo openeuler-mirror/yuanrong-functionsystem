@@ -20,10 +20,13 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <utime.h>
 
+#include <algorithm>
 #include <atomic>
 #include <fstream>
+#include <map>
 #include <regex>
 
 #include "common/logs/logging.h"
@@ -284,6 +287,48 @@ public:
 
         struct utimbuf times = { modificationTime, modificationTime };
         EXPECT_EQ(utime(logFile.c_str(), &times), 0);
+        return logFile;
+    }
+
+    static void TouchLogFile(const std::string &path)
+    {
+        std::ofstream outfile(path);
+        outfile << "runtime log. This is a Test." << std::endl;
+        // fail fast with an accurate message instead of a 10s await timeout
+        EXPECT_TRUE(litebus::os::ExistPath(path)) << "failed to create " << path;
+    }
+
+    // Supervisor per-runtime layout (legacy, pre-instance-naming): <logs>/<rid>/<rid>.log
+    // with `logBytes` of padding. Kept for the compat tests — old instances created
+    // before the instance-id naming must keep rotating/expiring after an upgrade.
+    std::string MockCreateSupervisorRuntimeLogs(const std::string &runtimeID, size_t logBytes)
+    {
+        (void)litebus::os::Mkdir(LOG_BASE_DIR);
+        const auto ridDir = litebus::os::Join(LOG_BASE_DIR, runtimeID);
+        (void)litebus::os::Mkdir(ridDir);
+        const auto logFile = litebus::os::Join(ridDir, runtimeID + ".log");
+        std::ofstream outfile(logFile, std::ios::app);
+        outfile << std::string(logBytes, 'x');
+        outfile.close();
+        // fail fast with an accurate message instead of a 10s await timeout
+        EXPECT_TRUE(litebus::os::ExistPath(logFile)) << "failed to create " << logFile;
+        return logFile;
+    }
+
+    // Supervisor per-instance layout (current): <logs>/<instanceID>/<runtimeID>.log —
+    // dir named by the instance id, redirect log by the runtime id. Returns the log path.
+    std::string MockCreateSupervisorInstanceLogs(const std::string &instanceID, const std::string &runtimeID,
+                                                 size_t logBytes)
+    {
+        (void)litebus::os::Mkdir(LOG_BASE_DIR);
+        const auto instDir = litebus::os::Join(LOG_BASE_DIR, instanceID);
+        (void)litebus::os::Mkdir(instDir);
+        const auto logFile = litebus::os::Join(instDir, runtimeID + ".log");
+        std::ofstream outfile(logFile, std::ios::app);
+        outfile << std::string(logBytes, 'x');
+        outfile.close();
+        // fail fast with an accurate message instead of a 10s await timeout
+        EXPECT_TRUE(litebus::os::ExistPath(logFile)) << "failed to create " << logFile;
         return logFile;
     }
 
@@ -601,6 +646,288 @@ TEST_F(LogManagerTest, RotateOversizeLogUnderDaemonUmask)
     auto fileInfo = GetFileInfo(logFile);
     ASSERT_TRUE(fileInfo.IsSome());
     EXPECT_EQ(fileInfo.Get().st_size, 0) << logFile;
+}
+
+/**
+ * Feature: CollectSubdirLogFiles
+ * Description: Only per-runtime and per-instance REAL dirs under runtime_logs_dir are
+ *              descended: java/legacy dirs are named "runtime-<uuid>(-<12hex>)?" and
+ *              supervisor instance dirs by the bare instance UUID; their plain files are
+ *              collected as absolute paths. Component dirs, non-matching dir names, dot
+ *              entries, nested dirs, symlinks named like either shape (IsDir is
+ *              lstat-based — the log dir is world-writable, a planted link must not be
+ *              followed), and FILE-side symlinks inside a descended dir (IsFile must
+ *              refuse them, else root logrotate copytruncates the link target) are all
+ *              skipped, as are flat files.
+ */
+TEST_F(LogManagerTest, CollectSubdirLogFilesDescendsRuntimeAndInstanceDirs)
+{
+    (void)litebus::os::Mkdir(LOG_BASE_DIR);
+    // single path source: everything below derives from LOG_BASE_DIR
+    helper_->runtimeLogsPath_ = LOG_BASE_DIR;
+
+    const std::string rid = "runtime-12345678-1234-4abc-8def-123456789abc";
+    const std::string ridDir = LOG_BASE_DIR + rid;
+    (void)litebus::os::Mkdir(ridDir);
+    // collected: the redirect log and a ds client log living beside it
+    TouchLogFile(ridDir + "/" + rid + ".log");
+    TouchLogFile(ridDir + "/ds_client_12345.log");
+    // skipped inside the dir: hidden files, nested dirs
+    TouchLogFile(ridDir + "/.hidden");
+    (void)litebus::os::Mkdir(ridDir + "/nested");
+    TouchLogFile(ridDir + "/nested/" + rid + ".log");
+
+    // supervisor instance dir (current layout): named by the bare instance UUID
+    const std::string iid = "87654321-4321-4abc-9def-210fedcba987";
+    const std::string iidDir = LOG_BASE_DIR + iid;
+    (void)litebus::os::Mkdir(iidDir);
+    TouchLogFile(iidDir + "/" + rid + ".log");
+    TouchLogFile(iidDir + "/ds_client_12345.log");
+    TouchLogFile(iidDir + "/.hidden");
+    (void)litebus::os::Mkdir(iidDir + "/nested");
+    TouchLogFile(iidDir + "/nested/" + rid + ".log");
+
+    // component dir: real dir, but the name matches neither shape
+    (void)litebus::os::Mkdir(LOG_BASE_DIR + "function_system");
+    TouchLogFile(LOG_BASE_DIR + "function_system/function_system.log");
+
+    // non-matching dir name
+    (void)litebus::os::Mkdir(LOG_BASE_DIR + "not-a-runtime");
+    TouchLogFile(LOG_BASE_DIR + "not-a-runtime/x.log");
+
+    // symlinks named like either shape, pointing at real dirs: refused
+    const std::string ridLink = "runtime-55555555-6666-4abc-8def-777777777777";
+    ASSERT_EQ(symlink(ridDir.c_str(), (LOG_BASE_DIR + ridLink).c_str()), 0);
+    const std::string iidLink = "99999999-8888-4abc-9def-777777777777";
+    ASSERT_EQ(symlink(iidDir.c_str(), (LOG_BASE_DIR + iidLink).c_str()), 0);
+
+    // dot-prefixed runtime-shaped dir
+    (void)litebus::os::Mkdir(LOG_BASE_DIR + "." + rid);
+    TouchLogFile(LOG_BASE_DIR + "." + rid + "/" + rid + ".log");
+
+    // flat runtime log file: not a dir, never descended
+    TouchLogFile(LOG_BASE_DIR + "runtime-11111111-2222-4abc-8def-333333333333.log");
+
+    // FILE-side symlink inside a descended dir: a runtime-shaped name pointing
+    // at a system file must NOT be collected (root copytruncate would act on
+    // the target)
+    const std::string plantedLink = "runtime-44444444-5555-4abc-8def-666666666666.log";
+    ASSERT_EQ(symlink("/etc/hostname", (iidDir + "/" + plantedLink).c_str()), 0);
+
+    auto entriesOption = litebus::os::Ls(LOG_BASE_DIR);
+    ASSERT_TRUE(entriesOption.IsSome());
+    auto files = helper_->CollectSubdirLogFiles(entriesOption.Get());
+    std::sort(files.begin(), files.end());
+
+    std::vector<std::string> expected = { iidDir + "/" + rid + ".log", iidDir + "/ds_client_12345.log",
+                                          ridDir + "/" + rid + ".log", ridDir + "/ds_client_12345.log" };
+    std::sort(expected.begin(), expected.end());
+    EXPECT_EQ(files, expected);
+}
+
+/**
+ * Feature: ScanLogsRegularly rotation of supervisor subdir logs (current layout)
+ * Description: A supervisor runtime keeps its logs in <logs>/<instanceID>/<runtimeID>.log
+ *              (dir named by the instance id, file by the runtime id). The rotation pass
+ *              must descend the instance-named subdir and copytruncate the oversize
+ *              active log there: <runtimeID>.log.1 appears INSIDE the subdir and the
+ *              active file is truncated to 0.
+ */
+TEST_F(LogManagerTest, RotateOversizeInstanceSubdirLogsWithCopytruncate)
+{
+    const std::string iid = "87654321-4321-4abc-9def-210fedcba987";
+    const std::string rid = "runtime-12345678-1234-4abc-8def-123456789abc";
+    const auto logFile = MockCreateSupervisorInstanceLogs(iid, rid, 6 * 1024 * 1024);
+
+    const char *argv[] = { "./runtime-manager", "--runtime_logs_dir=/tmp/snuser/log",
+                           "--runtime_log_rotate_enable=true", "--runtime_log_rotate_max_size_mb=5",
+                           "--runtime_log_rotate_max_files=2" };
+    runtime_manager::Flags flags;
+    flags.ParseFlags(std::size(argv), argv);
+    helper_->SetConfig(flags);
+
+    helper_->ScanLogsRegularly();
+
+    // archive appears inside the instance-named subdir...
+    EXPECT_AWAIT_TRUE_FOR([=]() -> bool {
+        return litebus::os::ExistPath(logFile + ".1");
+    }, 10000);
+
+    // ...and copytruncate zeroes the active file
+    auto fileInfo = GetFileInfo(logFile);
+    ASSERT_TRUE(fileInfo.IsSome());
+    EXPECT_EQ(fileInfo.Get().st_size, 0) << logFile;
+}
+
+/**
+ * Feature: ScanLogsRegularly rotation of supervisor subdir logs (legacy layout)
+ * Description: Dirs created before the instance-id naming (<logs>/<runtimeID>/) keep
+ *              rotating after an upgrade: the runtime-shaped dir is still descended.
+ */
+TEST_F(LogManagerTest, RotateOversizeLegacyRuntimeSubdirLogsWithCopytruncate)
+{
+    const std::string rid = "runtime-12345678-1234-4abc-8def-123456789abc";
+    const auto logFile = MockCreateSupervisorRuntimeLogs(rid, 6 * 1024 * 1024);
+
+    const char *argv[] = { "./runtime-manager", "--runtime_logs_dir=/tmp/snuser/log",
+                           "--runtime_log_rotate_enable=true", "--runtime_log_rotate_max_size_mb=5",
+                           "--runtime_log_rotate_max_files=2" };
+    runtime_manager::Flags flags;
+    flags.ParseFlags(std::size(argv), argv);
+    helper_->SetConfig(flags);
+
+    helper_->ScanLogsRegularly();
+
+    EXPECT_AWAIT_TRUE_FOR([=]() -> bool {
+        return litebus::os::ExistPath(logFile + ".1");
+    }, 10000);
+
+    auto fileInfo = GetFileInfo(logFile);
+    ASSERT_TRUE(fileInfo.IsSome());
+    EXPECT_EQ(fileInfo.Get().st_size, 0) << logFile;
+}
+
+/**
+ * Feature: ScanLogsRegularly rotation vs java log4j files
+ * Description: Java runtime dirs match the same runtime-id name pattern, so their
+ *              files are collected as rotation candidates — but java-runtime-*.log
+ *              never matches the active-log regexes, so log4j's self-managed
+ *              rotation stays untouched even far past the size threshold.
+ */
+TEST_F(LogManagerTest, RotateSkipsJavaLog4jFilesInRuntimeDirs)
+{
+    MockCreateJavaRuntimeLogs();
+    const auto javaLogDir = litebus::os::Join(LOG_BASE_DIR, javaRuntimeID_);
+    std::map<std::string, off_t> sizesBefore;
+    for (const auto &name : { "java-runtime-error.log", "java-runtime-warn.log", "java-runtime-all.log" }) {
+        std::ofstream outfile(litebus::os::Join(javaLogDir, name), std::ios::app);
+        outfile << std::string(6 * 1024 * 1024, 'x');
+        outfile.close();
+        auto fileInfo = GetFileInfo(litebus::os::Join(javaLogDir, name));
+        ASSERT_TRUE(fileInfo.IsSome()) << name;
+        sizesBefore[name] = fileInfo.Get().st_size;
+    }
+
+    const char *argv[] = { "./runtime-manager", "--runtime_logs_dir=/tmp/snuser/log",
+                           "--runtime_log_rotate_enable=true", "--runtime_log_rotate_max_size_mb=5",
+                           "--runtime_log_rotate_max_files=2" };
+    runtime_manager::Flags flags;
+    flags.ParseFlags(std::size(argv), argv);
+    helper_->SetConfig(flags);
+
+    // precondition: the java dir IS descended and its files ARE collected as
+    // rotation candidates — the assertion below then proves the protection is
+    // the active-log regexes, not an accidental miss of the dir itself
+    auto entriesOption = litebus::os::Ls(LOG_BASE_DIR);
+    ASSERT_TRUE(entriesOption.IsSome());
+    auto collected = helper_->CollectSubdirLogFiles(entriesOption.Get());
+    for (const auto &name : { "java-runtime-error.log", "java-runtime-warn.log", "java-runtime-all.log" }) {
+        EXPECT_THAT(collected, testing::Contains(litebus::os::Join(javaLogDir, name))) << name;
+    }
+
+    helper_->ScanLogsRegularly();
+
+    // Wait longer than the rotate path could ever need: no java log may rotate.
+    EXPECT_AWAIT_TRUE_FOR([=]() -> bool {
+        auto filesOption = litebus::os::Ls(javaLogDir);
+        if (filesOption.IsNone()) {
+            return false;
+        }
+        for (const auto &file : filesOption.Get()) {
+            if (file == "java-runtime-error.log.1" || file == "java-runtime-warn.log.1" ||
+                file == "java-runtime-all.log.1") {
+                return false;
+            }
+        }
+        return true;
+    }, 2000);
+
+    // Sizes unchanged: copytruncate would have zeroed the active files.
+    for (const auto &name : { "java-runtime-error.log", "java-runtime-warn.log", "java-runtime-all.log" }) {
+        auto fileInfo = GetFileInfo(litebus::os::Join(javaLogDir, name));
+        ASSERT_TRUE(fileInfo.IsSome()) << name;
+        EXPECT_EQ(fileInfo.Get().st_size, sizesBefore[name]) << name;
+    }
+}
+
+/**
+ * Feature: ScanLogsRegularly expiration of supervisor instance dirs
+ * Description: An inactive supervisor instance's <logs>/<instanceID>/ dir expires like
+ *              a java runtime dir — but the runtime id for the activity gate is parsed
+ *              from the inner log file name (<runtimeID>.log), not the dir name. Once
+ *              the newest log inside passes the time threshold and the runtime is
+ *              inactive, both the log and the dir itself are queued and deleted.
+ */
+TEST_F(LogManagerTest, ExpiredSupervisorRuntimeDirIsRecycled)
+{
+    const std::string iid = "87654321-4321-4abc-9def-210fedcba987";
+    const std::string rid = "runtime-12345678-1234-4abc-8def-123456789abc";
+    const auto logFile = MockCreateSupervisorInstanceLogs(iid, rid, 16);
+    // age the log past the threshold (dir expiry follows the newest subfile mtime)
+    struct utimbuf times = { std::time(nullptr) - 60, std::time(nullptr) - 60 };
+    EXPECT_EQ(utime(logFile.c_str(), &times), 0);
+    // activity is keyed on the runtime id carried by the file name, not the dir name
+    EXPECT_CALL(*helper_, IsRuntimeActive(Eq(rid))).WillOnce(Return(false));
+
+    // runtime_std_log_dir is deliberately left at its default (""): the empty
+    // value must mean "not configured" and never skip the dir scan.
+    const char *argv[] = {
+        "./runtime-manager",
+        "--runtime_logs_dir=/tmp/snuser/log",
+        "--log_expiration_enable=true",
+        "--log_expiration_cleanup_interval=30",
+        "--log_expiration_time_threshold=10",
+        "--log_expiration_max_file_count=0"  // delete all expired log
+    };
+    runtime_manager::Flags flags;
+    flags.ParseFlags(std::size(argv), argv);
+    helper_->SetConfig(flags);
+
+    helper_->ScanLogsRegularly();
+
+    EXPECT_AWAIT_TRUE([=]() -> bool {
+        return !litebus::os::ExistPath(litebus::os::Join(LOG_BASE_DIR, iid));
+    });
+}
+
+/**
+ * Feature: ScanLogsRegularly expiration of supervisor instance dirs
+ * Description: An instance dir with no runtime-id shaped log inside (e.g. only ds
+ *              client logs) yields no runtime id for the activity gate — the dir is
+ *              left alone by the expiration pass rather than deleted unchecked.
+ */
+TEST_F(LogManagerTest, InstanceDirWithoutRuntimeLogIsLeftAlone)
+{
+    const std::string iid = "87654321-4321-4abc-9def-210fedcba987";
+    (void)litebus::os::Mkdir(LOG_BASE_DIR);
+    const auto instDir = litebus::os::Join(LOG_BASE_DIR, iid);
+    (void)litebus::os::Mkdir(instDir);
+    const auto dsLog = litebus::os::Join(instDir, "ds_client_12345.log");
+    TouchLogFile(dsLog);
+    struct utimbuf times = { std::time(nullptr) - 60, std::time(nullptr) - 60 };
+    EXPECT_EQ(utime(dsLog.c_str(), &times), 0);
+    EXPECT_CALL(*helper_, IsRuntimeActive(_)).Times(0);
+
+    // runtime_std_log_dir left at its default: an empty value must not skip
+    // the dir scan (the dir IS examined, then left alone for lack of a rid)
+    const char *argv[] = {
+        "./runtime-manager",
+        "--runtime_logs_dir=/tmp/snuser/log",
+        "--log_expiration_enable=true",
+        "--log_expiration_cleanup_interval=30",
+        "--log_expiration_time_threshold=10",
+        "--log_expiration_max_file_count=0"  // delete all expired log
+    };
+    runtime_manager::Flags flags;
+    flags.ParseFlags(std::size(argv), argv);
+    helper_->SetConfig(flags);
+
+    helper_->ScanLogsRegularly();
+
+    // no runtime id → no activity gate → dir (and its ds log) must survive
+    EXPECT_AWAIT_TRUE([=]() -> bool {
+        return litebus::os::ExistPath(dsLog);
+    });
 }
 
 TEST_F(LogManagerTest, RotateSkipsUndersizeLogs)

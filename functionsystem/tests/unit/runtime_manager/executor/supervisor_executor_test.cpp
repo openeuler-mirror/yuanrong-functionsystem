@@ -210,6 +210,11 @@ protected:
         config.runtimeLogPath = "/tmp/logs";
         config.runtimeStdLogDir = "std";
         executor_->config_ = config;
+
+        // Writable stand-in for runtime_logs_dir: SetRequestEnvsAndLogsForStart
+        // prepares the per-runtime log dir host-side, so the redirect tests need a
+        // real dir we own (cleaned by TearDown's recursive Rmdir of testDeployDir_).
+        testLogRoot_ = testDeployDir_ + "/logs";
     }
 
     void TearDown() override
@@ -302,6 +307,7 @@ protected:
     }
 
     std::string testDeployDir_;
+    std::string testLogRoot_;
     std::shared_ptr<MockSupervisorExecutor> executor_;
 };
 
@@ -1217,18 +1223,23 @@ TEST_F(SupervisorExecutorTest, CreateRequest_NoResourcesOmitsCgroup)
 /**
  * Feature: CreateRequest filesystem policy
  * Description: Without a workspace the home is a jiuwenbox-managed lifecycle `directories`
- *              entry (original policy shape) — no bind of our own, and no host log dir
- *              mount: runtime logs live inside the home at
- *              <home>/yr_sessions/<session>/logs/<rid>, created in-sandbox by BuildCommand's
- *              mkdir prefix.
+ *              entry (original policy shape), and the only bind is the per-instance log dir
+ *              leaf (<runtime_logs_dir>/<instanceID>): host-side prepared before sandbox
+ *              creation and bound at the same path, so the in-sandbox sh writes the redirect
+ *              log straight into the host-visible dir while sibling instance dirs stay
+ *              outside the sandbox mount namespace.
  */
 TEST_F(SupervisorExecutorTest, CreateRequest_HomeAsLifecycleDirWithoutWorkspace)
 {
-    auto request = GenStartInstanceRequest();  // runtimeID: test_runtime_id, no rootfs mounts
+    auto request = GenStartInstanceRequest();  // runtimeID: test_runtime_id, instanceID: test_instance_id
 
     auto req = executor_->TestCreateRequest(request);
     const auto &fs = req["policy"]["filesystem_policy"];
-    EXPECT_FALSE(fs.contains("bind_mounts"));
+    ASSERT_TRUE(fs.contains("bind_mounts"));
+    ASSERT_EQ(fs["bind_mounts"].size(), 1);
+    EXPECT_EQ(fs["bind_mounts"][0]["host_path"], "/tmp/logs/test_instance_id");
+    EXPECT_EQ(fs["bind_mounts"][0]["sandbox_path"], "/tmp/logs/test_instance_id");
+    EXPECT_EQ(fs["bind_mounts"][0]["mode"], "rw");
     ASSERT_TRUE(fs.contains("directories"));
     ASSERT_EQ(fs["directories"].size(), 1);
     EXPECT_EQ(fs["directories"][0], "/home/agentos");
@@ -1238,10 +1249,10 @@ TEST_F(SupervisorExecutorTest, CreateRequest_HomeAsLifecycleDirWithoutWorkspace)
 
 /**
  * Feature: CreateRequest filesystem policy
- * Description: With a workspace (rootfs.mounts binds the home) the only binds are the
- *              user-provided rootfs mounts and no `directories` entry is added. Runtime
- *              logs live inside the home at <home>/yr_sessions/<session>/logs/<rid> —
- *              no log-specific bind.
+ * Description: With a workspace (rootfs.mounts binds the home) the user-provided rootfs
+ *              mounts come first and the per-runtime log dir bind is APPENDED after them
+ *              (bind-order contract: user binds before ours, so a later mount of the log
+ *              leaf is not shadowed). No `directories` entry is added.
  */
 TEST_F(SupervisorExecutorTest, CreateRequest_WorkspaceHomeUsesRootfsMounts)
 {
@@ -1252,16 +1263,20 @@ TEST_F(SupervisorExecutorTest, CreateRequest_WorkspaceHomeUsesRootfsMounts)
     auto req = executor_->TestCreateRequest(request);
     const auto &fs = req["policy"]["filesystem_policy"];
     ASSERT_TRUE(fs.contains("bind_mounts"));
-    ASSERT_EQ(fs["bind_mounts"].size(), 1);
+    ASSERT_EQ(fs["bind_mounts"].size(), 2);
     EXPECT_EQ(fs["bind_mounts"][0]["host_path"], "/data/ws");
     EXPECT_EQ(fs["bind_mounts"][0]["sandbox_path"], "/home/agentos");
+    EXPECT_EQ(fs["bind_mounts"][1]["host_path"], "/tmp/logs/test_instance_id");
+    EXPECT_EQ(fs["bind_mounts"][1]["sandbox_path"], "/tmp/logs/test_instance_id");
+    EXPECT_EQ(fs["bind_mounts"][1]["mode"], "rw");
     EXPECT_FALSE(fs.contains("directories"));
 }
 
 /**
  * Feature: CreateRequest filesystem policy
- * Description: A custom HOST_USER moves the home (and with it the runtime log dir
- *              <home>/yr_sessions/<session>/logs/<rid>) under /home/<user>.
+ * Description: A custom HOST_USER moves the home under /home/<user>, but NOT the
+ *              per-runtime log dir bind: the log leaf lives under the component-owned
+ *              runtime_logs_dir, independent of the sandbox user.
  */
 TEST_F(SupervisorExecutorTest, CreateRequest_HostUserMovesHomePaths)
 {
@@ -1272,57 +1287,164 @@ TEST_F(SupervisorExecutorTest, CreateRequest_HostUserMovesHomePaths)
     auto req = executor_->TestCreateRequest(request);
     EXPECT_EQ(req["policy"]["filesystem_policy"]["directories"][0], "/home/User9876");
     EXPECT_EQ(req["policy"]["environment"]["JIUWENSWARM_HOME"], "/home/User9876");
+    EXPECT_EQ(req["policy"]["filesystem_policy"]["bind_mounts"][0]["host_path"], "/tmp/logs/test_instance_id");
+    EXPECT_EQ(req["policy"]["filesystem_policy"]["bind_mounts"][0]["sandbox_path"], "/tmp/logs/test_instance_id");
 }
 
 /**
  * Feature: SetRequestEnvsAndLogsForStart
- * Description: The redirect goes to the sandbox-visible log path (no host path inside the
- *              sandbox), stdout and stderr share one file, and GLOG_log_dir
- *              are overridden to the same dir so .std/ds client logs land beside the
- *              redirect log.
+ * Description: The per-instance log dir (<runtime_logs_dir>/<instanceID>) is prepared
+ *              host-side BEFORE sandbox creation (the bind source must exist), owned 0700
+ *              so only the sandbox user may read its logs. The redirect goes to the same
+ *              path as on the host (the leaf is bound at the identical path) and KEEPS the
+ *              runtimeID file name (logmanager regexes key on it), stdout and stderr share
+ *              one file, and GLOG_log_dir is overridden to the same dir so .std/ds client
+ *              logs land beside the redirect log.
  */
-TEST_F(SupervisorExecutorTest, SetRequestEnvsAndLogsForStart_RedirectsIntoSandboxLogDir)
+TEST_F(SupervisorExecutorTest, SetRequestEnvsAndLogsForStart_PrepareHostLogDirAndRedirect)
 {
-    executor_->config_.runtimeLogPath = "/var/log/agentos/yr_sessions/20261022_064556/logs";
-    auto request = GenStartInstanceRequest();  // runtimeID: test_runtime_id
+    executor_->config_.runtimeLogPath = testLogRoot_;
+    auto request = GenStartInstanceRequest();  // runtimeID: test_runtime_id, instanceID: test_instance_id
     runtime::v1::StartRequest start;
 
     executor_->TestSetRequestEnvsAndLogsForStart(&start, Envs{}, request);
 
-    // <home>/yr_sessions/<deploy-session>/logs/<runtimeID>/<runtimeID>.log — the session id is
-    // reused from runtimeLogPath's parent dir, the per-runtime subdir groups this instance's logs
-    EXPECT_EQ(start.stdout(), "/home/agentos/yr_sessions/20261022_064556/logs/test_runtime_id/test_runtime_id.log");
+    const std::string instDir = testLogRoot_ + "/test_instance_id";
+    // dir created host-side (recursive Mkdir, parents allowed to be absent)
+    EXPECT_TRUE(litebus::os::ExistPath(instDir));
+    // ...and tightened to 0700: unreadable for other local users
+    struct stat st {};
+    ASSERT_EQ(stat(instDir.c_str(), &st), 0);
+    EXPECT_EQ(st.st_mode & 0777, static_cast<unsigned>(0700));
+
+    // redirect lives in the instance-named leaf, file keeps the runtimeID name
+    EXPECT_EQ(start.stdout(), instDir + "/test_runtime_id.log");
     EXPECT_EQ(start.stderr(), start.stdout());
-    EXPECT_EQ(start.envs().at("GLOG_log_dir"), "/home/agentos/yr_sessions/20261022_064556/logs/test_runtime_id");
+    EXPECT_EQ(start.envs().at("GLOG_log_dir"), instDir);
     EXPECT_EQ(start.envs().at("YR_ONLY_STDOUT"), "true");
 }
 
 /**
  * Feature: SetRequestEnvsAndLogsForStart
- * Description: A custom HOST_USER moves the redirect path and the GLOG dirs under
- *              /home/<user>.
+ * Description: An already-existing log dir (runtime restart path) is not wiped: the
+ *              previous redirect log survives and only the mode is re-tightened to 0700.
  */
-TEST_F(SupervisorExecutorTest, SetRequestEnvsAndLogsForStart_HostUserMovesRedirectPath)
+TEST_F(SupervisorExecutorTest, SetRequestEnvsAndLogsForStart_ExistingDirKeepsContentAndTightensMode)
 {
-    executor_->config_.runtimeLogPath = "/var/log/agentos/yr_sessions/20261022_064556/logs";
-    auto request = GenStartInstanceRequest();  // runtimeID: test_runtime_id
+    const std::string instDir = testLogRoot_ + "/test_instance_id";
+    const std::string existingLog = instDir + "/test_runtime_id.log";
+    litebus::os::Mkdir(instDir);
+    TouchFile(existingLog);
+    // loosen the mode so the re-chmod is observable
+    ASSERT_EQ(chmod(instDir.c_str(), 0755), 0);
+
+    executor_->config_.runtimeLogPath = testLogRoot_;
+    auto request = GenStartInstanceRequest();
+    runtime::v1::StartRequest start;
+
+    executor_->TestSetRequestEnvsAndLogsForStart(&start, Envs{}, request);
+
+    struct stat st {};
+    ASSERT_EQ(stat(instDir.c_str(), &st), 0);
+    EXPECT_EQ(st.st_mode & 0777, static_cast<unsigned>(0700));
+    EXPECT_TRUE(litebus::os::ExistPath(existingLog));
+}
+
+/**
+ * Feature: SetRequestEnvsAndLogsForStart
+ * Description: A custom HOST_USER only feeds the best-effort chown of the log dir; the
+ *              redirect path itself is owned by the component (runtime_logs_dir), not
+ *              the sandbox home anymore. An unknown host user fails the chown with a
+ *              WARN and must not affect the redirect/envs.
+ */
+TEST_F(SupervisorExecutorTest, SetRequestEnvsAndLogsForStart_HostUserDoesNotMoveRedirectPath)
+{
+    executor_->config_.runtimeLogPath = testLogRoot_;
+    auto request = GenStartInstanceRequest();  // runtimeID: test_runtime_id, instanceID: test_instance_id
     (*request->mutable_runtimeinstanceinfo()->mutable_deploymentconfig()->mutable_deployoptions())[HOST_USER] =
         "User9876";
     runtime::v1::StartRequest start;
 
     executor_->TestSetRequestEnvsAndLogsForStart(&start, Envs{}, request);
 
-    EXPECT_EQ(start.stdout(), "/home/User9876/yr_sessions/20261022_064556/logs/test_runtime_id/test_runtime_id.log");
+    EXPECT_EQ(start.stdout(), testLogRoot_ + "/test_instance_id/test_runtime_id.log");
     EXPECT_EQ(start.stderr(), start.stdout());
-    EXPECT_EQ(start.envs().at("GLOG_log_dir"), "/home/User9876/yr_sessions/20261022_064556/logs/test_runtime_id");
+    EXPECT_EQ(start.envs().at("GLOG_log_dir"), testLogRoot_ + "/test_instance_id");
+    // the dir was still prepared despite the chown failure (unknown user)
+    EXPECT_TRUE(litebus::os::ExistPath(testLogRoot_ + "/test_instance_id"));
+}
+
+/**
+ * Feature: SetRequestEnvsAndLogsForStart
+ * Description: The log root is world-writable, so a symlink planted at
+ *              <logs>/<instanceID> must never be chmod/chown'ed through: the
+ *              prep refuses a non-dir entry (or a dir not owned by the manager)
+ *              and the link's target keeps its original mode and owner — no
+ *              local privesc via the privileged dir preparation.
+ */
+TEST_F(SupervisorExecutorTest, SetRequestEnvsAndLogsForStart_RefusesPlantedSymlinkAtLogDir)
+{
+    executor_->config_.runtimeLogPath = testLogRoot_;
+    const std::string target = testDeployDir_ + "/precious-file";
+    TouchFile(target);
+    const std::string instDir = testLogRoot_ + "/test_instance_id";
+    litebus::os::Mkdir(testLogRoot_);
+    ASSERT_EQ(symlink(target.c_str(), instDir.c_str()), 0);
+    // the target's pre-state, to prove it is left untouched
+    struct stat before {};
+    ASSERT_EQ(stat(target.c_str(), &before), 0);
+
+    auto request = GenStartInstanceRequest();
+    runtime::v1::StartRequest start;
+
+    executor_->TestSetRequestEnvsAndLogsForStart(&start, Envs{}, request);
+
+    // the planted entry is still a symlink (nothing acted on it)
+    struct stat after {};
+    ASSERT_EQ(lstat(instDir.c_str(), &after), 0);
+    EXPECT_TRUE(S_ISLNK(after.st_mode));
+    // and the target's mode and owner are unchanged
+    struct stat targetStat {};
+    ASSERT_EQ(stat(target.c_str(), &targetStat), 0);
+    EXPECT_EQ(targetStat.st_mode & 0777, before.st_mode & 0777);
+    EXPECT_EQ(targetStat.st_uid, before.st_uid);
+    EXPECT_EQ(targetStat.st_gid, before.st_gid);
+}
+
+/**
+ * Feature: ChownToUser (common/utils/files.h)
+ * Description: ChownToUser resolves the user via getpwnam and chowns uid+gid. Unknown
+ *              users and nonexistent paths return false; the current user always
+ *              succeeds (chown-to-self needs no privilege), so the happy path is
+ *              testable both as root and as a plain user.
+ */
+TEST_F(SupervisorExecutorTest, ChownToUserBasics)
+{
+    const std::string dir = testDeployDir_ + "/chown-target";
+    litebus::os::Mkdir(dir);
+
+    // unknown user: getpwnam miss
+    EXPECT_FALSE(ChownToUser(dir, "no-such-user-xyz"));
+
+    struct passwd *self = getpwuid(geteuid());
+    ASSERT_NE(self, nullptr);
+    ASSERT_NE(self->pw_name, nullptr);
+    EXPECT_TRUE(ChownToUser(dir, self->pw_name));
+    auto owner = GetOwner(dir);
+    ASSERT_TRUE(owner.IsSome());
+    EXPECT_EQ(owner.Get().first, self->pw_uid);
+    EXPECT_EQ(owner.Get().second, self->pw_gid);
+
+    // nonexistent path: chown fails
+    EXPECT_FALSE(ChownToUser(testDeployDir_ + "/missing", self->pw_name));
 }
 
 /**
  * Feature: BuildCommand
- * Description: With the per-runtime sandbox log path (<home>/yr_sessions/<session>/logs/<rid>),
- *              the command prefix is a single mkdir -p of the redirect's parent dir - the
- *              dir is created in-sandbox because the home's host backing is not ours to
- *              prepare; no symlink/bind layout is involved.
+ * Description: The command prefix is a single mkdir -p of the redirect's parent dir.
+ *              The dir is host-side prepared before sandbox creation (SetRequestEnvsAndLogsForStart);
+ *              the prefix stays as a defensive no-op and quotes the path like every
+ *              other token.
  */
 TEST_F(SupervisorExecutorTest, BuildCommand_CreatesPerRuntimeLogDir)
 {

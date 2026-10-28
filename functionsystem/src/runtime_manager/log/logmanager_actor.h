@@ -169,8 +169,20 @@ protected:
     void Finalize() override;
 
     // One-shot logrotate rotation of active logs that reached maxSizeMb;
-    // independent of logExpirationConfig_.enable.
-    void RotateOversizeLogs(const std::vector<std::string> &files);
+    // independent of logExpirationConfig_.enable. filePaths are absolute paths:
+    // flat runtime_logs_dir entries plus per-runtime subdir files.
+    void RotateOversizeLogs(const std::vector<std::string> &filePaths);
+
+    // Rotation candidates inside per-runtime / per-instance subdirs: the flat
+    // rotation listing never descends dirs, so their files are collected here.
+    // Java/legacy dirs are named "runtime-<uuid>(-<12hex>)?" and supervisor
+    // instance dirs by the bare instance UUID; component dirs (function_system
+    // etc.) match neither and are skipped. IsDir/IsFile are lstat-based, so
+    // symlinks planted in the 1777-writable log dir are refused — both the
+    // dir itself and the files inside. Java log4j files (java-*.log) never
+    // match the active-log regexes in RotateOversizeLogs, so java's
+    // self-managed rotation stays untouched.
+    std::vector<std::string> CollectSubdirLogFiles(const std::vector<std::string> &entries);
 
 private:
     LogExpiratioinConfig logExpirationConfig_;
@@ -182,6 +194,11 @@ private:
     litebus::AID runtimeManagerAID_;
 
     std::string GetJavaRuntimeIDFromLogDirName(const std::string &file, const std::string &filePath);
+
+    // Supervisor instance dirs (<logs>/<instanceID>/) are named by the instance
+    // id, not the runtime id: parse the runtime id from the inner log file
+    // names (<runtimeID>.log etc.). Empty when no runtime log is inside.
+    std::string GetRuntimeIDFromInstanceDir(const std::string &dirPath);
 
     std::string GetRuntimeIDFromLogFileName(const std::string &file, const std::string &filePath);
 

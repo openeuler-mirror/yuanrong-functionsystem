@@ -17,7 +17,10 @@
 #include "supervisor_executor.h"
 
 #include <dirent.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <sys/un.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <cctype>
@@ -60,6 +63,7 @@ constexpr int HTTP_STATUS_OK_MIN = 200;
 constexpr int HTTP_STATUS_OK_MAX = 300;   // exclusive upper bound of 2xx
 constexpr int HTTP_STATUS_NO_CONTENT = 204;
 constexpr double CPU_MILLICORES_PER_CORE = 1000.0;   // CPU resource is in milli-cores (1000 = 1 core)
+constexpr mode_t RUNTIME_LOG_DIR_MODE = 0700;
 // Workspace autofs prewarm: the first directory read re-establishes the expired indirect mount,
 // but it may take a moment (or an NFS round trip) to complete, so poll briefly before failing.
 // The bound is kept near 2s because this runs on the executor's actor thread.
@@ -399,9 +403,15 @@ nlohmann::json SupervisorExecutor::CreateRequest(const std::shared_ptr<messages:
     const std::string homeDir = "/home/" + hostUser;
 
     nlohmann::json policy = nlohmann::json::object();
-    if (auto bindMounts = ParseBindMounts(rootfsJson, runtimeID); !bindMounts.empty()) {
-        policy["filesystem_policy"] = { { "bind_mounts", std::move(bindMounts) } };
-    }
+    nlohmann::json bindMounts = ParseBindMounts(rootfsJson, runtimeID);
+    // Bind only this instance's own log dir (leaf) into the sandbox at the same
+    // path, appended after user binds per the bind-order contract: sibling
+    // instance dirs and component logs stay outside the sandbox mount namespace.
+    // The leaf is named by the instance id — the same id jiuwenbox shows as the
+    // sandbox id, so ops correlate "sandbox ls" with log dirs directly.
+    const auto instanceLogDir = litebus::os::Join(config_.runtimeLogPath, info.instanceid());
+    bindMounts.push_back({ { "host_path", instanceLogDir }, { "sandbox_path", instanceLogDir }, { "mode", "rw" } });
+    policy["filesystem_policy"] = { { "bind_mounts", std::move(bindMounts) } };
     if (!IsHomeMounted(rootfsJson, homeDir, runtimeID)) {
         const nlohmann::json homeDirs = nlohmann::json::array({ homeDir });
         policy["filesystem_policy"]["directories"] = homeDirs;
@@ -636,12 +646,11 @@ nlohmann::json SupervisorExecutor::BuildCommand(const std::shared_ptr<runtime::v
         // content (e.g. python -c "print('hello')") and must not be interpreted by sh.
         cmdLine += ShellQuote(start->command()[i]);
     }
-    // The redirect lives under the sandbox user home (<home>/yr_sessions/<session>/logs/<rid>),
-    // whose host backing we do not control (a user workspace or a jiuwenbox-managed dir), so
-    // the dir is created inside the sandbox right here — sh's ">>" does not mkdir parents.
-    // Quote the redirect path too (runtimeID/paths may contain spaces or shell metacharacters).
-    // stdout and stderr share one path; 2>&1 merges them into it.
-    // >> (O_APPEND) keeps the writer offset following EOF.
+    // The redirect lives in the bind-mounted per-runtime log dir (already
+    // prepared host-side before sandbox creation); the mkdir prefix stays as a
+    // defensive no-op. Quote the redirect path too (runtimeID/paths may contain
+    // spaces or shell metacharacters). stdout and stderr share one path; 2>&1
+    // merges them into it. >> (O_APPEND) keeps the writer offset following EOF.
     const std::string &redirect = start->stdout();
     const auto lastSlash = redirect.find_last_of('/');
     if (lastSlash != std::string::npos && lastSlash > 0) {
@@ -800,6 +809,51 @@ void SupervisorExecutor::BuildRuntimeCommands(runtime::v1::StartRequest *request
     }
 }
 
+void SupervisorExecutor::PrepareInstanceLogDir(const std::string &runtimeID, const std::string &hostUser,
+                                               const std::string &sandboxLogDir)
+{
+    // The log root is world-writable (01777): never act on a symlink planted
+    // at <logs>/<instanceID> and never race between check and use. mkdir(0700)
+    // is atomic (the fchmod below is authoritative regardless of umask); on
+    // EEXIST the entry must be a real dir owned by us — the sticky bit then
+    // pins it against replacement — and only then is it opened, so the fd
+    // pins fchmod/fchown against path swaps: a privileged chmod/chown can
+    // only ever hit this instance's own directory.
+    (void)litebus::os::Mkdir(config_.runtimeLogPath);
+    if (::mkdir(sandboxLogDir.c_str(), RUNTIME_LOG_DIR_MODE) != 0) {
+        struct stat entryStat {};
+        if (errno != EEXIST || ::lstat(sandboxLogDir.c_str(), &entryStat) != 0 || !S_ISDIR(entryStat.st_mode) ||
+            entryStat.st_uid != geteuid()) {
+            YRLOG_ERROR("{}|failed to create instance log dir {}: {}", runtimeID, sandboxLogDir,
+                        litebus::os::Strerror(errno));
+            return;
+        }
+        // our own dir from a previous start — the sticky bit pins it
+    }
+    const int logDirFd = ::open(sandboxLogDir.c_str(), O_RDONLY);
+    if (logDirFd < 0) {
+        YRLOG_ERROR("{}|failed to open instance log dir {}: {}", runtimeID, sandboxLogDir,
+                    litebus::os::Strerror(errno));
+        return;
+    }
+    if (::fchmod(logDirFd, RUNTIME_LOG_DIR_MODE) != 0) {
+        YRLOG_WARN("{}|failed to chmod {} to 0700: {}", runtimeID, sandboxLogDir, litebus::os::Strerror(errno));
+    }
+    uid_t logUid = 0;
+    gid_t logGid = 0;
+    if (!GetUserIds(hostUser, logUid, logGid)) {
+        YRLOG_WARN("{}|unknown host user {}, log dir left with the manager's owner: {}", runtimeID, hostUser,
+                   litebus::os::Strerror(errno));
+        (void)::close(logDirFd);
+        return;
+    }
+    if (::fchown(logDirFd, logUid, logGid) != 0) {
+        YRLOG_WARN("{}|failed to chown {} to user {}: {}", runtimeID, sandboxLogDir, hostUser,
+                   litebus::os::Strerror(errno));
+    }
+    (void)::close(logDirFd);
+}
+
 void SupervisorExecutor::SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *req, const Envs &envs,
                                                        const std::shared_ptr<messages::StartInstanceRequest> &request)
 {
@@ -810,25 +864,28 @@ void SupervisorExecutor::SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest
         return it != deployOpts.end() ? it->second : std::string{};
     };
     const std::string hostUser = getOpt(HOST_USER).empty() ? "agentos" : getOpt(HOST_USER);
-    // Per-runtime log dir under the sandbox user home, laid out after the yr CLI's host
-    // session structure: <home>/yr_sessions/<deploy-session>/logs/<runtimeID>. The session id
-    // is reused from the deployment session; the per-runtime subdir groups this instance's
-    // redirect log with its .std/ds client logs (GLOG override below).
-    const std::string sessionsRoot = litebus::os::Join("/home/" + hostUser, SESSIONS_ROOT_RELATIVE);
-    const std::string deploySession =
-        litebus::os::GetFileName(config_.runtimeLogPath.substr(0, config_.runtimeLogPath.find_last_of('/')));
+    // Per-instance log dir under the component session tree (runtime_logs_dir),
+    // bound into the sandbox at the same path: <logs>/<instanceID>/. Named by
+    // the instance id (= jiuwenbox sandbox id). Prepared host-side BEFORE
+    // sandbox creation — the bind source must exist — and owned by the sandbox
+    // user with 0700: the in-sandbox sh (running as that user) creates/appends
+    // the logs here, while sibling instance dirs and component logs stay
+    // outside the sandbox mount namespace (only this leaf is bound) and
+    // unreadable for other local users.
     const std::string sandboxLogDir =
-        litebus::os::Join(litebus::os::Join(litebus::os::Join(sessionsRoot, deploySession), "logs"), runtimeID);
+        litebus::os::Join(config_.runtimeLogPath, request->runtimeinstanceinfo().instanceid());
+    PrepareInstanceLogDir(runtimeID, hostUser, sandboxLogDir);
 
     const std::map<std::string, std::string> combineEnvs = cmdBuilder_.CombineEnvs(envs);
     req->mutable_envs()->insert(combineEnvs.begin(), combineEnvs.end());
     (*req->mutable_envs())[GLOG_LOG_DIR] = sandboxLogDir;
     (*req->mutable_envs())[YR_ONLY_STDOUT] = "true";
 
-    // Redirect into the sandbox-visible path under the user home. BuildCommand creates the dir
-    // inside the sandbox (the home may be backed by a user workspace we do not control
-    // host-side). Absolute path: ShellQuote'd (no ~ expansion) and HOME inside the sandbox is
-    // inherited from jiuwenbox-server.
+    // Redirect into the sandbox-visible log dir (the bind-mounted leaf, same
+    // path as on the host). The file keeps the runtimeID name: the logmanager's
+    // active-log regexes (rotation) and runtime-id parsing (expiry) key on it.
+    // Absolute path, ShellQuote'd (no ~ expansion); BuildCommand's mkdir prefix
+    // stays as a defensive no-op.
     const std::string stdOut = litebus::os::Join(sandboxLogDir, fmt::format("{}.log", runtimeID));
     req->set_stdout(stdOut);
     req->set_stderr(stdOut);

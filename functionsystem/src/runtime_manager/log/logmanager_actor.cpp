@@ -66,6 +66,13 @@ const std::regex STD_BOOTSTRAP_LOG_REGEX_PATTERN_REGEX(STD_BOOTSTRAP_LOG_REGEX_P
 const std::string DS_CLIENT_LOG_REGEX_PATTERN =
     R"(ds_client_(?:access_)?(\d+)(?:\.(?:INFO|DEBUG|ERROR|WARNING))?(?:\.log)?)";
 const std::regex DS_CLIENT_LOG_REGEX_PATTERN_REGEX(DS_CLIENT_LOG_REGEX_PATTERN);
+// Supervisor per-instance log dirs are named by the user-facing instance id
+// (the same id jiuwenbox shows as the sandbox id): a bare UUID — v4 or v5,
+// so the version nibble is not pinned to 4 — without the "runtime-" prefix.
+// The runtime id inside is carried by the log file names (<runtimeID>.log).
+const std::string INSTANCE_ID_DIR_REGEX_PATTERN =
+    "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";
+const std::regex INSTANCE_ID_DIR_REGEX_PATTERN_REGEX(INSTANCE_ID_DIR_REGEX_PATTERN);
 
 // for reuse log
 const std::regex REUSE_LOG_PREFIX_PATTERN_REGEX(R"(^((YR_\d+_\d{6})).*\.log(\.gz)?(\.\d+)?$)");
@@ -302,6 +309,27 @@ std::string LogManagerActor::GetJavaRuntimeIDFromLogDirName(const std::string &f
     return runtimeID;
 }
 
+std::string LogManagerActor::GetRuntimeIDFromInstanceDir(const std::string &dirPath)
+{
+    // Supervisor instance dirs (<logs>/<instanceID>/) carry the runtime id only
+    // in the inner log file names (<runtimeID>.log / .std / .out): parse it from
+    // there so expiry can gate on the runtime's activity. Empty when no
+    // runtime-id shaped log is inside (e.g. only ds client logs) — the dir is
+    // then left alone; the redirect log exists in practice.
+    auto subFilesOption = litebus::os::Ls(dirPath);
+    if (subFilesOption.IsNone()) {
+        return "";
+    }
+    for (const auto &subFile : subFilesOption.Get()) {
+        const auto subFilePath = litebus::os::Join(dirPath, subFile, '/');
+        std::string runtimeID = GetRuntimeIDFromLogFileName(subFile, subFilePath);
+        if (!runtimeID.empty()) {
+            return runtimeID;
+        }
+    }
+    return "";
+}
+
 std::string LogManagerActor::GetRuntimeIDFromLogFileName(const std::string &file, const std::string &filePath)
 {
     std::string runtimeID;
@@ -387,6 +415,41 @@ litebus::Future<bool> LogManagerActor::CollectAddFilesFuture(const std::list<lit
     return promise->GetFuture();
 }
 
+std::vector<std::string> LogManagerActor::CollectSubdirLogFiles(const std::vector<std::string> &entries)
+{
+    std::vector<std::string> files;
+    for (const auto &entry : entries) {
+        if (entry.empty() || entry.front() == '.') {
+            continue;
+        }
+        const auto dirPath = litebus::os::Join(runtimeLogsPath_, entry, '/');
+        // Only per-runtime/per-instance real dirs are descended: java runtime
+        // dirs are named "runtime-<uuid>(-<12hex>)?" (the same pattern the
+        // expiration pass uses) and supervisor instance dirs by the bare
+        // instance UUID; component dirs (function_system etc.) match neither
+        // and are skipped. IsDir is lstat-based, so a symlink planted in the
+        // 1777-writable log dir (pointing at arbitrary system paths) is refused.
+        if (!IsDir(dirPath) || (GetJavaRuntimeIDFromLogDirName(entry, dirPath).empty() &&
+                                !std::regex_match(entry, INSTANCE_ID_DIR_REGEX_PATTERN_REGEX))) {
+            continue;
+        }
+        auto subFilesOption = litebus::os::Ls(dirPath);
+        if (subFilesOption.IsNone()) {
+            continue;
+        }
+        for (const auto &subFile : subFilesOption.Get()) {
+            if (subFile.empty() || subFile.front() == '.') {
+                continue;
+            }
+            const auto subFilePath = litebus::os::Join(dirPath, subFile, '/');
+            if (IsFile(subFilePath)) {
+                files.emplace_back(subFilePath);
+            }
+        }
+    }
+    return files;
+}
+
 void LogManagerActor::ScanLogsRegularly()
 {
     // Rotation and expiration have independent enable gates.
@@ -402,13 +465,24 @@ void LogManagerActor::ScanLogsRegularly()
     }
 
     auto filesOption = litebus::os::Ls(runtimeLogsPath_);
+    std::vector<std::string> files;
     if (filesOption.IsNone() || filesOption.Get().empty()) {
-        YRLOG_WARN("no log file in {}", runtimeLogsPath_);
-        return;
+        YRLOG_DEBUG("no log file in {}", runtimeLogsPath_);
+    } else {
+        files = filesOption.Get();
     }
 
     if (logRotateConfig_.enable) {
-        RotateOversizeLogs(filesOption.Get());
+        std::vector<std::string> rotatePaths;
+        rotatePaths.reserve(files.size());
+        for (const auto &file : files) {
+            rotatePaths.emplace_back(litebus::os::Join(runtimeLogsPath_, file, '/'));
+        }
+        // Supervisor runtimes keep their logs in per-runtime subdirs
+        // (<logs>/<rid>/); add their files to the rotation candidates.
+        auto subdirFiles = CollectSubdirLogFiles(files);
+        rotatePaths.insert(rotatePaths.end(), subdirFiles.begin(), subdirFiles.end());
+        RotateOversizeLogs(rotatePaths);
     }
 
     if (!logExpirationConfig_.enable) {
@@ -421,15 +495,16 @@ void LogManagerActor::ScanLogsRegularly()
     if (logRotateConfig_.enable) {
         filesOption = litebus::os::Ls(runtimeLogsPath_);
         if (filesOption.IsNone() || filesOption.Get().empty()) {
-            StartScanLogs();
-            return;
+            files.clear();
+        } else {
+            files = filesOption.Get();
         }
     }
 
     if (logReuse_) {
-        ReuseLogScanAndClean(filesOption.Get());
+        ReuseLogScanAndClean(files);
     } else {
-        NoReuseLogScanAndClean(filesOption.Get());
+        NoReuseLogScanAndClean(files);
     }
 }
 
@@ -439,18 +514,30 @@ void LogManagerActor::NoReuseLogScanAndClean(const std::vector<std::string> &fil
     std::list<litebus::Future<bool>> adds;
     for (const auto &file : files) {
         auto filePath = litebus::os::Join(runtimeLogsPath_, file, '/');
-        bool isDir = !IsFile(filePath);
+        // Real dirs only: cpp runtime logs legitimately exist as soft links
+        // (see CPP_RUNTIME_LOG_REGEX_PATTERN above) and must keep flowing
+        // through the flat-file branch, so decide by S_ISDIR instead of
+        // "not a regular file".
+        struct stat entryStat {};
+        const bool isDir = ::lstat(filePath.c_str(), &entryStat) == 0 && S_ISDIR(entryStat.st_mode);
         YRLOG_DEBUG("Processing filePath: {}", filePath);
         if (isDir) {
             // Skip the exception and instance folders, which are for storing function exception
-            // and user console output logs respectively.
+            // and user console output logs respectively. An empty runtime_std_log_dir means
+            // "not configured": strncmp(<dir>, "", 0) == 0 would otherwise skip EVERY dir.
             if (strncmp(file.c_str(), "exception", EXCEPTION_DIR_LEN) == 0 ||
-                strncmp(file.c_str(), runtimeStdLogDir_.c_str(), runtimeStdLogDir_.size()) == 0) {
+                (!runtimeStdLogDir_.empty() &&
+                 strncmp(file.c_str(), runtimeStdLogDir_.c_str(), runtimeStdLogDir_.size()) == 0)) {
                 continue;
             }
 
             // If it is a directory, check the latest modification time of the files in the directory.
             std::string runtimeID = GetJavaRuntimeIDFromLogDirName(file, filePath);
+            if (runtimeID.empty() && std::regex_match(file, INSTANCE_ID_DIR_REGEX_PATTERN_REGEX)) {
+                // Supervisor instance dir: the runtime id lives in the inner log
+                // file names, not the dir name.
+                runtimeID = GetRuntimeIDFromInstanceDir(filePath);
+            }
             if (runtimeID.empty()) {
                 continue;
             }
@@ -599,13 +686,16 @@ void LogManagerActor::StartScanLogs()
 bool LogManagerActor::WriteRotateConf(const std::vector<std::string> &rotateTargets, const std::string &confPath)
 {
     // Explicit per-file blocks, never a glob, so each log keeps its own .N
-    // archive chain. "su" is required under root (root-run logrotate skips
-    // logs in the 01777 log dir without it) and forbidden under non-root.
+    // archive chain. rotateTargets are absolute paths: runtime_logs_dir entries
+    // and supervisor user-tree session logs alike. "su" is required under root
+    // (root-run logrotate skips logs in the 01777 log dir without it) and is a
+    // no-op for user-tree logs, whose dirs are user-owned and never world
+    // writable; forbidden under non-root.
     const bool runAsRoot = (geteuid() == 0);
     std::ostringstream conf;
     conf << "# generated by runtime-manager, do not edit\n";
     for (const auto &file : rotateTargets) {
-        conf << litebus::os::Join(runtimeLogsPath_, file, '/') << " {\n"
+        conf << file << " {\n"
              << "    size " << logRotateConfig_.maxSizeMb << "M\n"
              << "    rotate " << logRotateConfig_.maxFiles << "\n"
              << "    copytruncate\n"
@@ -677,11 +767,11 @@ int LogManagerActor::RunLogrotate(const std::string &confPath, const std::string
     return exitCode;
 }
 
-void LogManagerActor::RotateOversizeLogs(const std::vector<std::string> &files)
+void LogManagerActor::RotateOversizeLogs(const std::vector<std::string> &filePaths)
 {
     const off_t maxSizeBytes = static_cast<off_t>(logRotateConfig_.maxSizeMb) * BYTES_PER_MB;
     std::vector<std::string> oversizeTargets;
-    for (const auto &file : files) {
+    for (const auto &filePath : filePaths) {
         // Only active logs rotate; archives (.log.N / .std.N / .out.N) never
         // enter the conf. PYTHON pattern group indices: RUNTIME_LOG_REGEX_PATTERN
         // nests one group, so 1=runtimeID, 3=(-\d{14})?, 4=(\.\d*)?, 5=(\.gz)?,
@@ -689,6 +779,7 @@ void LogManagerActor::RotateOversizeLogs(const std::vector<std::string> &files)
         // STD_OUTPUT has no archive group, so any match is an active .out/.err
         // (RuntimeExecutor redirect; litebus CreateFileIO opens O_APPEND, so
         // copytruncate is safe).
+        const auto file = litebus::os::GetFileName(filePath);
         std::smatch matchResult;
         bool isActiveLog =
             (std::regex_match(file, matchResult, PYTHON_RUNTIME_LOG_REGEX_PATTERN_REGEX) &&
@@ -700,11 +791,26 @@ void LogManagerActor::RotateOversizeLogs(const std::vector<std::string> &files)
         if (!isActiveLog) {
             continue;
         }
-        auto fileInfoOption = GetFileInfo(litebus::os::Join(runtimeLogsPath_, file, '/'));
+        auto fileInfoOption = GetFileInfo(filePath);
         if (fileInfoOption.IsSome() && fileInfoOption.Get().st_size >= maxSizeBytes) {
-            oversizeTargets.emplace_back(file);
+            oversizeTargets.emplace_back(filePath);
         }
     }
+    if (oversizeTargets.empty()) {
+        return;
+    }
+
+    // Re-verify right before the conf is written: the candidates live in dirs
+    // the sandbox user owns, and a file swapped for a symlink after collection
+    // would send the root-run copytruncate at an arbitrary target. Refuse
+    // anything that is not still a real regular file (lstat; narrow the
+    // scan-to-rotate window to this check).
+    oversizeTargets.erase(std::remove_if(oversizeTargets.begin(), oversizeTargets.end(),
+        [](const std::string &filePath) {
+            struct stat st {};
+            return ::lstat(filePath.c_str(), &st) != 0 || !S_ISREG(st.st_mode);
+        }),
+        oversizeTargets.end());
     if (oversizeTargets.empty()) {
         return;
     }
