@@ -790,7 +790,7 @@ void DockerExecutor::BuildRuntimeCommands(runtime::v1::StartRequest *request,
 }
 
 void DockerExecutor::SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *req, const Envs &envs,
-    const std::string &runtimeID)
+    const std::string &runtimeID, const std::string &instanceID)
 {
     const std::map<std::string, std::string> combineEnvs = cmdBuilder_.CombineEnvs(envs);
     req->mutable_envs()->insert(combineEnvs.begin(), combineEnvs.end());
@@ -798,7 +798,11 @@ void DockerExecutor::SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *re
 
     std::string stdOut;
     std::string stdErr;
-    ConfigRuntimeRedirectLog(stdOut, stdErr, runtimeID);  // base Executor impl (shared)
+    ConfigRuntimeRedirectLog(stdOut, stdErr, runtimeID, instanceID);  // base Executor impl (shared)
+    if (!stdOut.empty()) {
+        // glog must follow the redirect: only the instance dir is mounted into the container.
+        (*req->mutable_envs())[GLOG_LOG_DIR] = GetRuntimeLogDir(instanceID, runtimeID);
+    }
     req->set_stdout(stdOut);
     req->set_stderr(stdErr);
 }
@@ -901,17 +905,16 @@ std::vector<std::string> DockerExecutor::BuildBindMounts(const Envs &envs,
         }
     }
 
-    // Mount the host log dir into the container at the same path so yr runtime logs
-    // (GLOG_LOG_DIR = runtimeLogPath) and the per-runtime stdout/stderr redirect files land on the
-    // host. The redirect files are created by the container's sh itself under the 1777 dir set in
-    // ConfigRuntimeRedirectLog. IsSafeBindSource guards against a misconfigured log path
-    // (e.g. /proc, /etc).
-    const std::string hostLogDir = litebus::os::Join(config_.runtimeLogPath, config_.runtimeStdLogDir);
+    // Mount this instance's log dir at the same path so glog and the stdout/stderr redirect land
+    // on the host. Only the instance leaf is bound, never the log root, and it comes after the
+    // rootfs mounts so a broader rootfs mount cannot shadow it. A dir that does not exist means
+    // the redirect preparation failed, and the mount is skipped with it.
+    const std::string hostLogDir = GetRuntimeLogDir(info.instanceid(), info.runtimeid());
     if (!hostLogDir.empty() && IsSafeBindSource(hostLogDir) && litebus::os::ExistPath(hostLogDir)) {
         bindMounts.push_back(hostLogDir + ":" + hostLogDir);
-        YRLOG_INFO("{}|mount host log dir {} into container at same path", info.runtimeid(), hostLogDir);
+        YRLOG_INFO("{}|mount host instance log dir {} into container at same path", info.runtimeid(), hostLogDir);
     } else {
-        YRLOG_WARN("{}|skip log dir mount (path={}, safe={}, exists={}); yr logs may stay in-container",
+        YRLOG_WARN("{}|skip instance log dir mount (path={}, safe={}, exists={}); yr logs may stay in-container",
                    info.runtimeid(), hostLogDir, IsSafeBindSource(hostLogDir), litebus::os::ExistPath(hostLogDir));
     }
     return bindMounts;
@@ -1072,7 +1075,7 @@ litebus::Future<messages::StartInstanceResponse> DockerExecutor::StartRuntime(
 
     runtime::v1::StartRequest startReq;
     BuildRuntimeCommands(&startReq, args);
-    SetRequestEnvsAndLogsForStart(&startReq, envs, runtimeID);
+    SetRequestEnvsAndLogsForStart(&startReq, envs, runtimeID, info.instanceid());
 
     std::map<std::string, std::string> containerEnvs(startReq.envs().begin(), startReq.envs().end());
     containerEnvs.erase(LD_LIBRARY_PATH);

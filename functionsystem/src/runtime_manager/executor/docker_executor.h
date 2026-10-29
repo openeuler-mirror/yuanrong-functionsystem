@@ -75,7 +75,10 @@ protected:
 private:
     void BuildRuntimeCommands(runtime::v1::StartRequest *request, const std::vector<std::string> &buildArgs);
 
-    void SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *req, const Envs &envs, const std::string &runtimeID);
+    // Fill envs and the per-instance redirect paths ({runtimeLogPath}/{instanceID}/{runtimeID}.log),
+    // and point glog at that instance dir.
+    void SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *req, const Envs &envs, const std::string &runtimeID,
+                                       const std::string &instanceID);
 
     // Resolve the executable path for the runtime language.
     std::string ResolveExecPath(const std::string &language,
