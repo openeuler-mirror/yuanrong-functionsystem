@@ -20,8 +20,11 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
+
+#include <filesystem>
 
 #include "common/constants/constants.h"
 #include "common/proto/pb/message_pb.h"
@@ -102,6 +105,17 @@ public:
     std::string TestBuildShellCmdLine(const std::string &execPath, const runtime::v1::StartRequest &startReq)
     {
         return BuildShellCmdLine(execPath, startReq);
+    }
+
+    void TestSetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *req, const Envs &envs,
+                                           const std::string &runtimeID, const std::string &instanceID)
+    {
+        SetRequestEnvsAndLogsForStart(req, envs, runtimeID, instanceID);
+    }
+
+    std::vector<std::string> TestBuildBindMounts(const Envs &envs, const messages::RuntimeInstanceInfo &info)
+    {
+        return BuildBindMounts(envs, info);
     }
 
     // Set internal state for testing
@@ -477,7 +491,7 @@ TEST_F(DockerExecutorTest, TestConnectDockerFailsWithoutDocker)
     EXPECT_EQ(result.value("__http_status", -1), 0);
 }
 
-// ---- BuildShellCmdLine (tolerant redirect, issue #93) ----
+// ---- BuildShellCmdLine (tolerant redirect) ----
 
 /**
  * Feature: BuildShellCmdLine
@@ -570,6 +584,76 @@ TEST_F(DockerExecutorTest, BuildShellCmdLine_EmptyArgv)
     EXPECT_THAT(cmdLine, testing::HasSubstr(" 2>&1"));          // stderr merged into stdout
     EXPECT_THAT(cmdLine, testing::HasSubstr("; else exec ;"));  // else branch present and closed
     EXPECT_THAT(cmdLine, testing::EndsWith("; fi"));
+}
+
+// ---- per-instance log isolation ----
+
+/**
+ * Feature: SetRequestEnvsAndLogsForStart
+ * Description: Redirect and glog dir are the instance's own dir ({runtimeLogPath}/{instanceID}),
+ *              created 1777 so the container's sh creates the log file as its own uid.
+ */
+TEST_F(DockerExecutorTest, LogRedirectIsPerInstance)
+{
+    const std::string logRoot = "/tmp/docker_executor_test_log_root";
+    std::filesystem::remove_all(logRoot);
+    litebus::os::Mkdir(logRoot);
+    executor_->config_.runtimeLogPath = logRoot;
+
+    runtime::v1::StartRequest startReq;
+    executor_->TestSetRequestEnvsAndLogsForStart(&startReq, Envs{}, "runtime-1", "instance-1");
+
+    const std::string instanceDir = logRoot + "/instance-1";
+    EXPECT_EQ(startReq.stdout(), instanceDir + "/runtime-1.log");
+    EXPECT_EQ(startReq.stderr(), startReq.stdout());
+    const auto logDirIter = startReq.envs().find(GLOG_LOG_DIR);
+    ASSERT_TRUE(logDirIter != startReq.envs().end());
+    EXPECT_EQ(logDirIter->second, instanceDir);
+
+    struct stat st {};
+    ASSERT_EQ(::stat(instanceDir.c_str(), &st), 0);
+    EXPECT_EQ(st.st_mode & 07777, static_cast<mode_t>(01777));
+
+    std::filesystem::remove_all(logRoot);
+}
+
+/**
+ * Feature: BuildBindMounts
+ * Description: Only the instance's own log dir is bound, after the rootfs mounts so it cannot be
+ *              shadowed; a dir absent on the host is not bound.
+ */
+TEST_F(DockerExecutorTest, BuildBindMounts_MountsOnlyInstanceLogDir)
+{
+    const std::string logRoot = "/tmp/docker_executor_test_log_root";
+    std::filesystem::remove_all(logRoot);
+    litebus::os::Mkdir(logRoot);
+    const std::string instanceDir = logRoot + "/instance-1";
+    litebus::os::Mkdir(instanceDir);
+    executor_->config_.runtimeLogPath = logRoot;
+
+    messages::RuntimeInstanceInfo info;
+    info.set_runtimeid("runtime-1");
+    info.set_instanceid("instance-1");
+    // Rootfs mount covering /data only; the log bind must still come after it.
+    (*info.mutable_deploymentconfig()->mutable_deployoptions())[CONTAINER_ROOTFS] =
+        R"({"mounts":[{"source":"/data/host","target":"/data"}]})";
+
+    auto bindMounts = executor_->TestBuildBindMounts(Envs{}, info);
+
+    ASSERT_EQ(bindMounts.size(), 2);
+    EXPECT_EQ(bindMounts[0], "/data/host:/data");
+    EXPECT_EQ(bindMounts[1], instanceDir + ":" + instanceDir);
+    for (const auto &m : bindMounts) {
+        EXPECT_THAT(m, testing::Not(testing::StartsWith(logRoot + ":")));
+    }
+
+    // No instance dir on the host -> the redirect preparation failed -> no log bind at all.
+    info.set_instanceid("instance-missing");
+    auto noLogBindMounts = executor_->TestBuildBindMounts(Envs{}, info);
+    ASSERT_EQ(noLogBindMounts.size(), 1);
+    EXPECT_EQ(noLogBindMounts[0], "/data/host:/data");
+
+    std::filesystem::remove_all(logRoot);
 }
 
 }  // namespace functionsystem::runtime_manager

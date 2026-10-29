@@ -233,12 +233,17 @@ protected:
 
     virtual void Finalize();
 
-    // Resolve per-runtime stdout/stderr redirect paths under runtimeLogPath/runtimeStdLogDir;
-    // mkdir the dir and chmod it 1777 so the container's sh -c ">>/out 2>&1" creates the files
-    // itself (owner = sh's euid). The 1777 dir requires the logrotate conf to carry a "su"
-    // directive (root-run logrotate otherwise skips world-writable dirs). Shared by docker
-    // and supervisor.
-    void ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr, const std::string &runtimeID);
+    // Per-instance log dir {runtimeLogPath}/{instanceID}: the log manager scans one level below
+    // the log root, and the sandbox executors share this layout. An unusable instanceID (empty,
+    // separators, "..") falls back to the runtimeID, then to the log root itself.
+    std::string GetRuntimeLogDir(const std::string &instanceID, const std::string &runtimeID) const;
+
+    // Redirect stdout/stderr to {log dir}/{runtimeID}.log. The dir is chmod'd 1777 so the
+    // container or sandbox creates the file as its own uid; logrotate then needs a "su"
+    // directive. On failure stdOut/stdErr stay empty and the caller skips both the redirect and
+    // the log-dir mount — log preparation must not block startup.
+    void ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr, const std::string &runtimeID,
+                                  const std::string &instanceID);
 
     RuntimeConfig config_{};
 

@@ -104,11 +104,17 @@ private:
     litebus::Future<messages::StartInstanceResponse> StartRuntime(
         const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &language, const Envs &envs,
         const std::vector<std::string> &args);
-    nlohmann::json ParseBindMounts(const std::string &rootfsJson, const std::string &runtimeID);
+    nlohmann::json ParseBindMounts(const std::string &rootfsJson, const std::string &runtimeID,
+                                   const std::string &instanceID);
     bool IsReadonlyMount(const nlohmann::json &mount);
 
     nlohmann::json CreateRequest(const std::shared_ptr<messages::StartInstanceRequest> &request);
-    void BindHostLogDir(const std::string &runtimeID, nlohmann::json &bindMounts);
+    // Append the rootfs JSON "mounts" entries as bind mounts, skipping malformed ones.
+    void AppendRootfsMounts(const std::string &rootfsJson, const std::string &runtimeID,
+                            nlohmann::json &bindMounts);
+    // Append this instance's host log dir ({runtimeLogPath}/{instanceID}) as a same-path rw bind.
+    void BindInstanceLogDir(const std::string &runtimeID, const std::string &instanceID,
+                            nlohmann::json &bindMounts);
 
     litebus::Future<runtime::v1::StartResponse> CreateSandbox(
         const std::shared_ptr<messages::StartInstanceRequest> &request);

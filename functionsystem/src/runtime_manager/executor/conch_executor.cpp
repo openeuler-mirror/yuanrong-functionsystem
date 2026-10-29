@@ -330,36 +330,47 @@ bool ConchExecutor::IsReadonlyMount(const nlohmann::json &mount)
     return s == "true" || s == "1";
 }
 
-nlohmann::json ConchExecutor::ParseBindMounts(const std::string &rootfsJson, const std::string &runtimeID)
+nlohmann::json ConchExecutor::ParseBindMounts(const std::string &rootfsJson, const std::string &runtimeID,
+                                              const std::string &instanceID)
 {
     nlohmann::json bindMounts = nlohmann::json::array();
-    BindHostLogDir(runtimeID, bindMounts);
+    AppendRootfsMounts(rootfsJson, runtimeID, bindMounts);
+    // Appended last so a rootfs mount covering the log path cannot shadow it.
+    BindInstanceLogDir(runtimeID, instanceID, bindMounts);
+    return bindMounts;
+}
+
+void ConchExecutor::AppendRootfsMounts(const std::string &rootfsJson, const std::string &runtimeID,
+                                       nlohmann::json &bindMounts)
+{
     if (rootfsJson.empty()) {
-        return bindMounts;
+        return;
     }
     try {
         const auto rootfs = nlohmann::json::parse(rootfsJson);
-        if (rootfs.contains("mounts") && rootfs["mounts"].is_array()) {
-            for (const auto &m : rootfs["mounts"]) {
-                if (!m.is_object() || !m.contains("source") || !m.contains("target")) {
-                    continue;
-                }
-                bindMounts.push_back({
-                    {"host_path", m["source"].get<std::string>()},
-                    {"sandbox_path", m["target"].get<std::string>()},
-                    {"mode", IsReadonlyMount(m) ? "ro" : "rw"},
-                });
+        if (!rootfs.contains("mounts") || !rootfs["mounts"].is_array()) {
+            return;
+        }
+        for (const auto &m : rootfs["mounts"]) {
+            if (!m.is_object() || !m.contains("source") || !m.contains("target")) {
+                continue;
             }
+            bindMounts.push_back({
+                {"host_path", m["source"].get<std::string>()},
+                {"sandbox_path", m["target"].get<std::string>()},
+                {"mode", IsReadonlyMount(m) ? "ro" : "rw"},
+            });
         }
     } catch (const std::exception &e) {
         YRLOG_WARN("{}|Failed to parse rootfs mounts: {}, skip mounts", runtimeID, e.what());
     }
-    return bindMounts;
 }
 
-void ConchExecutor::BindHostLogDir(const std::string &runtimeID, nlohmann::json &bindMounts)
+void ConchExecutor::BindInstanceLogDir(const std::string &runtimeID, const std::string &instanceID,
+                                       nlohmann::json &bindMounts)
 {
-    const std::string hostLogDir = litebus::os::Join(config_.runtimeLogPath, config_.runtimeStdLogDir);
+    // Only the instance leaf, never the log root: one sandbox must not see another's logs.
+    const std::string hostLogDir = GetRuntimeLogDir(instanceID, runtimeID);
     if (!hostLogDir.empty() && IsSafeBindSource(hostLogDir) && litebus::os::ExistPath(hostLogDir)) {
         bindMounts.push_back({
             { "host_path", hostLogDir },
@@ -369,8 +380,8 @@ void ConchExecutor::BindHostLogDir(const std::string &runtimeID, nlohmann::json 
         return;
     }
 
-    YRLOG_WARN("{}|skip log dir mount (path={}, safe={}, exists={}); yr logs may stay in-sandbox", runtimeID,
-               hostLogDir, IsSafeBindSource(hostLogDir), litebus::os::ExistPath(hostLogDir));
+    YRLOG_WARN("{}|skip instance log dir mount (path={}, safe={}, exists={}); yr logs may stay in-sandbox",
+               runtimeID, hostLogDir, IsSafeBindSource(hostLogDir), litebus::os::ExistPath(hostLogDir));
 }
 
 // Build the jiuwenbox sandbox create body for the conch backend. ConchPolicy is extra="forbid"
@@ -408,7 +419,7 @@ nlohmann::json ConchExecutor::CreateRequest(const std::shared_ptr<messages::Star
 
     // bind_mounts under conch.filesystem_policy (NOT the bwrap top-level filesystem_policy);
     // each host_path must exist and be a directory on the jiuwenbox host (validate_conch_policy).
-    if (auto bindMounts = ParseBindMounts(rootfsJson, runtimeID); !bindMounts.empty()) {
+    if (auto bindMounts = ParseBindMounts(rootfsJson, runtimeID, info.instanceid()); !bindMounts.empty()) {
         conch["filesystem_policy"] = { { "bind_mounts", std::move(bindMounts) } };
     }
 
@@ -801,13 +812,18 @@ void ConchExecutor::SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *req
                                                   const std::shared_ptr<messages::StartInstanceRequest> &request)
 {
     const auto &runtimeID = request->runtimeinstanceinfo().runtimeid();
+    const auto &instanceID = request->runtimeinstanceinfo().instanceid();
     const std::map<std::string, std::string> combineEnvs = cmdBuilder_.CombineEnvs(envs);
     req->mutable_envs()->insert(combineEnvs.begin(), combineEnvs.end());
     (*req->mutable_envs())[YR_ONLY_STDOUT] = "true";
 
     std::string stdOut;
     std::string stdErr;
-    ConfigRuntimeRedirectLog(stdOut, stdErr, runtimeID);  // base Executor impl (shared)
+    ConfigRuntimeRedirectLog(stdOut, stdErr, runtimeID, instanceID);  // base Executor impl (shared)
+    if (!stdOut.empty()) {
+        // glog must follow the redirect: only the instance dir is mounted into the sandbox.
+        (*req->mutable_envs())[GLOG_LOG_DIR] = GetRuntimeLogDir(instanceID, runtimeID);
+    }
     req->set_stdout(stdOut);
     req->set_stderr(stdErr);
 }

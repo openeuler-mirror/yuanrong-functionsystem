@@ -159,10 +159,52 @@ std::string Executor::DockerDaemonMessage(const nlohmann::json &resp)
     return "";
 }
 
-void Executor::ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr,
-    const std::string &runtimeID)
+namespace {
+// A log dir name must stay a single component under the log root: reject anything that could
+// escape it (empty, ".", "..", separators) or that logrotate/sh would choke on.
+std::string SanitizeLogDirName(const std::string &name)
 {
-    auto path = litebus::os::Join(config_.runtimeLogPath, config_.runtimeStdLogDir);
+    constexpr size_t maxLogDirNameLen = 128;
+    if (name.empty() || name.size() > maxLogDirNameLen || name == "." || name == "..") {
+        return "";
+    }
+    for (const char c : name) {
+        const bool allowed = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                             c == '_' || c == '-' || c == '.';
+        if (!allowed) {
+            return "";
+        }
+    }
+    return name;
+}
+}  // namespace
+
+std::string Executor::GetRuntimeLogDir(const std::string &instanceID, const std::string &runtimeID) const
+{
+    // runtimeLogPath, not runtimeLogPath/runtimeStdLogDir: it is the log manager's scan root,
+    // and only one level below it is descended.
+    const std::string logRoot = config_.runtimeLogPath;
+    std::string dirName = SanitizeLogDirName(instanceID);
+    if (dirName.empty()) {
+        YRLOG_WARN("{}|instanceID '{}' is not usable as a log dir name, fall back to runtimeID", runtimeID,
+                   instanceID);
+        dirName = SanitizeLogDirName(runtimeID);
+    }
+    if (dirName.empty()) {
+        YRLOG_WARN("{}|runtimeID is not usable as a log dir name either, use the log root", runtimeID);
+        return logRoot;
+    }
+    return litebus::os::Join(logRoot, dirName);
+}
+
+void Executor::ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr, const std::string &runtimeID,
+                                        const std::string &instanceID)
+{
+    const auto path = GetRuntimeLogDir(instanceID, runtimeID);
+    if (path.empty()) {
+        YRLOG_WARN("{}|no usable log dir, log redirect skipped", runtimeID);
+        return;
+    }
     if (!litebus::os::ExistPath(path)) {
         YRLOG_WARN("{}|std log path {} not found, try to make dir", runtimeID, path);
         if (!litebus::os::Mkdir(path).IsNone()) {
@@ -172,9 +214,8 @@ void Executor::ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr
         }
     }
 
-    // 目录放权：rwxrwxrwt（sticky bit，等同 /tmp），任意 uid 可建文件但仅可删自己的。
-    // 容器内 sh -c ">>log 2>&1" 以容器运行用户身份 open(O_CREAT|O_APPEND) 日志文件，属主天然是该 uid。
-    // 01777 目录还要求 logrotate conf 携带 su 指令（root 身份的 logrotate 会跳过全局可写目录）。
+    // 目录放权：rwxrwxrwt（sticky，等同 /tmp）。容器/sandbox 内的 sh 以自身 uid 创建日志文件，
+    // 属主天然正确；01777 目录要求 logrotate conf 携带 su 指令。
     constexpr mode_t logDirMode = 01777;  // rwxrwxrwt + sticky bit
     if (::chmod(path.c_str(), logDirMode) != 0) {
         YRLOG_WARN("{}|failed to chmod log dir {} to 1777, msg: {}; log redirect skipped, "

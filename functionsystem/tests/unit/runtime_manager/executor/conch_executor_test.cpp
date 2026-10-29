@@ -21,6 +21,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
 
@@ -79,6 +80,12 @@ public:
     nlohmann::json TestCreateRequest(const std::shared_ptr<messages::StartInstanceRequest> &request)
     {
         return CreateRequest(request);
+    }
+
+    void TestSetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *req, const Envs &envs,
+                                           const std::shared_ptr<messages::StartInstanceRequest> &request)
+    {
+        SetRequestEnvsAndLogsForStart(req, envs, request);
     }
 
     messages::StartInstanceResponse TestGenSuccessStartInstanceResponse(
@@ -146,11 +153,10 @@ protected:
         litebus::os::Mkdir(testDeployDir_ + "/layer/func");
         TouchFile(testDeployDir_ + "/layer/func/funcObj");
 
-        // Initialize config. runtimeLogPath points at a directory this suite never provisions
-        // itself, but earlier start-path tests create it via Executor::ConfigRuntimeRedirectLog
-        // (and CI runners reuse /tmp across builds), so remove any stale copy below — otherwise
-        // BindHostLogDir would append a log-dir mount and CreateRequest's filesystem_policy
-        // emission would depend on test execution order.
+        // Initialize config. Earlier start-path tests create this log dir via
+        // Executor::ConfigRuntimeRedirectLog (and CI runners reuse /tmp across builds), so remove
+        // any stale copy — otherwise BindInstanceLogDir appends a mount and CreateRequest's
+        // filesystem_policy emission depends on test execution order.
         RuntimeConfig config;
         config.runtimePath = "/tmp";
         config.runtimeLogPath = "/tmp/test-conch-executor-no-log-dir";
@@ -793,6 +799,80 @@ TEST_F(ConchExecutorTest, CreateRequest_NoBindMountsOmitsFilesystemPolicy)
     // With no rootfs mounts and no host log dir (guaranteed absent by SetUp),
     // ParseBindMounts is empty -> conch.filesystem_policy is omitted (not an empty object).
     EXPECT_FALSE(req["policy"]["conch"].contains("filesystem_policy"));
+}
+
+/**
+ * Feature: SetRequestEnvsAndLogsForStart
+ * Description: Redirect and glog dir are the instance's own dir ({runtimeLogPath}/{instanceID}),
+ *              created 1777 so the sandbox creates the log file as its own uid.
+ */
+TEST_F(ConchExecutorTest, LogRedirectIsPerInstance)
+{
+    const std::string logRoot = "/tmp/conch_executor_test_log_root";
+    std::filesystem::remove_all(logRoot);
+    litebus::os::Mkdir(logRoot);
+    executor_->config_.runtimeLogPath = logRoot;
+
+    auto request = std::make_shared<messages::StartInstanceRequest>();
+    request->set_type(static_cast<int32_t>(EXECUTOR_TYPE::CONCH));
+    request->mutable_runtimeinstanceinfo()->set_runtimeid("runtime-1");
+    request->mutable_runtimeinstanceinfo()->set_instanceid("instance-1");
+
+    runtime::v1::StartRequest startReq;
+    executor_->TestSetRequestEnvsAndLogsForStart(&startReq, Envs{}, request);
+
+    const std::string instanceDir = logRoot + "/instance-1";
+    EXPECT_EQ(startReq.stdout(), instanceDir + "/runtime-1.log");
+    EXPECT_EQ(startReq.stderr(), startReq.stdout());
+    const auto logDirIter = startReq.envs().find(GLOG_LOG_DIR);
+    ASSERT_TRUE(logDirIter != startReq.envs().end());
+    EXPECT_EQ(logDirIter->second, instanceDir);
+
+    struct stat st {};
+    ASSERT_EQ(::stat(instanceDir.c_str(), &st), 0);
+    EXPECT_EQ(st.st_mode & 07777, static_cast<mode_t>(01777));
+
+    std::filesystem::remove_all(logRoot);
+}
+
+/**
+ * Feature: ParseBindMounts / CreateRequest
+ * Description: Only the instance's own log dir is bound, appended after the rootfs mounts so a
+ *              broader rootfs mount cannot shadow it; a dir absent on the host is not bound.
+ */
+TEST_F(ConchExecutorTest, CreateRequest_BindsInstanceLogDirLast)
+{
+    const std::string logRoot = "/tmp/conch_executor_test_log_root";
+    std::filesystem::remove_all(logRoot);
+    litebus::os::Mkdir(logRoot);
+    const std::string instanceDir = logRoot + "/instance-1";
+    litebus::os::Mkdir(instanceDir);
+    executor_->config_.runtimeLogPath = logRoot;
+
+    auto request = GenConchCreateRequest(
+        R"({"type":"image","imageurl":"sha256:abc","mounts":)"
+        R"([{"source":"/data/host","target":"/data"}]})");
+    request->mutable_runtimeinstanceinfo()->set_instanceid("instance-1");
+
+    auto req = executor_->TestCreateRequest(request);
+
+    auto bindMounts = req["policy"]["conch"]["filesystem_policy"]["bind_mounts"];
+    ASSERT_TRUE(bindMounts.is_array());
+    ASSERT_EQ(bindMounts.size(), 2);
+    EXPECT_EQ(bindMounts[0]["host_path"], "/data/host");
+    EXPECT_EQ(bindMounts[1]["host_path"].get<std::string>(), instanceDir);
+    EXPECT_EQ(bindMounts[1]["sandbox_path"].get<std::string>(), instanceDir);
+    EXPECT_EQ(bindMounts[1]["mode"], "rw");
+
+    // No instance dir on the host -> the redirect preparation failed -> no log bind.
+    request->mutable_runtimeinstanceinfo()->set_instanceid("instance-missing");
+    auto noLogBindReq = executor_->TestCreateRequest(request);
+    auto noLogBindMounts = noLogBindReq["policy"]["conch"]["filesystem_policy"]["bind_mounts"];
+    ASSERT_TRUE(noLogBindMounts.is_array());
+    ASSERT_EQ(noLogBindMounts.size(), 1);
+    EXPECT_EQ(noLogBindMounts[0]["host_path"], "/data/host");
+
+    std::filesystem::remove_all(logRoot);
 }
 
 TEST_F(ConchExecutorTest, CreateRequest_PutsEnvsUnderConchEnv)
