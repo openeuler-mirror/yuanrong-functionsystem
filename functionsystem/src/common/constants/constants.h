@@ -376,15 +376,6 @@ const std::string YR_ONLY_STDOUT = "YR_ONLY_STDOUT";
 
 const std::string GLOG_LOG_DIR = "GLOG_log_dir";
 
-// Sandbox-visible root of the per-session runtime log tree, relative to the sandbox user's
-// home: <home>/yr_sessions/<deploy-session>/logs/<runtimeID>. The session id is reused from
-// the yr CLI's host session layout (mirrors api/python/yr/cli/const.py's session naming, which
-// cannot be referenced from C++, so it is mirrored here); the per-runtime subdir and the log
-// file inside it are named after the runtime id. The dir is created in-sandbox (BuildCommand's
-// mkdir prefix) and lives in whatever backs the home (a user workspace or a jiuwenbox-managed
-// lifecycle dir).
-const std::string SESSIONS_ROOT_RELATIVE = "yr_sessions";
-
 // sandboxType values (function meta sandboxType field)
 const std::string SANDBOX_TYPE_DOCKER = "docker";
 const std::string SANDBOX_TYPE_SUPERVISOR = "supervisor";

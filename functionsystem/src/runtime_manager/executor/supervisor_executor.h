@@ -78,6 +78,14 @@ private:
     // Helper functions to reduce code duplication
     void BuildRuntimeCommands(runtime::v1::StartRequest *request, const std::vector<std::string> &buildArgs);
 
+    // Prepares the per-instance log dir host-side for the sandbox bind: creates
+    // it atomically with 0700 and hands it to the sandbox user, never acting on
+    // a symlink planted at <logs>/<instanceID> (the log root is world-writable)
+    // and never racing between check and use — see the definition for the
+    // mkdir / EEXIST-gate / fd protocol.
+    void PrepareInstanceLogDir(const std::string &runtimeID, const std::string &hostUser,
+                               const std::string &sandboxLogDir);
+
     void SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *req, const Envs &envs,
                                        const std::shared_ptr<messages::StartInstanceRequest> &request);
 

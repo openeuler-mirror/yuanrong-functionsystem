@@ -17,12 +17,15 @@
 #ifndef COMMON_UTILS_FILES_H
 #define COMMON_UTILS_FILES_H
 #include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
+#include <pwd.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include <fstream>
 #include <string>
+#include <vector>
 #include <utils/os_utils.hpp>
 
 #include "common/logs/logging.h"
@@ -70,6 +73,49 @@ static int Close(int fd)
     return 0;
 }
 
+// Resolves the named system user to uid+gid via thread-safe getpwnam_r (the
+// plain getpwnam shares one static buffer across threads). False when the user
+// is unknown; errno is set to ENOENT (miss) or the getpwnam_r error code so
+// the caller can tell why.
+[[maybe_unused]] static bool GetUserIds(const std::string &user, uid_t &uid, gid_t &gid)
+{
+    // getpwnam_r scratch buffer: 1 KiB covers a common passwd entry, and it
+    // doubles whenever getpwnam_r reports ERANGE.
+    constexpr size_t PASSWD_BUF_INIT_SIZE = 1024;
+    constexpr size_t PASSWD_BUF_GROWTH_FACTOR = 2;
+    struct passwd pwd {};
+    struct passwd *result = nullptr;
+    std::vector<char> buf(PASSWD_BUF_INIT_SIZE);
+    int rc = ERANGE;
+    while (rc == ERANGE) {
+        rc = getpwnam_r(user.c_str(), &pwd, buf.data(), buf.size(), &result);
+        if (rc == ERANGE) {
+            buf.resize(buf.size() * PASSWD_BUF_GROWTH_FACTOR);
+        }
+    }
+    if (rc != 0 || result == nullptr) {
+        errno = (rc == 0) ? ENOENT : rc;
+        return false;
+    }
+    uid = pwd.pw_uid;
+    gid = pwd.pw_gid;
+    return true;
+}
+
+// Changes path's owner to the named system user (uid+gid). lchown refuses to
+// follow a symlink planted at path, so a privileged caller can never be made
+// to chown the link's target. False when the user is unknown (errno ENOENT)
+// or lchown fails; errno tells the caller why.
+[[maybe_unused]] static bool ChownToUser(const std::string &path, const std::string &user)
+{
+    uid_t uid = 0;
+    gid_t gid = 0;
+    if (!GetUserIds(user, uid, gid)) {
+        return false;
+    }
+    return lchown(path.c_str(), uid, gid) == 0;
+}
+
 [[maybe_unused]] static std::string Read(const std::string &path)
 {
     char realPath[PATH_MAX] = { 0 };
@@ -110,11 +156,14 @@ static int Close(int fd)
     return Status::OK();
 }
 
+// lstat-based type check: the comparison must be against the type bits only
+// (S_IFMT) — a plain bitmask AND lets a symlink pass as a regular file, since
+// S_IFLNK (0120000) & S_IFREG (0100000) is nonzero.
 [[maybe_unused]] static bool CheckPathType(const std::string &path, uint32_t type)
 {
     struct stat s;
     if (lstat(path.c_str(), &s) == 0) {
-        return static_cast<bool>(s.st_mode & type);
+        return (s.st_mode & S_IFMT) == type;
     }
 
     return false;
