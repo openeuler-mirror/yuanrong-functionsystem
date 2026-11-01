@@ -709,14 +709,15 @@ void OnDestroy()
         }
     }
 
+    // Keep FunctionAgentMgr alive until the merged function-agent finishes shutdown and reports its status.
+    if (g_functionAgentDriver != nullptr) {
+        StopFunctionAgent();
+    }
+
     (void)StopModule({g_localSchedDriver, g_commonDriver});
 
     if (g_busproxyStartup != nullptr) {
         (void)g_busproxyStartup->Stop();
-    }
-
-    if (g_functionAgentDriver != nullptr) {
-        StopFunctionAgent();
     }
 
     AwaitModule({g_localSchedDriver, g_commonDriver});
