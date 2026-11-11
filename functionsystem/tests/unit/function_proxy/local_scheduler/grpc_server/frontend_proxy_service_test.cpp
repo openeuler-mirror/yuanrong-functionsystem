@@ -30,6 +30,7 @@
 #include <cstdio>
 
 #include <sys/stat.h>
+#include <sys/mount.h>
 #include <unistd.h>
 #include <ftw.h>
 
@@ -1128,10 +1129,14 @@ mode_t PathMode(const std::string &path)
     return st.st_mode & 0777;
 }
 
-FrontendProxyServiceParam MakeWorkspaceParam(const std::string &storageRoot)
+FrontendProxyServiceParam MakeWorkspaceParam(const std::string &storageRoot, const std::string &accessRoot = "")
 {
     FrontendProxyServiceParam param;
     param.workspaceStorageRootProvider = [root = storageRoot]() { return root; };
+    // access root 默认指向不存在的目录,使真实 umount2 返回 ENOENT(视为未挂载)。
+    param.workspaceAccessRootProvider = [root = accessRoot.empty() ? storageRoot + "/__no_access__" : accessRoot]() {
+        return root;
+    };
     // 使用当前测试进程的 uid/gid,避免非 root 测试环境下的 chown 失败。
     param.workspaceUidGidProvider = []() {
         return std::make_pair(::getuid(), ::getgid());
@@ -1331,6 +1336,109 @@ TEST(FrontendProxyServiceWorkspaceTest, RemoveWorkspaceRejectsPathTraversalOwner
     ::frontend_proxy::RemoveWorkspaceResponse response;
     ASSERT_TRUE(service.RemoveWorkspace(nullptr, &request, &response).ok());
     EXPECT_EQ(response.status().code(), common::ERR_PARAM_INVALID);
+}
+
+TEST(FrontendProxyServiceWorkspaceTest, RemoveWorkspaceToleratesUnmountedAccessPath)
+{
+    ScopedTempDir root;
+    const auto target = root.Path() + "/judy";
+    ASSERT_EQ(::mkdir(target.c_str(), 0700), 0);
+    std::string umountPath;
+    int umountFlags = -1;
+    auto param = MakeWorkspaceParam(root.Path(), root.Path() + "/access");
+    // 模拟未挂载:真实 umount2 对未挂载路径返回 EINVAL/ENOENT,应视为成功。
+    param.workspaceUmountProvider = [&](const std::string &path, int flags) {
+        umountPath = path;
+        umountFlags = flags;
+        return ENOENT;
+    };
+    FrontendProxyService service(std::move(param));
+    ::frontend_proxy::RemoveWorkspaceRequest request;
+    SetWorkspaceContext(&request, "remove-unmounted");
+    request.set_owner("judy");
+    ::frontend_proxy::RemoveWorkspaceResponse response;
+    ASSERT_TRUE(service.RemoveWorkspace(nullptr, &request, &response).ok());
+    EXPECT_EQ(response.status().code(), common::ERR_NONE);
+    EXPECT_EQ(umountPath, root.Path() + "/access/judy");
+    EXPECT_EQ(umountFlags, 0);
+    EXPECT_FALSE(PathExists(target));
+}
+
+TEST(FrontendProxyServiceWorkspaceTest, RemoveWorkspaceUnmountsBeforeDeleting)
+{
+    ScopedTempDir root;
+    const auto target = root.Path() + "/karl";
+    ASSERT_EQ(::mkdir(target.c_str(), 0700), 0);
+    bool targetExistedDuringUmount = false;
+    int umountCalls = 0;
+    auto param = MakeWorkspaceParam(root.Path(), root.Path() + "/access");
+    param.workspaceUmountProvider = [&](const std::string &, int) {
+        ++umountCalls;
+        // 卸载必须发生在删除存储目录之前,否则会漏掉指向已删目录的残留挂载。
+        targetExistedDuringUmount = PathExists(target);
+        return 0;
+    };
+    FrontendProxyService service(std::move(param));
+    ::frontend_proxy::RemoveWorkspaceRequest request;
+    SetWorkspaceContext(&request, "remove-order");
+    request.set_owner("karl");
+    ::frontend_proxy::RemoveWorkspaceResponse response;
+    ASSERT_TRUE(service.RemoveWorkspace(nullptr, &request, &response).ok());
+    EXPECT_EQ(response.status().code(), common::ERR_NONE);
+    EXPECT_EQ(umountCalls, 1);
+    EXPECT_TRUE(targetExistedDuringUmount);
+    EXPECT_FALSE(PathExists(target));
+}
+
+TEST(FrontendProxyServiceWorkspaceTest, RemoveWorkspaceLazyUnmountsWhenBusy)
+{
+    ScopedTempDir root;
+    const auto target = root.Path() + "/laura";
+    ASSERT_EQ(::mkdir(target.c_str(), 0700), 0);
+    int umountCalls = 0;
+    int lazyFlags = -1;
+    auto param = MakeWorkspaceParam(root.Path(), root.Path() + "/access");
+    param.workspaceUmountProvider = [&](const std::string &, int flags) {
+        ++umountCalls;
+        if (flags == MNT_DETACH) {
+            lazyFlags = flags;
+            return 0;
+        }
+        return EBUSY;
+    };
+    FrontendProxyService service(std::move(param));
+    ::frontend_proxy::RemoveWorkspaceRequest request;
+    SetWorkspaceContext(&request, "remove-busy");
+    request.set_owner("laura");
+    ::frontend_proxy::RemoveWorkspaceResponse response;
+    ASSERT_TRUE(service.RemoveWorkspace(nullptr, &request, &response).ok());
+    EXPECT_EQ(response.status().code(), common::ERR_NONE);
+    EXPECT_EQ(umountCalls, 2);
+    EXPECT_EQ(lazyFlags, MNT_DETACH);
+    EXPECT_FALSE(PathExists(target));
+}
+
+TEST(FrontendProxyServiceWorkspaceTest, RemoveWorkspaceFailsWhenUnmountFails)
+{
+    ScopedTempDir root;
+    const auto target = root.Path() + "/mallory";
+    ASSERT_EQ(::mkdir(target.c_str(), 0700), 0);
+    int umountCalls = 0;
+    auto param = MakeWorkspaceParam(root.Path(), root.Path() + "/access");
+    param.workspaceUmountProvider = [&](const std::string &, int) {
+        ++umountCalls;
+        return EPERM;
+    };
+    FrontendProxyService service(std::move(param));
+    ::frontend_proxy::RemoveWorkspaceRequest request;
+    SetWorkspaceContext(&request, "remove-umount-fail");
+    request.set_owner("mallory");
+    ::frontend_proxy::RemoveWorkspaceResponse response;
+    ASSERT_TRUE(service.RemoveWorkspace(nullptr, &request, &response).ok());
+    EXPECT_EQ(response.status().code(), common::ERR_INNER_SYSTEM_ERROR);
+    EXPECT_EQ(umountCalls, 1);
+    // 卸载失败不删除存储目录,保留 etcd 记录以便重试。
+    EXPECT_TRUE(PathExists(target));
 }
 
 TEST(FrontendProxyServiceWorkspaceTest, PrepareAndRemoveWorkspaceRoundTripPreservesRoot)

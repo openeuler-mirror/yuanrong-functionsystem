@@ -571,6 +571,7 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
     frontendServiceParam.workspaceUidGidProvider = [uid = param_.workspaceUid, gid = param_.workspaceGid]() {
         return std::make_pair(static_cast<uid_t>(uid), static_cast<gid_t>(gid));
     };
+    frontendServiceParam.workspaceAccessRootProvider = [root = param_.workspaceAccessRoot]() { return root; };
     frontendServiceParam.invokeTenantAuthorizer =
         [instanceView(instanceCtrl_->GetInstanceControlView())](const std::string &tenantID,
                                                                 const std::string &instanceID) {

@@ -499,6 +499,14 @@ public:
         return workspaceGid_;
     }
 
+    // GetWorkspaceAccessRoot 返回 autofs 访问根目录;默认 /home/agentos/users。
+    // 由 --workspace_access_root flag 配置,RemoveWorkspace 在删除存储目录前卸载
+    // 此目录下的 <owner> 挂载。
+    const std::string &GetWorkspaceAccessRoot() const
+    {
+        return workspaceAccessRoot_;
+    }
+
 protected:
     void AddRuntimeFlags();
     void AddDSFlags();
@@ -607,6 +615,8 @@ protected:
     uint32_t workspaceUid_{ 1000 };
     // workspace 目录的 gid,由 --workspace_gid flag 配置,默认 1000
     uint32_t workspaceGid_{ 1000 };
+    // workspace autofs 访问根目录,由 --workspace_access_root flag 配置,默认 /home/agentos/users
+    std::string workspaceAccessRoot_ = "/home/agentos/users";
 };
 
 }  // namespace functionsystem::function_proxy
