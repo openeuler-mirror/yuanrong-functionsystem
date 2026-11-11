@@ -200,6 +200,9 @@ Flags::Flags()
             "workspace 目录的 uid(用于 PrepareWorkspace 的 chown 操作)", DEFAULT_WORKSPACE_UID);
     AddFlag(&Flags::workspaceGid_, "workspace_gid",
             "workspace 目录的 gid(用于 PrepareWorkspace 的 chown 操作)", DEFAULT_WORKSPACE_GID);
+    AddFlag(&Flags::workspaceAccessRoot_, "workspace_access_root",
+            "workspace autofs 访问根目录;RemoveWorkspace 在删除存储目录前卸载此目录下的 <owner> 挂载",
+            "/home/agentos/users");
 }
 
 void Flags::AddElectionFlags()

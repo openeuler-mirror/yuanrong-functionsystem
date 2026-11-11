@@ -33,6 +33,7 @@
 
 #include <fcntl.h>
 #include <ftw.h>
+#include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -63,6 +64,8 @@ constexpr const char *FRONTEND_EVENT_EOF = "yuanrong_event_EOF";
 // --- Workspace RPC 常量(方案 A) ---
 // 默认 workspace 存储根目录;生产环境由 --workspace_storage_root flag 覆盖。
 constexpr const char *DEFAULT_WORKSPACE_STORAGE_ROOT = "/home/agentos/.users";
+// 默认 autofs 访问根目录;生产环境由 --workspace_access_root flag 覆盖。
+constexpr const char *DEFAULT_WORKSPACE_ACCESS_ROOT = "/home/agentos/users";
 // 默认 workspace 目录权限位(0700)。
 constexpr mode_t DEFAULT_WORKSPACE_DIR_MODE = 0700;
 // 默认 workspace 目录的 (uid, gid);生产环境由 flag 覆盖。
@@ -1012,6 +1015,61 @@ std::pair<uid_t, gid_t> FrontendProxyService::ResolveWorkspaceUidGid() const
     return { DEFAULT_WORKSPACE_UID, DEFAULT_WORKSPACE_GID };
 }
 
+std::string FrontendProxyService::ResolveWorkspaceAccessRoot() const
+{
+    if (param_.workspaceAccessRootProvider) {
+        auto root = param_.workspaceAccessRootProvider();
+        if (!root.empty()) {
+            return root;
+        }
+    }
+    return DEFAULT_WORKSPACE_ACCESS_ROOT;
+}
+
+// 卸载 autofs 访问路径。禁止在调用前 lstat/opendir,避免把已过期挂载重新拉起。
+// EINVAL/ENOENT 表示未挂载或目录项已过期,按"无需卸载"处理;
+// EBUSY 时退化为 MNT_DETACH 懒卸载;其他错误中止删除,保留 etcd 记录以便重试。
+std::string FrontendProxyService::UnmountWorkspaceAccessPath(const std::string &accessPath,
+                                                             const std::string &requestID) const
+{
+    // 统一返回 errno 语义(0 表示成功):umount2 失败时返回 -1 并把原因写入 errno,
+    // 若直接返回 -1 会丢失错误码,导致未挂载(EINVAL/ENOENT)被误判为卸载失败。
+    auto doUmount = [this](const std::string &path, int flags) -> int {
+        if (param_.workspaceUmountProvider) {
+            return param_.workspaceUmountProvider(path, flags);
+        }
+        if (::umount2(path.c_str(), flags) == 0) {
+            return 0;
+        }
+        return errno;
+    };
+    int err = doUmount(accessPath, 0);
+    if (err == 0) {
+        YRLOG_INFO("{}|frontend proxy unmount workspace ok path={}", requestID, accessPath);
+        return "";
+    }
+    if (err == EINVAL || err == ENOENT) {
+        YRLOG_INFO("{}|frontend proxy workspace not mounted, skip unmount path={} errno={}", requestID, accessPath,
+                   err);
+        return "";
+    }
+    if (err == EBUSY) {
+        const int lazyErr = doUmount(accessPath, MNT_DETACH);
+        if (lazyErr == 0) {
+            YRLOG_WARN("{}|frontend proxy workspace busy, lazy unmounted path={}", requestID, accessPath);
+            return "";
+        }
+        // 两次调用之间挂载已消失(autofs 自动卸载)时同样按未挂载处理。
+        if (lazyErr == EINVAL || lazyErr == ENOENT) {
+            YRLOG_INFO("{}|frontend proxy workspace already unmounted during lazy detach path={} errno={}", requestID,
+                       accessPath, lazyErr);
+            return "";
+        }
+        return "umount busy and lazy detach failed for " + accessPath + ": " + std::strerror(lazyErr);
+    }
+    return "umount failed for " + accessPath + ": " + std::strerror(err);
+}
+
 std::string FrontendProxyService::ValidateWorkspaceOwner(const std::string &owner)
 {
     if (owner.empty()) {
@@ -1282,6 +1340,16 @@ static int RemoveWorkspaceNftwCallback(const char *fpath, const struct stat *, i
     const auto &requestID = reqContext->requestid();
     YRLOG_INFO("{}|frontend proxy remove workspace owner={} path={} proxy={}",
                requestID, request->owner(), targetPath, param_.nodeID);
+
+    // 先卸载 autofs 访问路径:即便存储目录已不存在,也要清掉指向已删目录的残留挂载。
+    // 必须在 lstat 之前执行,避免访问访问路径触发 autofs lookup 重新挂载。
+    const auto accessRoot = ResolveWorkspaceAccessRoot();
+    const auto accessPath = JoinWorkspacePath(accessRoot, request->owner());
+    const auto umountErr = UnmountWorkspaceAccessPath(accessPath, requestID);
+    if (!umountErr.empty()) {
+        SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR, umountErr);
+        return ::grpc::Status::OK;
+    }
 
     // 预检:目录不存在视为已删除(幂等),并避免 nftw 遍历中途失败后的 ENOENT 被误判为成功。
     struct stat st {};

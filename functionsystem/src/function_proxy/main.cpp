@@ -520,7 +520,8 @@ LocalSchedStartParam InitLocalSchedParam(const function_proxy::Flags &flags,
         // --- Workspace RPC(方案 A) ---
         .workspaceStorageRoot = flags.GetWorkspaceStorageRoot(),
         .workspaceUid = flags.GetWorkspaceUid(),
-        .workspaceGid = flags.GetWorkspaceGid()
+        .workspaceGid = flags.GetWorkspaceGid(),
+        .workspaceAccessRoot = flags.GetWorkspaceAccessRoot()
     };
 }
 

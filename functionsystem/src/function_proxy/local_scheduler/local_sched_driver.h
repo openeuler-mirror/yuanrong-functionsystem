@@ -117,6 +117,8 @@ struct LocalSchedStartParam {
     uint32_t workspaceUid { 1000 };
     // workspace 目录的 gid;默认 1000,由 --workspace_gid flag 配置。
     uint32_t workspaceGid { 1000 };
+    // workspace autofs 访问根目录;默认 /home/agentos/users,由 --workspace_access_root flag 配置。
+    std::string workspaceAccessRoot = "/home/agentos/users";
 };
 
 class LocalSchedulingApiRouter : public ApiRouterRegister {

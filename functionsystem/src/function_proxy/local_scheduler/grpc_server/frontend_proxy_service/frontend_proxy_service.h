@@ -59,6 +59,12 @@ struct FrontendProxyServiceParam {
     // WorkspaceUidGidProvider 返回 workspace 目录的 (uid, gid),默认 1000:1000。
     // 单元测试可注入自定义值;生产环境从 flag 读取。
     using WorkspaceUidGidProvider = std::function<std::pair<uid_t, gid_t>()>;
+    // WorkspaceAccessRootProvider 返回 autofs 访问根目录(默认 /home/agentos/users)。
+    // RemoveWorkspace 在此目录下卸载 <owner> 挂载;单元测试可注入临时目录。
+    using WorkspaceAccessRootProvider = std::function<std::string()>;
+    // WorkspaceUmountProvider 卸载访问路径;返回 0 表示成功,否则返回 errno。
+    // flags 对应 umount2 的 flags;为空时使用真实 umount2(测试注入以覆盖错误分支)。
+    using WorkspaceUmountProvider = std::function<int(const std::string &, int)>;
     // WorkspaceOwnerAuthorizer 校验调用租户(tenantID)是否有权操作指定 owner 的 workspace 目录。
     // 生产环境必须接线(结合 context.tenantID 与 owner 的绑定关系),
     // 与 invokeTenantAuthorizer 的 tenant 归属校验约定保持一致;
@@ -93,6 +99,10 @@ struct FrontendProxyServiceParam {
     WorkspaceStorageRootProvider workspaceStorageRootProvider;
     // Workspace 目录的 (uid, gid) Provider;为空时使用默认值 (1000, 1000)
     WorkspaceUidGidProvider workspaceUidGidProvider;
+    // Workspace autofs 访问根目录 Provider;为空时使用默认值 /home/agentos/users
+    WorkspaceAccessRootProvider workspaceAccessRootProvider;
+    // Workspace 卸载 Provider;为空时使用真实 umount2(测试注入以覆盖错误分支)
+    WorkspaceUmountProvider workspaceUmountProvider;
     // Workspace owner 归属授权;为空时不做 owner↔tenant 绑定校验(单租户前提)。
     // 生产环境接线后,非本租户的 owner 操作返回 ERR_AUTHORIZE_FAILED。
     WorkspaceOwnerAuthorizer workspaceOwnerAuthorizer;
@@ -139,9 +149,10 @@ public:
                                     const ::frontend_proxy::PrepareWorkspaceRequest *request,
                                     ::frontend_proxy::PrepareWorkspaceResponse *response) override;
 
-    // RemoveWorkspace 在归属节点本地删除 workspace 存储目录:
-    //   rm -rf ${workspace_storage_root}/<owner>
-    // 幂等:目录不存在不报错。
+    // RemoveWorkspace 在归属节点本地删除 workspace:
+    //   1. umount ${workspace_access_root}/<owner>(未挂载视为成功)
+    //   2. rm -rf ${workspace_storage_root}/<owner>
+    // 幂等:目录不存在不报错;卸载失败返回错误,保留 etcd 记录以便重试。
     ::grpc::Status RemoveWorkspace(::grpc::ServerContext *context,
                                    const ::frontend_proxy::RemoveWorkspaceRequest *request,
                                    ::frontend_proxy::RemoveWorkspaceResponse *response) override;
@@ -183,6 +194,13 @@ private:
     // ResolveWorkspaceUidGid 解析 workspace 目录的 (uid, gid):
     // 优先使用注入的 provider,否则使用默认值 (1000, 1000)。
     std::pair<uid_t, gid_t> ResolveWorkspaceUidGid() const;
+    // ResolveWorkspaceAccessRoot 解析 autofs 访问根目录:
+    // 优先使用注入的 provider,否则使用默认值 /home/agentos/users。
+    std::string ResolveWorkspaceAccessRoot() const;
+    // UnmountWorkspaceAccessPath 卸载 autofs 访问路径。
+    // 调用前禁止 lstat/opendir,避免触发 lookup 把已过期挂载重新拉起。
+    // 返回空字符串表示已卸载或本来未挂载,否则返回错误描述。
+    std::string UnmountWorkspaceAccessPath(const std::string &accessPath, const std::string &requestID) const;
     // ValidateWorkspaceOwner 校验 owner 名:非空、不含 "/"、非 ".."、不以 "." 开头。
     // 返回空字符串表示校验通过,否则返回错误描述。
     static std::string ValidateWorkspaceOwner(const std::string &owner);
